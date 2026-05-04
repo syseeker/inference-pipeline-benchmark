@@ -1,23 +1,25 @@
-# Smoke-test fixtures
+# Smoke-test scenarios
 
 Three real game-screen scenarios for the VLM-to-action pipeline. Each
-fixture is one (visual + short context history + high-level instruction)
-→ (low-level action sequence) example, captured straight from a running
-game so the visuals look like what Razer's customers will actually see.
+scenario is one (visual + short context history + high-level
+instruction) → (low-level action sequence) example, captured straight
+from a running game so the visuals look like what Razer's customers
+will actually see.
 
 ## On-disk shape
 
 ```
-tests/smoke/fixtures/<name>/
-├── request.json     # FixtureRequest — what the pipeline receives (instruction, history, image ref)
+tests/smoke/scenarios/<name>/
+├── request.json     # ScenarioRequest — what the pipeline receives (instruction, history, image ref)
 ├── screen.<ext>     # the visual the request points at (png or jpeg)
-└── expected.json    # FixtureExpected — gold ActionSequence + ValidationReport
+└── expected.json    # ScenarioExpected — gold ActionSequence + ValidationReport
 ```
 
 Pydantic models in [schema.py](schema.py); loader in [loader.py](loader.py).
-`FixtureRequest` is the on-disk mirror of the production `PipelineRequest`.
+`ScenarioRequest` is the on-disk mirror of the production
+`PipelineRequest`.
 
-## The three fixtures
+## The three scenarios
 
 | Name | Game | Expected commands |
 | --- | --- | --- |
@@ -32,14 +34,14 @@ tolerant hitbox a grader should accept.
 ## How they're consumed
 
 - **Offline parametrised test** (default CI lane):
-  `pytest -m smoke tests/smoke/test_fixtures.py`
+  `pytest -m smoke tests/smoke/test_scenarios.py`
   Uses a `_GoldReasoner` that returns the gold JSON, then asserts the
-  decoder + validator accept it. Proves each fixture is internally
+  decoder + validator accept it. Proves each scenario is internally
   consistent.
 
 - **Live NIM run** (opt-in):
-  `NIM_API_KEY=... python -m examples.run_fixture 01_clash_of_clans_start_attack --backend nim`
-  Sends the real fixture to a NIM-hosted Qwen-VL endpoint and prints
+  `NIM_API_KEY=... python -m examples.run_scenario 01_clash_of_clans_start_attack --backend nim`
+  Sends the real scenario to a NIM-hosted Qwen-VL endpoint and prints
   actual vs. expected. Useful for eyeballing model behaviour on a known
   visual.
 
@@ -47,11 +49,11 @@ tolerant hitbox a grader should accept.
   the runner can iterate over `load_all()` to produce a deterministic
   workload across frameworks/GPUs.
 
-## Adding a new fixture
+## Adding a new scenario
 
-1. `mkdir tests/smoke/fixtures/04_<short_name>/`.
+1. `mkdir tests/smoke/scenarios/04_<short_name>/`.
 2. Drop the screenshot in as `screen.png` (or `.jpeg`).
 3. Write `request.json` (instruction + history + `image_path`) and
    `expected.json` (gold `ActionSequence` + `ValidationReport`).
 4. Done — the parametrised smoke test discovers it via
-   `list_fixtures()`.
+   `list_scenarios()`.

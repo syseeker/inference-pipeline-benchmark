@@ -1,0 +1,67 @@
+"""Scenario loader.
+
+    sc = load_scenario("01_clash_of_clans_start_attack")
+    pipe.run(sc.pipeline_request())
+
+`load_all()` returns every scenario in lexical order — the parametrised
+smoke test uses this so adding a new scenario directory is enough to
+put it under coverage.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest
+from vlm_pipeline.pipeline import PipelineRequest
+
+_SCENARIOS_DIR = Path(__file__).parent
+
+
+@dataclass
+class LoadedScenario:
+    name: str
+    dir: Path
+    spec: ScenarioRequest      # on-disk request spec (image referenced by path)
+    expected: ScenarioExpected
+    image_bytes: bytes
+
+    def pipeline_request(self) -> PipelineRequest:
+        """Materialise the on-disk spec into a runtime PipelineRequest."""
+
+        return PipelineRequest(
+            image=self.image_bytes,
+            instruction=self.spec.instruction,
+            context_history=self.spec.context_history,
+            request_id=self.name,
+            deadline_ms=self.spec.deadline_ms,
+        )
+
+
+def load_scenario(name: str) -> LoadedScenario:
+    sc_dir = _SCENARIOS_DIR / name
+    if not sc_dir.is_dir():
+        raise FileNotFoundError(f"scenario not found: {sc_dir}")
+    spec = ScenarioRequest.model_validate_json((sc_dir / "request.json").read_text())
+    expected = ScenarioExpected.model_validate_json((sc_dir / "expected.json").read_text())
+    image_bytes = (sc_dir / spec.image_path).read_bytes()
+    return LoadedScenario(
+        name=name,
+        dir=sc_dir,
+        spec=spec,
+        expected=expected,
+        image_bytes=image_bytes,
+    )
+
+
+def list_scenarios() -> list[str]:
+    return sorted(
+        p.name
+        for p in _SCENARIOS_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith("__") and (p / "request.json").exists()
+    )
+
+
+def load_all() -> list[LoadedScenario]:
+    return [load_scenario(name) for name in list_scenarios()]
