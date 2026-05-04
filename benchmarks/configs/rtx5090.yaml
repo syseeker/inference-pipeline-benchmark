@@ -1,0 +1,48 @@
+# RTX 5090 (consumer baseline)
+display_name: "GeForce RTX 5090"
+arch: blackwell
+vram_gb: 32
+mem_type: GDDR7
+peak_bandwidth_tbps: 1.79
+nvlink: false
+pcie_gen: 5
+
+# Filled in at run time by scripts/gpu_probe.sh.
+driver: "unknown"
+cuda: "unknown"
+
+tensor_parallel: 1  # default. TP=2 is an experiment, not a default.
+
+frameworks:
+  vllm:
+    base_url: "http://localhost:8000/v1"
+    enable_prefix_caching: true
+    enforce_eager: false           # CUDA graph on
+    gpu_memory_utilization: 0.90
+    max_num_seqs: 32
+  sglang:
+    base_url: "http://localhost:30000/v1"
+    radix_cache: true
+    structured_output: ebnf        # JSON-schema | regex | ebnf
+  trtllm:
+    engine_dir: "trt_engines/qwen3-vl-8b-rtx5090-fp8"
+    paged_kv_cache: true
+    enable_block_reuse: true
+    cuda_graph: true
+    fp8: true
+  modelopt:
+    quant: fp8
+    calibration_samples: 512
+  triton:
+    grpc_url: "localhost:8001"
+    ensemble_name: "vlm_pipeline_ensemble"
+
+models:
+  - id: "qwen3-vl-4b"
+    quant: ["bf16", "fp8"]
+  - id: "qwen3-vl-8b"
+    quant: ["bf16", "fp8"]
+  # 30B-A3B may not fit comfortably on a single 5090; flag for FP8-only.
+  - id: "qwen3-vl-30b-a3b"
+    quant: ["fp8"]
+    notes: "MoE — 32GB tight; verify before adding to the run."

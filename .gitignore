@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.Python
+build/
+dist/
+.venv/
+venv/
+env/
+.eggs/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Benchmark artifacts (raw runs — keep summarised results checked in by hand)
+benchmarks/results/raw/
+benchmarks/results/*.parquet
+benchmarks/results/*.csv
+benchmarks/results/*.jsonl
+*.nsys-rep
+*.qdrep
+*.ncu-rep
+*.sqlite
+*.prof
+
+# Engine / model artifacts
+*.engine
+*.plan
+*.onnx
+*.trt
+*.safetensors
+*.gguf
+checkpoints/
+hf_cache/
+nim_cache/
+trt_engines/
+
+# OS
+Thumbs.db

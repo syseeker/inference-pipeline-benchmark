@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlm-pipeline-benchmark"
+version = "0.0.1"
+description = "Real-time VLM-to-action inference pipeline + multi-framework benchmark harness."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "NVIDIA" }]
+dependencies = [
+    "pydantic>=2.6",
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# Pipeline backend extras — install only what your machine supports.
+nim     = ["openai>=1.30"]                   # NIM exposes an OpenAI-compatible API
+vllm    = ["vllm>=0.6.0"]
+sglang  = ["sglang>=0.3.0"]
+trtllm  = []                                  # tensorrt-llm wheel is GPU/driver-specific; install manually
+modelopt= []                                  # nvidia-modelopt is installed from NVIDIA's index
+triton  = ["tritonclient[grpc]>=2.45"]
+dev     = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["vlm_pipeline*", "benchmarks*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "smoke: quick end-to-end sanity checks (golden path only)",
+    "gpu: requires a CUDA-capable GPU",
+    "nim: requires NIM API credentials",
+]

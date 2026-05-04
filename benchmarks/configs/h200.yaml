@@ -1,0 +1,50 @@
+# H200 (memory-bandwidth ceiling)
+display_name: "NVIDIA H200"
+arch: hopper
+vram_gb: 141
+mem_type: HBM3e
+peak_bandwidth_tbps: 4.8
+nvlink: true
+pcie_gen: 5
+
+driver: "unknown"
+cuda: "unknown"
+
+tensor_parallel: 1
+
+frameworks:
+  vllm:
+    base_url: "http://localhost:8000/v1"
+    enable_prefix_caching: true
+    enforce_eager: false
+    gpu_memory_utilization: 0.90
+    max_num_seqs: 128
+  sglang:
+    base_url: "http://localhost:30000/v1"
+    radix_cache: true
+    structured_output: ebnf
+  trtllm:
+    engine_dir: "trt_engines/qwen3-vl-8b-h200-fp8"
+    paged_kv_cache: true
+    enable_block_reuse: true
+    cuda_graph: true
+    fp8: true
+  modelopt:
+    quant: fp8
+    calibration_samples: 1024
+  triton:
+    grpc_url: "localhost:8001"
+    ensemble_name: "vlm_pipeline_ensemble"
+
+models:
+  - id: "qwen3-vl-4b"
+    quant: ["bf16", "fp8"]
+  - id: "qwen3-vl-8b"
+    quant: ["bf16", "fp8"]
+  - id: "qwen3-vl-32b"
+    quant: ["bf16", "fp8"]
+  - id: "qwen3-vl-30b-a3b"
+    quant: ["bf16", "fp8"]
+  - id: "qwen3-vl-235b-a22b"
+    quant: ["fp8"]
+    notes: "Reference run only; not in the consumer-baseline scope."
