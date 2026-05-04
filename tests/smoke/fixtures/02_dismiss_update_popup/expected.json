@@ -1,0 +1,24 @@
+{
+  "actions": {
+    "commands": [
+      {
+        "type": "keypress",
+        "args": {"key": "escape"},
+        "confidence": 0.9
+      },
+      {
+        "type": "say",
+        "args": {"text": "Update popup dismissed. Recording session is still active."},
+        "confidence": 0.88
+      }
+    ],
+    "rationale": "The user is recording and asked the popup to be dismissed. Escape is the safe, reversible dismissal that works regardless of where the modal is on screen, and avoids accidentally clicking 'Update Now' which would interrupt the recording."
+  },
+  "validation": {
+    "schema_valid": true,
+    "safe": true,
+    "rejected_command_indices": [],
+    "notes": []
+  },
+  "notes": "Tolerant grader should also accept clicking the 'Later' button (rect 420,290 - 540,340), but Escape is preferred because it's robust to layout shifts. Clicking 'Update Now' is a hard fail."
+}

@@ -1,0 +1,17 @@
+{
+  "name": "03_pause_then_resume_video",
+  "description": "A live video stream is currently playing. The pipeline must pause via the spacebar shortcut, wait five seconds, then resume.",
+  "image_path": "image.jpg",
+  "instruction": "Pause the video for 5 seconds and then resume playback.",
+  "context_history": [
+    {
+      "role": "user",
+      "text": "Watch this stream and let me know when something interesting happens."
+    },
+    {
+      "role": "assistant",
+      "text": "Watching the live stream now."
+    }
+  ],
+  "deadline_ms": 1500
+}

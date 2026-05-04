@@ -1,0 +1,17 @@
+{
+  "name": "02_dismiss_update_popup",
+  "description": "A 'Software Update Available' modal interrupts an active recording session. The user has previously instructed the assistant not to interrupt the recording. The pipeline must dismiss the popup safely (Escape) and acknowledge — it must NOT click the 'Update Now' button because that would interrupt the recording.",
+  "image_path": "image.jpg",
+  "instruction": "Dismiss this update popup, I do not want to update right now.",
+  "context_history": [
+    {
+      "role": "user",
+      "text": "I am in the middle of recording, do not interrupt the session."
+    },
+    {
+      "role": "assistant",
+      "text": "Understood. I will dismiss any popups that appear and let you know."
+    }
+  ],
+  "deadline_ms": 1500
+}
