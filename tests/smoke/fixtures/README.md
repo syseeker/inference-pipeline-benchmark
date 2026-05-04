@@ -1,44 +1,44 @@
 # Smoke-test fixtures
 
-Three end-to-end scenarios for the VLM-to-action pipeline. Each one is
-self-contained: a synthetic image, the user instruction, a short context
-history, and the **golden** action sequence the pipeline is expected to
-produce.
+Three real game-screen scenarios for the VLM-to-action pipeline. Each
+fixture is one (visual + short context history + high-level instruction)
+→ (low-level action sequence) example, captured straight from a running
+game so the visuals look like what Razer's customers will actually see.
 
 ## On-disk shape
 
 ```
 tests/smoke/fixtures/<name>/
-├── input.json       # FixtureInput  — image path, instruction, context history
-├── image.jpg        # visual the request points at
-└── expected.json    # FixtureExpected — golden ActionSequence + ValidationReport
+├── request.json     # FixtureRequest — what the pipeline receives (instruction, history, image ref)
+├── screen.<ext>     # the visual the request points at (png or jpeg)
+└── expected.json    # FixtureExpected — gold ActionSequence + ValidationReport
 ```
 
 Pydantic models in [schema.py](schema.py); loader in [loader.py](loader.py).
+`FixtureRequest` is the on-disk mirror of the production `PipelineRequest`.
 
 ## The three fixtures
 
-| Name | Scenario | Expected commands |
+| Name | Game | Expected commands |
 | --- | --- | --- |
-| `01_click_start_button` | Game launcher with a Start button. Empty history. | `move`, `click(left)` |
-| `02_dismiss_update_popup` | A "Software Update" modal interrupts a recording session. | `keypress(escape)`, `say` confirming |
-| `03_pause_then_resume_video` | Video player; user wants a 5-second pause. | `keypress(space)`, `wait(5000)`, `keypress(space)`, `say` |
+| `01_clash_of_clans_start_attack` | Clash of Clans (mobile, 2001×923) | `move(95,825)` → `click(left)` → `say(...)` |
+| `02_catan_open_menu` | Catan online (1024×494) | `move(50,437)` → `click(left)` → `say(...)` |
+| `03_fps_engage_and_reload` | Sci-fi FPS (1796×975) | `click(left)` × 2 → `keypress(r)` → `say(...)` |
 
-Coordinates and pixel offsets in the gold sequences match the synthetic
-images produced by [_generate_images.py](_generate_images.py). Re-run that
-script if you ever change image dimensions or button positions; the goal
-is that the gold matches the literal pixels in the JPEG.
+`MOVE.dx/dy` are absolute pixel coordinates against the source image
+referenced in each `request.json`. Each `expected.json` documents the
+tolerant hitbox a grader should accept.
 
 ## How they're consumed
 
 - **Offline parametrised test** (default CI lane):
   `pytest -m smoke tests/smoke/test_fixtures.py`
   Uses a `_GoldReasoner` that returns the gold JSON, then asserts the
-  decoder + validator accept it. Proves the schema is sane and the gold
-  is internally consistent.
+  decoder + validator accept it. Proves each fixture is internally
+  consistent.
 
 - **Live NIM run** (opt-in):
-  `NIM_API_KEY=... python -m examples.run_fixture 01_click_start_button`
+  `NIM_API_KEY=... python -m examples.run_fixture 01_clash_of_clans_start_attack --backend nim`
   Sends the real fixture to a NIM-hosted Qwen-VL endpoint and prints
   actual vs. expected. Useful for eyeballing model behaviour on a known
   visual.
@@ -50,6 +50,8 @@ is that the gold matches the literal pixels in the JPEG.
 ## Adding a new fixture
 
 1. `mkdir tests/smoke/fixtures/04_<short_name>/`.
-2. Add a synthetic-image renderer to `_generate_images.py` and run it.
-3. Write `input.json` and `expected.json` matching the schemas.
-4. Done — the parametrised smoke test discovers it via `list_fixtures()`.
+2. Drop the screenshot in as `screen.png` (or `.jpeg`).
+3. Write `request.json` (instruction + history + `image_path`) and
+   `expected.json` (gold `ActionSequence` + `ValidationReport`).
+4. Done — the parametrised smoke test discovers it via
+   `list_fixtures()`.

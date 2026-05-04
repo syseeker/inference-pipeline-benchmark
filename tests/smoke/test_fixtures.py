@@ -48,7 +48,7 @@ def test_fixture_round_trip(fixture_name: str) -> None:
     fx: LoadedFixture = load_fixture(fixture_name)
     pipe = Pipeline(reasoner=_GoldReasoner(fx.expected))
 
-    resp = pipe.run(fx.request)
+    resp = pipe.run(fx.pipeline_request())
 
     assert resp.error is None, f"unexpected pipeline error: {resp.error}"
     assert resp.actions == fx.expected.actions, "decoder did not reproduce the gold sequence"

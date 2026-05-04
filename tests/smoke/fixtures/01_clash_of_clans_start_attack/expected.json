@@ -1,0 +1,29 @@
+{
+  "actions": {
+    "commands": [
+      {
+        "type": "move",
+        "args": {"dx": 95, "dy": 825},
+        "confidence": 0.92
+      },
+      {
+        "type": "click",
+        "args": {"button": "left"},
+        "confidence": 0.95
+      },
+      {
+        "type": "say",
+        "args": {"text": "Opening the attack matchmaking screen."},
+        "confidence": 0.85
+      }
+    ],
+    "rationale": "The red 'Attack!' button is the primary call-to-action in the lower-left corner of the home village screen; tapping it begins matchmaking for a new raid."
+  },
+  "validation": {
+    "schema_valid": true,
+    "safe": true,
+    "rejected_command_indices": [],
+    "notes": []
+  },
+  "notes": "MOVE.dx/dy are absolute screen pixel coordinates against the 2001x923 source image. A tolerant grader should accept any (dx, dy) inside the Attack button's hitbox (roughly x in [25, 165], y in [770, 880])."
+}

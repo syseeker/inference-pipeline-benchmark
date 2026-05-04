@@ -1,7 +1,7 @@
 """Fixture loader.
 
-    fx = load_fixture("01_click_start_button")
-    pipe.run(fx.request)
+    fx = load_fixture("01_clash_of_clans_start_attack")
+    pipe.run(fx.pipeline_request())
 
 `load_all()` returns every fixture in lexical order — the parametrised
 smoke test uses this so adding a new fixture directory is enough to put
@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.smoke.fixtures.schema import FixtureExpected, FixtureInput
+from tests.smoke.fixtures.schema import FixtureExpected, FixtureRequest
 from vlm_pipeline.pipeline import PipelineRequest
 
 _FIXTURES_DIR = Path(__file__).parent
@@ -24,18 +24,19 @@ _FIXTURES_DIR = Path(__file__).parent
 class LoadedFixture:
     name: str
     dir: Path
-    input: FixtureInput
+    spec: FixtureRequest      # on-disk request spec (image referenced by path)
     expected: FixtureExpected
     image_bytes: bytes
 
-    @property
-    def request(self) -> PipelineRequest:
+    def pipeline_request(self) -> PipelineRequest:
+        """Materialise the on-disk spec into a runtime PipelineRequest."""
+
         return PipelineRequest(
             image=self.image_bytes,
-            instruction=self.input.instruction,
-            context_history=self.input.context_history,
+            instruction=self.spec.instruction,
+            context_history=self.spec.context_history,
             request_id=self.name,
-            deadline_ms=self.input.deadline_ms,
+            deadline_ms=self.spec.deadline_ms,
         )
 
 
@@ -43,20 +44,24 @@ def load_fixture(name: str) -> LoadedFixture:
     fx_dir = _FIXTURES_DIR / name
     if not fx_dir.is_dir():
         raise FileNotFoundError(f"fixture not found: {fx_dir}")
-    fx_input = FixtureInput.model_validate_json((fx_dir / "input.json").read_text())
-    fx_expected = FixtureExpected.model_validate_json((fx_dir / "expected.json").read_text())
-    image_bytes = (fx_dir / fx_input.image_path).read_bytes()
+    spec = FixtureRequest.model_validate_json((fx_dir / "request.json").read_text())
+    expected = FixtureExpected.model_validate_json((fx_dir / "expected.json").read_text())
+    image_bytes = (fx_dir / spec.image_path).read_bytes()
     return LoadedFixture(
         name=name,
         dir=fx_dir,
-        input=fx_input,
-        expected=fx_expected,
+        spec=spec,
+        expected=expected,
         image_bytes=image_bytes,
     )
 
 
 def list_fixtures() -> list[str]:
-    return sorted(p.name for p in _FIXTURES_DIR.iterdir() if p.is_dir() and (p / "input.json").exists())
+    return sorted(
+        p.name
+        for p in _FIXTURES_DIR.iterdir()
+        if p.is_dir() and not p.name.startswith("__") and (p / "request.json").exists()
+    )
 
 
 def load_all() -> list[LoadedFixture]:

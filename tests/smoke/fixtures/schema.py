@@ -1,16 +1,18 @@
 """On-disk schema for smoke-test fixtures.
 
-Each fixture directory under `tests/smoke/fixtures/<name>/` holds:
+A fixture is one (visual + short context history + high-level instruction)
+→ (low-level action sequence) example. The on-disk shape is:
 
-    input.json     # FixtureInput — the PipelineRequest we feed in
-    image.jpg      # the visual the request references
-    expected.json  # FixtureExpected — the golden ActionSequence + validation
+    tests/smoke/fixtures/<name>/
+        request.json   # FixtureRequest  — what the pipeline receives
+        screen.<ext>   # the visual the request points at
+        expected.json  # FixtureExpected — gold ActionSequence + verdict
 
-`FixtureInput` is a serialisable mirror of `PipelineRequest` (the binary
-image lives next to it on disk so the JSON stays diff-friendly).
-`FixtureExpected` captures only the deterministic parts of
-`PipelineResponse`: the gold action sequence and what the validator
-should say about it. Latency, model_meta, and was_executed are runtime
+`FixtureRequest` mirrors `vlm_pipeline.pipeline.PipelineRequest`. The
+binary image lives next to the JSON on disk so the request stays
+diff-friendly. `FixtureExpected` captures only the **deterministic**
+parts of `PipelineResponse`: the gold action sequence and what the
+validator should say. Latency, model_meta, and was_executed are runtime
 properties and are not asserted.
 """
 
@@ -21,7 +23,9 @@ from pydantic import BaseModel, Field
 from vlm_pipeline.schemas import ActionSequence, ContextTurn, ValidationReport
 
 
-class FixtureInput(BaseModel):
+class FixtureRequest(BaseModel):
+    """Serialisable form of a PipelineRequest, with the image referenced by path."""
+
     name: str
     description: str
     image_path: str = Field(..., description="Image path relative to the fixture dir.")

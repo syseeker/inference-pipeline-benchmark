@@ -1,0 +1,17 @@
+{
+  "name": "03_fps_engage_and_reload",
+  "description": "Sci-fi first-person shooter (1796x975). Player is mid-firing a pistol with a visible muzzle flash; three hostile silhouettes are on a raised platform ahead, already centred near the crosshair. The pipeline should fire two more rounds and reload — using the standard FPS bindings (left mouse to fire, R to reload).",
+  "image_path": "screen.png",
+  "instruction": "Three hostiles ahead — fire two more shots and then reload.",
+  "context_history": [
+    {
+      "role": "user",
+      "text": "Cover me, I am checking my six."
+    },
+    {
+      "role": "assistant",
+      "text": "Watching your front. Three hostiles spotted on the raised platform."
+    }
+  ],
+  "deadline_ms": 1500
+}

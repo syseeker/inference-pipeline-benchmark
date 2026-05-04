@@ -1,0 +1,29 @@
+{
+  "actions": {
+    "commands": [
+      {
+        "type": "move",
+        "args": {"dx": 50, "dy": 437},
+        "confidence": 0.9
+      },
+      {
+        "type": "click",
+        "args": {"button": "left"},
+        "confidence": 0.95
+      },
+      {
+        "type": "say",
+        "args": {"text": "Game menu open. Look for Save & Exit at the top."},
+        "confidence": 0.8
+      }
+    ],
+    "rationale": "The yellow hamburger icon at the bottom-left is the in-game menu opener; left-clicking it surfaces the save/exit options the user asked for."
+  },
+  "validation": {
+    "schema_valid": true,
+    "safe": true,
+    "rejected_command_indices": [],
+    "notes": []
+  },
+  "notes": "MOVE.dx/dy reference the 1024x494 source image. Tolerant grader hitbox: x in [25, 80], y in [415, 460]. The neighbouring info ('i') and undo ('arrow') icons must NOT be clicked — they are not the menu."
+}

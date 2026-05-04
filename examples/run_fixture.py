@@ -1,10 +1,10 @@
 """Run a smoke-test fixture end-to-end against a live (or stubbed) backend.
 
     # offline (stub reasoner) — works without credentials
-    python -m examples.run_fixture 01_click_start_button
+    python -m examples.run_fixture 01_clash_of_clans_start_attack
 
     # live NIM
-    NIM_API_KEY=... python -m examples.run_fixture 02_dismiss_update_popup --backend nim
+    NIM_API_KEY=... python -m examples.run_fixture 02_catan_open_menu --backend nim
 
     # list available fixtures
     python -m examples.run_fixture --list
@@ -45,7 +45,7 @@ class _StubReasoner:
 
 @app.command()
 def main(
-    fixture: str = typer.Argument(None, help="Fixture name, e.g. 01_click_start_button"),
+    fixture: str = typer.Argument(None, help="Fixture name, e.g. 01_clash_of_clans_start_attack"),
     backend: str = typer.Option("stub", help="stub | nim"),
     list_fx: bool = typer.Option(False, "--list", help="List available fixtures and exit"),
 ) -> None:
@@ -76,14 +76,14 @@ def main(
 
     pipe = Pipeline(reasoner=reasoner, config=cfg)
     console.rule(f"[bold]{fx.name}[/bold]  ({backend})")
-    console.print(f"[dim]{fx.input.description}[/dim]")
-    console.print(f"[bold]instruction:[/bold] {fx.input.instruction}")
-    if fx.input.context_history:
+    console.print(f"[dim]{fx.spec.description}[/dim]")
+    console.print(f"[bold]instruction:[/bold] {fx.spec.instruction}")
+    if fx.spec.context_history:
         console.print("[bold]history:[/bold]")
-        for turn in fx.input.context_history:
+        for turn in fx.spec.context_history:
             console.print(f"  [{turn.role}] {turn.text}")
 
-    resp = pipe.run(fx.request)
+    resp = pipe.run(fx.pipeline_request())
 
     console.print()
     console.print("[bold]GOLD actions:[/bold]")
