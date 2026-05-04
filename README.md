@@ -53,20 +53,26 @@ wired up. See [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
+See **[QUICKSTART.md](QUICKSTART.md)** for the full setup. TL;DR — three
+modes, picked by what you want to measure:
+
+- **Mode A — pipeline smoke (no GPU).** NIM cloud or stub backend; runs
+  the scenarios + unit tests on a laptop. Tells you nothing about
+  performance.
+- **Mode B — framework benchmark (local GPU required).** Bring up vLLM /
+  SGLang / TRT-LLM on the target GPU, then run `benchmarks.runner`. This
+  is where the real numbers come from.
+- **Mode C — production rehearsal (local NIM container).** NIM container
+  on the target GPU, benchmarked against the open frameworks.
+
 ```bash
-# 1. Install (once a Python toolchain is decided)
-pip install -e ".[dev]"
-
-# 2. Smoke-test the pipeline against a NIM endpoint
-export NIM_API_KEY=...                       # NVIDIA NIM key
-export NIM_BASE_URL=https://integrate.api.nvidia.com/v1
-python -m examples.basic_inference
-
-# 3. Run a benchmark stub on the local GPU
-python -m benchmarks.runner --framework vllm --gpu rtx_pro6000 --model qwen3-vl-8b
+# Mode A — three commands and you're running
+pip install -e ".[dev,nim]"
+pytest -m "not nim" -q
+python -m examples.run_scenario 01_clash_of_clans_start_attack
 ```
 
-(Most of the above are placeholders — see the
+(Most benchmark adapters are placeholders today — see the
 [benchmarks README](benchmarks/README.md) for what is implemented vs. stubbed.)
 
 ## Models
