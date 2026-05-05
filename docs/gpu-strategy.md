@@ -9,7 +9,7 @@
 ## Thesis
 
 > **The bottleneck for this VLM-action use case is memory bandwidth, not
-> VRAM capacity** (per Karan).
+> VRAM capacity.**
 
 Therefore: do not jump to tensor parallelism on consumer GPUs. Prove the
 single-GPU optimised baseline first. Only test multi-GPU if profiling

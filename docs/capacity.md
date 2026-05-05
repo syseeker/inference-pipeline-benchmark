@@ -21,6 +21,19 @@ quantisation level, and where multi-GPU starts to make sense.
 | MoE memory | **total params** | all experts must be resident on the GPU(s); active params drive compute, not memory |
 | Vision tower | counted in the param totals below | fused into the dense weight memory for the table |
 
+> **Note on the KV-reservation knob.** Every "Max …" cell in the tables
+> below assumes the 25–30 % reservation above. Tune to your workload:
+> - **More aggressive** (10–15 % reservation; low batch ≤ 2, ctx ≤ 2K,
+>   single-stream) → cells push **up**. A 5090 may fit 30B-A3B-INT4; an
+>   H200 may fit 235B-INT4; a B300 hosts 235B-FP8 comfortably.
+> - **More conservative** (40–50 % reservation; batch ≥ 16, ctx ≥ 16K,
+>   long prefix caching) → cells push **down**. A 96 GB RTX PRO 6000 may
+>   not fit 32B-FP8 at full batch; plan for smaller batch or step up to
+>   H200.
+>
+> The cells are **decision-grade defaults**, not strict limits — verify
+> against your real batch and context budget before sizing the order.
+
 ## Per-precision precision/notes
 
 - **BF16** — official HF `Instruct` / `Thinking` checkpoints; the
@@ -72,8 +85,8 @@ specifically know batch and context will be lower.
 - **RTX 5090 + 8B BF16** is the headline single-GPU consumer recipe.
   KV is tight: plan batch ≤ 4 at 8K context. **Drop to 8B-FP8** and you
   reclaim ~9 GB → batch ≥ 16 at 8K is realistic. This is the **first
-  optimisation lever** Karan flagged: prove single-GPU FP8 + KV reuse
-  before considering multi-GPU.
+  optimisation lever** for the bandwidth-bound case: prove single-GPU
+  FP8 + KV reuse before considering multi-GPU.
 - **30B-A3B vs. 32B dense** at the same VRAM tier: MoE costs ~the same
   memory but only ~3B params are active per token. It is the cleanest
   **memory-bandwidth** stress test in the matrix and worth running at
@@ -91,8 +104,9 @@ specifically know batch and context will be lower.
 
 Multi-GPU is not free — the value depends on whether the **interconnect
 between cards** can keep up with the per-token all-reduce cost of TP.
-Karan's bandwidth thesis applies here too: don't add a second GPU until
-the single-GPU FP8 + KV-reuse + CUDA-graph baseline is published.
+The bandwidth-bottleneck argument applies here too: don't add a second
+GPU until the single-GPU FP8 + KV-reuse + CUDA-graph baseline is
+published.
 
 ### When multi-GPU helps
 
