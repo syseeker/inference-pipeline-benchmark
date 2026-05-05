@@ -22,14 +22,14 @@ frameworks:
     max_num_seqs: 64
   sglang:
     base_url: "http://localhost:30000/v1"
-    radix_cache: true
+    radix_cache: true  # on by default in SGLang 0.4+; no flag needed
     structured_output: ebnf
   trtllm:
-    engine_dir: "trt_engines/qwen3-vl-8b-pro6000-fp8"
+    engine_dir: "trt_engines/qwen2-vl-7b-rtx_pro6000-bf16"
     paged_kv_cache: true
     enable_block_reuse: true
     cuda_graph: true
-    fp8: true
+    fp8: false
   modelopt:
     quant: fp8
     calibration_samples: 512
@@ -38,6 +38,9 @@ frameworks:
     ensemble_name: "vlm_pipeline_ensemble"
 
 models:
+  - id: "qwen2-vl-7b"
+    quant: ["bf16"]
+    notes: "Stand-in for Qwen3-VL until TRT-LLM adds Qwen3-VL multimodal FP8 export."
   - id: "qwen3-vl-4b"
     quant: ["bf16", "fp8"]
   - id: "qwen3-vl-8b"

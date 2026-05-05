@@ -22,7 +22,7 @@ frameworks:
     max_num_seqs: 32
   sglang:
     base_url: "http://localhost:30000/v1"
-    radix_cache: true
+    radix_cache: true  # on by default in SGLang 0.4+; no flag needed
     structured_output: ebnf        # JSON-schema | regex | ebnf
   trtllm:
     engine_dir: "trt_engines/qwen3-vl-8b-rtx5090-fp8"
