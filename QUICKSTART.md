@@ -193,7 +193,7 @@ schema and passed through to SGLang at sample time.
 
 ---
 
-### B.3 — TensorRT-LLM (production target)
+### B.3 — TensorRT-LLM (TRT engine-compiled path)
 
 TRT-LLM needs an engine built per (model, GPU, batch shape). VLMs require two engines: one
 for the LLM decoder and one for the vision encoder.

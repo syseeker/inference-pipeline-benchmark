@@ -26,7 +26,7 @@ winner.
 - Adapter: `benchmarks/frameworks/sglang_bench.py`.
 - Reasoner: `src/vlm_pipeline/reasoners/sglang_backend.py`.
 
-### TensorRT-LLM — production target
+### TensorRT-LLM — TRT engine-compiled path
 
 - The NVIDIA path: optimised engines, FP8 / INT8, KV-cache reuse, CUDA
   graphs, paged attention, multi-GPU paths, in-flight batching.

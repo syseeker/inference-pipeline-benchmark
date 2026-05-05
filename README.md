@@ -99,7 +99,7 @@ fits which GPU at BF16 / FP8 / W8A8 / INT4, plus a multi-GPU matrix.
 | --- | --- |
 | vLLM | Baseline (already familiar to the customer) |
 | SGLang | Low-latency challenger; RadixAttention + structured output |
-| TensorRT-LLM | Production target on NVIDIA GPUs |
+| TensorRT-LLM | TRT engine-compiled path on NVIDIA GPUs |
 | ModelOpt | FP8 / INT8 / W8A8 quant + calibration |
 | TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving |
 

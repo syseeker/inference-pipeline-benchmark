@@ -1,6 +1,6 @@
 """TensorRT-LLM reasoner — placeholder.
 
-Production target. Requires:
+TRT engine-compiled path. Requires:
 - A TRT-LLM engine for the language tower (built per GPU + batch shape).
 - A TRT engine for the vision tower (or kept fused if the model supports).
 - ModelOpt-calibrated weights for the FP8/INT8 path.
