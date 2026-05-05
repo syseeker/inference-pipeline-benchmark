@@ -18,6 +18,17 @@ import time
 from vlm_pipeline.config import NimConfig
 from vlm_pipeline.schemas import ContextTurn, ModelMeta
 
+
+class NimModelNotFoundError(RuntimeError):
+    """Raised when the NIM endpoint returns 404 for the requested model.
+
+    This almost always means `NIM_MODEL` doesn't match any model id served
+    at `NIM_BASE_URL`. NIM cloud's catalogue rotates; verify with::
+
+        curl -s -H "Authorization: Bearer $NIM_API_KEY" \
+             "$NIM_BASE_URL/models" | jq '.data[].id'
+    """
+
 _SYSTEM_PROMPT = (
     "You are a low-level control planner. Given an image, a short history, "
     "and a user instruction, produce a short JSON object of the form "
@@ -73,13 +84,27 @@ class NimQwenVlReasoner:
         ttft_ms: float | None = None
         chunks: list[str] = []
 
-        stream = self._client.chat.completions.create(
-            model=self._cfg.model,
-            messages=messages,
-            stream=True,
-            timeout=self._cfg.timeout_s,
-            response_format={"type": "json_object"},
-        )
+        try:
+            stream = self._client.chat.completions.create(
+                model=self._cfg.model,
+                messages=messages,
+                stream=True,
+                timeout=self._cfg.timeout_s,
+                response_format={"type": "json_object"},
+            )
+        except Exception as e:  # openai.NotFoundError, APIStatusError, etc.
+            status = getattr(e, "status_code", None)
+            if status == 404 or "404" in str(e) or "not found" in str(e).lower():
+                raise NimModelNotFoundError(
+                    f"NIM returned 404 for model '{self._cfg.model}' at "
+                    f"{self._cfg.base_url}. The model id likely does not exist "
+                    f"on this endpoint. List available ids with:\n"
+                    f"  curl -s -H 'Authorization: Bearer $NIM_API_KEY' "
+                    f"{self._cfg.base_url.rstrip('/')}/models | jq '.data[].id'\n"
+                    f"Then export NIM_MODEL=<id> and retry."
+                ) from e
+            raise
+
         for chunk in stream:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:

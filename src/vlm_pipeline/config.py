@@ -17,8 +17,13 @@ import yaml
 class NimConfig:
     api_key: str | None = None
     base_url: str = "https://integrate.api.nvidia.com/v1"
-    model: str = "qwen/qwen2.5-vl-7b-instruct"
-    timeout_s: float = 30.0
+    # NIM cloud's catalogue does NOT expose Qwen2.5-VL or Qwen3-VL today.
+    # The only multimodal Qwen NIM is qwen/qwen3.5-397b-a17b (400B MoE).
+    # For real Qwen3-VL benchmarks, self-host via QUICKSTART Mode B and
+    # point NIM_BASE_URL at http://localhost:8001/v1 with NIM_MODEL set
+    # to the local container's served id.
+    model: str = "qwen/qwen3.5-397b-a17b"
+    timeout_s: float = 60.0
 
 
 @dataclass

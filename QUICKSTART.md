@@ -35,10 +35,20 @@ python -m examples.run_scenario 01_clash_of_clans_start_attack
 # 4. (optional) live NIM round-trip — needs an NVIDIA NIM API key
 export NIM_API_KEY=nvapi-...
 export NIM_BASE_URL=https://integrate.api.nvidia.com/v1
-export NIM_MODEL=qwen/qwen2.5-vl-7b-instruct      # or qwen3-vl-* once published
+
+# Find a model id your key can reach (the catalogue rotates):
+bash scripts/list_nim_models.sh qwen
+# Today (2026-05) the only multimodal Qwen NIM is qwen/qwen3.5-397b-a17b.
+# Qwen2.5-VL and Qwen3-VL are NOT on NIM cloud — for those, self-host (Mode B/C).
+
+export NIM_MODEL=qwen/qwen3.5-397b-a17b
 python -m examples.run_scenario 01_clash_of_clans_start_attack --backend nim
 pytest -m nim tests/smoke/test_nim_live.py -q
 ```
+
+> ⚠️ **Common 404.** If you see `NIM returned 404 for model '<id>'`,
+> your `NIM_MODEL` doesn't match anything served at `NIM_BASE_URL`. Run
+> `bash scripts/list_nim_models.sh` to see what's available.
 
 This tells you **nothing about performance** — NIM cloud sits behind a
 shared queue and your local network. It's purely a correctness check.
