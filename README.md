@@ -53,15 +53,16 @@ wired up. See [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
-See **[QUICKSTART.md](QUICKSTART.md)** for the full setup. TL;DR — three
+See **[INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md)** for the full setup. TL;DR — three
 modes, picked by what you want to measure:
 
 - **Mode A — pipeline smoke (no GPU).** NIM cloud or stub backend; runs
   the scenarios + unit tests on a laptop. Tells you nothing about
   performance.
 - **Mode B — framework benchmark (local GPU required).** Bring up vLLM /
-  SGLang / TRT-LLM on the target GPU, then run `benchmarks.runner`. This
-  is where the real numbers come from.
+  SGLang / TRT-LLM on the target GPU, run the
+  [live smoke tests](SMOKE_TESTS.md) to confirm the backend is sane,
+  then `benchmarks.runner` for the real numbers.
 - **Mode C — production rehearsal (local NIM container).** NIM container
   on the target GPU, benchmarked against the open frameworks.
 

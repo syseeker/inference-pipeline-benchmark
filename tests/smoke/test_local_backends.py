@@ -61,7 +61,7 @@ _SCENARIOS = list_scenarios()
 @pytest.mark.vllm
 @pytest.mark.gpu
 @pytest.mark.smoke
-@pytest.mark.skipif(not _VLLM_UP, reason="vLLM server not reachable — start it first (see QUICKSTART B.1)")
+@pytest.mark.skipif(not _VLLM_UP, reason="vLLM server not reachable — start it first (see INFERENCE_BACKENDS B.1)")
 @pytest.mark.parametrize("scenario_name", _SCENARIOS)
 def test_vllm_scenario(scenario_name: str) -> None:
     from vlm_pipeline.reasoners.vllm_backend import VllmReasoner
@@ -81,7 +81,7 @@ def test_vllm_scenario(scenario_name: str) -> None:
 @pytest.mark.sglang
 @pytest.mark.gpu
 @pytest.mark.smoke
-@pytest.mark.skipif(not _SGLANG_UP, reason="SGLang server not reachable — start it first (see QUICKSTART B.2)")
+@pytest.mark.skipif(not _SGLANG_UP, reason="SGLang server not reachable — start it first (see INFERENCE_BACKENDS B.2)")
 @pytest.mark.parametrize("scenario_name", _SCENARIOS)
 def test_sglang_scenario(scenario_name: str) -> None:
     from vlm_pipeline.reasoners.sglang_backend import SglangReasoner
@@ -101,7 +101,7 @@ def test_sglang_scenario(scenario_name: str) -> None:
 @pytest.mark.trtllm
 @pytest.mark.gpu
 @pytest.mark.smoke
-@pytest.mark.skipif(not _TRTLLM_UP, reason="TRT-LLM server not reachable — run trtllm-serve on port 8002 first (see QUICKSTART B.3)")
+@pytest.mark.skipif(not _TRTLLM_UP, reason="TRT-LLM server not reachable — run trtllm-serve on port 8002 first (see INFERENCE_BACKENDS B.3)")
 @pytest.mark.parametrize("scenario_name", _SCENARIOS)
 def test_trtllm_scenario(scenario_name: str) -> None:
     from vlm_pipeline.reasoners.trtllm_backend import TrtLlmReasoner

@@ -1,6 +1,7 @@
-# Quickstart
+# Inference backend setup
 
-Three ways to use this repo, picked by what you actually want to measure.
+Three ways to bring up a backend for this pipeline, picked by what you
+actually want to measure.
 
 
 | Mode                        | What it answers                                                                                | GPU?    | Model location                        |
@@ -202,6 +203,7 @@ for the LLM decoder and one for the vision encoder.
 > but does NOT include the example scripts (`quantize.py`, `build_multimodal_engine.py`).
 > NVIDIA only distributes these via GitHub. Clone at the tag matching your installed version
 > to avoid import mismatches — no install step needed:
+>
 > ```bash
 > TRTLLM_VER=$(.venv-trtllm/bin/python -c "import tensorrt_llm; print(tensorrt_llm.__version__)" 2>/dev/null | grep -oP '^\d+\.\d+\.\d+$')
 > git clone https://github.com/NVIDIA/TensorRT-LLM.git --depth 1 --branch "v${TRTLLM_VER}"
@@ -287,6 +289,8 @@ budget. See [docs/metrics.md](docs/metrics.md).
 
 ## Appendix
 
+The following is yet to be tested...
+
 ### A1 — TRT-LLM FP8 quantization (blocked upstream)
 
 FP8 quantization for Qwen-VL via `quantize.py` fails in TRT-LLM 1.2.1 with
@@ -337,7 +341,7 @@ Build a Triton model repository where:
 - `cv_encoder` is a TRT engine for the vision tower (or a no-op for v0)
 - `vlm_reasoner` is the TRT-LLM engine from B.3
 - `decoder` and `validator` are Python BLS models wrapping
-  `vlm_pipeline.decoders.action_decoder` and `vlm_pipeline.validators.safety_validator`
+`vlm_pipeline.decoders.action_decoder` and `vlm_pipeline.validators.safety_validator`
 - `vlm_pipeline_ensemble` chains them all
 
 ```bash

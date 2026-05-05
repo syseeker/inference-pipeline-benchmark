@@ -19,7 +19,7 @@ class NimConfig:
     base_url: str = "https://integrate.api.nvidia.com/v1"
     # NIM cloud's catalogue does NOT expose Qwen2.5-VL or Qwen3-VL today.
     # The only multimodal Qwen NIM is qwen/qwen3.5-397b-a17b (400B MoE).
-    # For real Qwen3-VL benchmarks, self-host via QUICKSTART Mode B and
+    # For real Qwen3-VL benchmarks, self-host via INFERENCE_BACKENDS Mode B and
     # point NIM_BASE_URL at http://localhost:8001/v1 with NIM_MODEL set
     # to the local container's served id.
     model: str = "qwen/qwen3.5-397b-a17b"

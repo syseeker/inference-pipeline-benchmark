@@ -178,4 +178,4 @@ Cells show "fits / tight / no" for the largest Qwen3-VL checkpoint at FP8.
   the numeric column.
 - NIM cloud's catalogue does not currently include Qwen3-VL or
   Qwen2.5-VL; for live Qwen-VL inference you must self-host. See
-  [QUICKSTART.md](../QUICKSTART.md) Mode B.
+  [INFERENCE_BACKENDS.md](../INFERENCE_BACKENDS.md) Mode B.
