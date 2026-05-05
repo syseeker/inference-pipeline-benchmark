@@ -1,5 +1,11 @@
 # GPU strategy
 
+> **Sizing reference:** for the per-GPU "what Qwen3-VL checkpoint fits"
+> table (BF16 / FP8 / W8A8 / INT4) and the multi-GPU capacity matrix
+> with NVLink-vs-PCIe applicability notes, see
+> [capacity.md](capacity.md).
+
+
 ## Thesis
 
 > **The bottleneck for this VLM-action use case is memory bandwidth, not

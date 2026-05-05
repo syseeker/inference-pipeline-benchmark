@@ -89,7 +89,9 @@ variants as a reference). Full curated list in [docs/models.md](docs/models.md).
 | Bandwidth ceiling | 1× H200 | 141 GB HBM3e @ 4.8 TB/s — clean memory-bw benchmark |
 
 Tensor parallelism on consumer cards is **an experiment, not the default**.
-See [docs/gpu-strategy.md](docs/gpu-strategy.md).
+See [docs/gpu-strategy.md](docs/gpu-strategy.md) for the staged proposal
+and [docs/capacity.md](docs/capacity.md) for which Qwen3-VL checkpoint
+fits which GPU at BF16 / FP8 / W8A8 / INT4, plus a multi-GPU matrix.
 
 ## Frameworks
 
