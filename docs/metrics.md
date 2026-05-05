@@ -6,7 +6,7 @@ Tokens/sec is **not** the decision metric for this use case.
 
 | Metric | Definition | Target |
 | --- | --- | --- |
-| Valid command-sequence latency | t(image+instruction in) → t(schema-valid sequence out) | meet interactive budget (TBD per Razer) |
+| Valid command-sequence latency | t(image+instruction in) → t(schema-valid sequence out) | meet interactive budget (TBD per customer) |
 | Command success rate | fraction of sequences the executor accepts and that achieve the intended outcome | high — exact threshold per task suite |
 | Safety / grammar validity | fraction passing the validator on first try (no resampling) | high — close to 1.0 |
 | p95 / p99 stability | tail latency of valid command-sequence latency under realistic concurrency | within budget |

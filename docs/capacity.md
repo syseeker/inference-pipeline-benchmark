@@ -146,7 +146,7 @@ Cells show "fits / tight / no" for the largest Qwen3-VL checkpoint at FP8.
 
 | Goal | Suggested config | Why |
 | --- | --- | --- |
-| Razer-relevant consumer baseline | **1× RTX 5090, Qwen3-VL-8B-FP8** | Matches the customer device. TP=2 on PCIe is risky; first prove single-GPU FP8 + prefix-cache + CUDA graphs. |
+| Customer-relevant consumer baseline | **1× RTX 5090, Qwen3-VL-8B-FP8** | Matches the customer device. TP=2 on PCIe is risky; first prove single-GPU FP8 + prefix-cache + CUDA graphs. |
 | Server-class POC, single GPU | **1× RTX PRO 6000, Qwen3-VL-32B-FP8** *or* **30B-A3B-FP8** | 96 GB lets you run the bigger reasoner at FP8 with a real KV budget; MoE variant exercises the bandwidth thesis. |
 | Memory-bandwidth ceiling reference | **1× H200, Qwen3-VL-32B-BF16** | Cleanest read on bandwidth-bound performance — HBM3e at 4.8 TB/s, no quant artefacts. |
 | 235B-A22B serving | **2× H200 TP=2 (FP8)** *or* **1× B300 (FP8)** *or* **2× B300 TP=2 (BF16)** | Single-card fits 235B only on B300; H200 needs TP=2; B300 NVLink 5 handles 2× cleanly for the BF16 reference. |

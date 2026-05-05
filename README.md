@@ -6,7 +6,7 @@ Real-time multimodal **VLM-to-action** inference pipeline + benchmark harness.
 > instruction → a short, validated, low-level control-command sequence ready
 > for interactive execution.
 
-This repo is the **POC + benchmark scaffolding** for a Razer-facing study
+This repo is the **POC + benchmark scaffolding** for a customer-facing study
 NVIDIA is running. It establishes:
 
 1. A pluggable inference pipeline whose first stage is a NIM-hosted Qwen3-VL
@@ -84,7 +84,7 @@ variants as a reference). Full curated list in [docs/models.md](docs/models.md).
 
 | Stage | GPU | Why |
 | --- | --- | --- |
-| Consumer-target baseline | 1× RTX 5090 | What Razer ships against; 32 GB GDDR7, no NVLink |
+| Consumer-target baseline | 1× RTX 5090 | What the customer ships against; 32 GB GDDR7, no NVLink |
 | Server POC | 1× RTX PRO 6000 Blackwell | 96 GB GDDR7, MIG, server workflow |
 | Bandwidth ceiling | 1× H200 | 141 GB HBM3e @ 4.8 TB/s — clean memory-bw benchmark |
 

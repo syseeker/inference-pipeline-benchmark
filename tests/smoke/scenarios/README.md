@@ -3,7 +3,7 @@
 Three real game-screen scenarios for the VLM-to-action pipeline. Each
 scenario is one (visual + short context history + high-level
 instruction) → (low-level action sequence) example, captured straight
-from a running game so the visuals look like what Razer's customers
+from a running game so the visuals look like what the customer's end users
 will actually see.
 
 ## On-disk shape

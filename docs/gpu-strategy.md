@@ -20,7 +20,7 @@ does not erase the win.
 
 | Stage | GPU | Memory | Bandwidth | NVLink | Why |
 | --- | --- | --- | --- | --- | --- |
-| Consumer-target baseline | 1× RTX 5090 | 32 GB GDDR7 | ~1.79 TB/s | **No** | Razer-relevant target device. PCIe Gen 5 only. Risky for TP. |
+| Consumer-target baseline | 1× RTX 5090 | 32 GB GDDR7 | ~1.79 TB/s | **No** | Customer-relevant target device. PCIe Gen 5 only. Risky for TP. |
 | Server POC | 1× RTX PRO 6000 Blackwell (Server Edition) | 96 GB GDDR7 | ~1.6 TB/s | – | Server workflow, MIG, video encode/decode. Bridge between consumer and DC. |
 | Bandwidth ceiling | 1× H200 | 141 GB HBM3e | **~4.8 TB/s** | NVLink | Cleanest benchmark for the bandwidth thesis. |
 
@@ -31,7 +31,7 @@ NVIDIA datasheet at run time and bake into the per-GPU yaml under
 ## Owners
 
 - This user (`boonpingl@nvidia.com`): RTX PRO 6000 + H200 runs.
-- Peer at Razer / partner: RTX 5090 runs.
+- Peer at customer / partner: RTX 5090 runs.
 - Each side publishes raw + summarised results into
   `benchmarks/results/<gpu>/<run-id>/` and the summary table here.
 
@@ -60,7 +60,7 @@ Configs live in `benchmarks/configs/{rtx5090,rtx_pro6000,h200}.yaml`.
 - 2× / 4× H200 — NVLink-class scaling reference.
 
 If the single-GPU runs already meet the latency budget, the recommendation
-to Razer is *do not buy two GPUs*.
+to the customer is *do not buy two GPUs*.
 
 ## Probes
 
