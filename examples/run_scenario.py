@@ -46,7 +46,7 @@ class _StubReasoner:
 @app.command()
 def main(
     scenario: str = typer.Argument(None, help="Scenario name, e.g. 01_clash_of_clans_start_attack"),
-    backend: str = typer.Option("stub", help="stub | nim"),
+    backend: str = typer.Option("stub", help="stub | nim | vllm | sglang | trtllm"),
     list_sc: bool = typer.Option(False, "--list", help="List available scenarios and exit"),
 ) -> None:
     if list_sc:
@@ -68,6 +68,18 @@ def main(
         from vlm_pipeline.reasoners.nim_qwen_vl import NimQwenVlReasoner
 
         reasoner = NimQwenVlReasoner(cfg.nim)
+    elif backend == "vllm":
+        from vlm_pipeline.reasoners.vllm_backend import VllmReasoner
+
+        reasoner = VllmReasoner(cfg.vllm)
+    elif backend == "sglang":
+        from vlm_pipeline.reasoners.sglang_backend import SglangReasoner
+
+        reasoner = SglangReasoner(cfg.sglang)
+    elif backend == "trtllm":
+        from vlm_pipeline.reasoners.trtllm_backend import TrtLlmReasoner
+
+        reasoner = TrtLlmReasoner(cfg.trtllm)
     elif backend == "stub":
         reasoner = _StubReasoner(sc.expected.actions.model_dump_json())
     else:

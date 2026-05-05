@@ -40,6 +40,7 @@ class SglangConfig:
 
 @dataclass
 class TrtLlmConfig:
+    base_url: str = "http://localhost:8002/v1"
     engine_dir: str = "trt_engines/qwen3-vl-8b"
     tokenizer_dir: str = "Qwen/Qwen3-VL-8B-Instruct"
 
@@ -73,7 +74,10 @@ class PipelineConfig:
         cfg.nim.base_url = os.getenv("NIM_BASE_URL", cfg.nim.base_url)
         cfg.nim.model = os.getenv("NIM_MODEL", cfg.nim.model)
         cfg.vllm.base_url = os.getenv("VLLM_BASE_URL", cfg.vllm.base_url)
+        cfg.vllm.model = os.getenv("VLLM_MODEL", cfg.vllm.model)
         cfg.sglang.base_url = os.getenv("SGLANG_BASE_URL", cfg.sglang.base_url)
+        cfg.sglang.model = os.getenv("SGLANG_MODEL", cfg.sglang.model)
+        cfg.trtllm.base_url = os.getenv("TRTLLM_BASE_URL", cfg.trtllm.base_url)
         cfg.triton.grpc_url = os.getenv("TRITON_GRPC_URL", cfg.triton.grpc_url)
         if backend := os.getenv("PIPELINE_BACKEND"):
             cfg.backend = backend

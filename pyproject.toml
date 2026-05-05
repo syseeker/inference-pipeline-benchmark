@@ -54,4 +54,7 @@ markers = [
     "smoke: quick end-to-end sanity checks (golden path only)",
     "gpu: requires a CUDA-capable GPU",
     "nim: requires NIM API credentials",
+    "vllm: requires a running vLLM server (localhost:8000)",
+    "sglang: requires a running SGLang server (localhost:30000)",
+    "trtllm: requires a running trtllm-serve server (localhost:8002)",
 ]
