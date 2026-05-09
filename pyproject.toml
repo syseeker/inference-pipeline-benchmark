@@ -22,10 +22,22 @@ dependencies = [
 
 [project.optional-dependencies]
 # Pipeline backend extras — install only what your machine supports.
+# Versions pinned exact to keep benchmark numbers reproducible. Bump
+# deliberately and re-run; do not float.
 nim     = ["openai>=1.30"]                   # NIM exposes an OpenAI-compatible API
-vllm    = ["vllm>=0.6.0"]
-sglang  = ["sglang>=0.3.0"]
-trtllm  = []                                  # tensorrt-llm wheel is GPU/driver-specific; install manually
+vllm    = ["vllm==0.20.1"]                   # 2026-05-03
+sglang  = [
+    "sglang==0.5.11",                         # 2026-05-05
+    # sglang's ParakeetExtractor (audio path for AVLM models like
+    # Nemotron-Omni) hard-imports librosa but sglang doesn't list it as a
+    # dep — server crashes on startup with ImportError otherwise.
+    "librosa>=0.11",
+]
+# tensorrt-llm wheels are GPU/driver-specific and live on NVIDIA's index
+# (https://pypi.nvidia.com), not standard PyPI — pip can't satisfy them
+# from this extra alone. Install manually with the pinned version:
+#   pip install tensorrt-llm==1.2.1 --extra-index-url https://pypi.nvidia.com
+trtllm  = []
 modelopt= []                                  # nvidia-modelopt is installed from NVIDIA's index
 triton  = ["tritonclient[grpc]>=2.45"]
 dev     = [

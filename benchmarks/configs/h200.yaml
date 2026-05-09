@@ -1,4 +1,20 @@
 # H200 (memory-bandwidth ceiling)
+#
+# Schema (one GPU = one yaml):
+#   models:          one block per candidate model. Keys = stable ids.
+#                    `backend_args` is the rare per-backend launch flag a
+#                    model needs (e.g. runtime quant when the weights are
+#                    BF16 but the runtime should load them as FP8).
+#   default_model:   pointer into `models`. Single-run target — change this
+#                    one line and re-run to swap the model on all backends.
+#   backends:        launcher params (HTTP url, port, extra_args).
+#                    `variants` are additive flag sets used by sweeps and
+#                    by `--variant <name>` for one-off comparisons.
+#   sweeps:          named ordered lists of rounds. Run via `--sweep <name>`.
+#   aux:             placeholder blocks for tools wired up later.
+#
+# See docs/models.md for per-GPU pick rationale, docs/capacity.md for fit.
+
 display_name: "NVIDIA H200"
 arch: hopper
 vram_gb: 141
@@ -7,44 +23,192 @@ peak_bandwidth_tbps: 4.8
 nvlink: true
 pcie_gen: 5
 
-driver: "unknown"
+driver: "unknown"             # filled in by scripts/gpu_probe.sh
 cuda: "unknown"
 
-tensor_parallel: 1
+tensor_parallel: 1            # bump to 2 (or set via tp2 variant) on a 2× HGX H200
 
-frameworks:
+# ─── Models ────────────────────────────────────────────────────────────
+# H200 has 105 GB usable for weights (141 GB - ~25% KV/vision/framework).
+# BF16 is the accuracy baseline and only fits comfortably here; FP8 is the
+# production-style sweep. NVFP4 is *not* used on H200 (Hopper has no
+# native NVFP4 tensor cores — that's a Blackwell format).
+models:
+  qwen3-vl-32b-bf16:
+    hf_id: "Qwen/Qwen3-VL-32B-Instruct"
+    family: "qwen3-vl"
+    role: "vlm-headline"
+    quantization: "bf16"
+    notes: "BF16 baseline (accuracy reference); 141GB HBM3e for full ctx batch room. Cleanest read on bandwidth-bound performance."
+    # ~64GB BF16 weights leave ~60GB for KV — 32K is comfortable. Could
+    # bump to 65536+ if a long-context experiment needs it.
+    # `--no-enable-prefix-caching`: Qwen3-VL deepstack/chunked-prefill bug
+    # (see SMOKE_TESTS.md). Remove once upstream fixes.
+    backend_args:
+      vllm: ["--max-model-len=32768", "--no-enable-prefix-caching"]
+      sglang: ["--context-length=32768"]
+
+  qwen3-vl-32b-fp8:
+    hf_id: "Qwen/Qwen3-VL-32B-Instruct-FP8"
+    family: "qwen3-vl"
+    role: "vlm-fp8"
+    quantization: "fp8"
+    notes: "FP8 production-style sweep paired with the BF16 baseline."
+    backend_args:
+      vllm: ["--max-model-len=32768", "--no-enable-prefix-caching"]
+      sglang: ["--context-length=32768"]
+
+  qwen3-vl-30b-a3b-bf16:
+    hf_id: "Qwen/Qwen3-VL-30B-A3B-Instruct"
+    family: "qwen3-vl"
+    role: "vlm-moe"
+    quantization: "bf16"
+    notes: "MoE (30B total / 3B active); ~62GB BF16. HBM3e at 4.8 TB/s makes this the cleanest MoE-bandwidth read in the matrix."
+    backend_args:
+      vllm: ["--max-model-len=32768", "--no-enable-prefix-caching"]
+      sglang: ["--context-length=32768"]
+
+  qwen3.6-35b-a3b-fp8:
+    hf_id: "Qwen/Qwen3.6-35B-A3B-FP8"
+    family: "qwen3.6"
+    role: "dense-moe"
+    quantization: "fp8"
+    notes: "Aspirationally Hopper FP8 + MoE at high batch — a flagship TRT-LLM target. TRT-LLM 1.2.1 cannot load it yet — see comment below."
+    # Text-only — prefix caching stays on (vLLM default).
+    #
+    # ⚠ TRT-LLM 1.2.1 incompatibility: model_type `qwen3_5` (hybrid
+    # attention + Mamba/SSM) isn't registered in TRT-LLM's transformers
+    # build. Loading fails with `KeyError: 'qwen3_5'`. Sweeps below pin
+    # `backends: [vllm, sglang]`. See docs/findings/qwen3.6-on-trtllm.md (TBD).
+    backend_args:
+      vllm: ["--max-model-len=32768"]
+      sglang: ["--context-length=32768"]
+
+  qwen3.6-27b-fp8:
+    hf_id: "Qwen/Qwen3.6-27B-FP8"
+    family: "qwen3.6"
+    role: "dense-text"
+    quantization: "fp8"
+    notes: "Dense sanity probe paired with the 35B-A3B run. Same TRT-LLM 1.2.1 incompatibility as the 35B-A3B sibling — see comment below."
+    # Same `qwen3_5` arch + same TRT-LLM 1.2.1 gap as the 35B-A3B above.
+    # Sweeps pin `backends: [vllm, sglang]`.
+    backend_args:
+      vllm: ["--max-model-len=32768"]
+      sglang: ["--context-length=32768"]
+
+  nemotron-omni-bf16:
+    hf_id: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
+    family: "nemotron"
+    role: "nv-multimodal-moe"
+    quantization: "bf16"
+    notes: "NV multimodal MoE at BF16 — accuracy baseline; FP8 sweep secondary."
+    # Different multimodal arch from Qwen3-VL — prefix caching stays on.
+    # HF repo ships custom modeling code; vLLM and SGLang refuse to load
+    # without --trust-remote-code (HF default is off).
+    # First-run cold cache: BF16 weights are ~2x the FP8 variant, so download
+    # + load can be 15+ min. 30-min ceiling; warm cache reruns are fast.
+    ready_timeout_s: 1800
+    # ⚠ trtllm 1.2.1 incompatible: PyTorch backend doesn't register
+    # `NemotronH_Nano_Omni_Reasoning_V3` arch (GPU-independent — also fails
+    # on RTX PRO 6000 / RTX 5090). Sweeps below pin to [vllm, sglang].
+    backend_args:
+      vllm: ["--max-model-len=32768", "--trust-remote-code"]
+      sglang: ["--context-length=32768", "--trust-remote-code"]
+
+# Headline model for ad-hoc single runs. Sweeps below override this per round.
+default_model: qwen3-vl-32b-bf16
+
+# ─── Backends ──────────────────────────────────────────────────────────
+backends:
   vllm:
     base_url: "http://localhost:8000/v1"
-    enable_prefix_caching: true
-    enforce_eager: false
-    gpu_memory_utilization: 0.90
-    max_num_seqs: 128
+    port: 8000
+    # Backend-level args here are GPU-shape-only (memory ceiling +
+    # concurrency hint). Anything model-specific lives on
+    # `models.<id>.backend_args.vllm`:
+    #   --max-model-len     — per-model, since the cap depends on weight
+    #                         footprint vs. this GPU's 141 GB.
+    #   --no-enable-prefix-caching
+    #                       — per-model. vLLM default is ON. Qwen3-VL hits
+    #                         a deepstack/chunked-prefill bug; we disable
+    #                         on those models specifically. Other models
+    #                         (Qwen3.6 dense/MoE, Nemotron Omni) stay on.
+    extra_args:
+      - "--gpu-memory-utilization=0.90"
+      - "--max-num-seqs=128"
+    variants:
+      eager: ["--enforce-eager"]
+      chunked_off: ["--no-enable-chunked-prefill"]
+      tp2: ["--tensor-parallel-size=2"]   # opt-in; needs 2× HGX H200 with NVLink
+
   sglang:
     base_url: "http://localhost:30000/v1"
-    radix_cache: true  # on by default in SGLang 0.4+; no flag needed
-    structured_output: ebnf
+    port: 30000
+    extra_args: []
+    variants:
+      tp2: ["--tp-size=2"]
+
   trtllm:
-    engine_dir: "trt_engines/qwen3-vl-8b-h200-fp8"
-    paged_kv_cache: true
-    enable_block_reuse: true
-    cuda_graph: true
-    fp8: true
+    base_url: "http://localhost:8002/v1"
+    port: 8002
+    # `backend:` selects the trtllm-serve execution path. Allowed values:
+    #   pytorch     — PyTorch dispatch (HF weights direct; only path that
+    #                 supports day-0 multimodal models like Qwen3-VL / Nemotron).
+    #   trtllm      — AOT-compiled TRT engine (legacy; multimodal coverage
+    #                 limited). Maps to trtllm-serve `--backend tensorrt`.
+    #   _autodeploy — experimental; not for headline runs.
+    backend: pytorch
+    extra_args:
+      - "--extra_llm_api_options=/tmp/trtllm-vlm.yml"
+    variants: {}
+
+# ─── Sweeps ────────────────────────────────────────────────────────────
+sweeps:
+  # All six candidate models on all three backends. 6 × 3 = 18 runs.
+  models:
+    rounds:
+      - model: qwen3-vl-32b-bf16
+      - model: qwen3-vl-32b-fp8
+      - model: qwen3-vl-30b-a3b-bf16
+      - model: qwen3.6-35b-a3b-fp8
+        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
+      - model: qwen3.6-27b-fp8
+        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
+      - model: nemotron-omni-bf16
+        backends: [vllm, sglang]   # trtllm 1.2.1 rejects NemotronH arch (see model entry)
+
+  # vllm flag-knob comparison on the default model.
+  vllm_knobs:
+    backends: [vllm]
+    rounds:
+      - {}
+      - variant: eager
+      - variant: chunked_off
+
+  # TP=2 comparison (requires 2× H200 with NVLink). Default model only.
+  tp2:
+    rounds:
+      - {variant: tp2, backends: [vllm]}
+      - {variant: tp2, backends: [sglang]}
+
+  # Mixed matrix.
+  full:
+    rounds:
+      - {model: qwen3-vl-32b-bf16}
+      - {model: qwen3-vl-32b-bf16,    variant: eager,       backends: [vllm]}
+      - {model: qwen3-vl-32b-bf16,    variant: chunked_off, backends: [vllm]}
+      - {model: qwen3-vl-32b-fp8}
+      - {model: qwen3-vl-30b-a3b-bf16}
+      - {model: qwen3.6-35b-a3b-fp8,    backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
+      - {model: qwen3.6-27b-fp8,        backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
+      - {model: nemotron-omni-bf16,     backends: [vllm, sglang]}   # trtllm 1.2.1 rejects NemotronH arch (see model entry)
+
+# ─── Aux ───────────────────────────────────────────────────────────────
+# Placeholder blocks for tools wired up later. Not read by the runner today.
+aux:
   modelopt:
     quant: fp8
     calibration_samples: 1024
   triton:
     grpc_url: "localhost:8001"
     ensemble_name: "vlm_pipeline_ensemble"
-
-models:
-  - id: "qwen3-vl-4b"
-    quant: ["bf16", "fp8"]
-  - id: "qwen3-vl-8b"
-    quant: ["bf16", "fp8"]
-  - id: "qwen3-vl-32b"
-    quant: ["bf16", "fp8"]
-  - id: "qwen3-vl-30b-a3b"
-    quant: ["bf16", "fp8"]
-  - id: "qwen3-vl-235b-a22b"
-    quant: ["fp8"]
-    notes: "Reference run only; not in the consumer-baseline scope."

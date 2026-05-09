@@ -6,8 +6,7 @@ OpenAI-compatible adapter **plus** the model itself on actual game
 screens — not just gold stubs covered by the offline smoke tests.
 
 > Prerequisite: backends installed per
-> [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) Mode B (and engine
-> built for TRT-LLM).
+> [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) Mode B.
 
 ## What the tests assert
 
@@ -41,13 +40,19 @@ pytest tests/smoke/test_local_backends.py -v
 
 ## B.1 — vLLM (port 8000)
 
+The examples below load `Qwen3-VL-8B-Instruct-FP8` because it's the
+smallest model in the candidate set — fastest startup for a smoke check,
+and fits every GPU. For benchmark runs, use the per-GPU default
+(`scripts/run_all_scenarios.sh` reads it from yaml).
+
 **Shell 1 — server:**
 
 ```bash
 source .venv-vllm/bin/activate
-vllm serve Qwen/Qwen3-VL-8B-Instruct \
+# Do NOT add --enable-prefix-caching: it crashes Qwen3-VL with chunked
+# prefill on cache hits. See BENCHMARK_GUIDE.md troubleshooting.
+vllm serve Qwen/Qwen3-VL-8B-Instruct-FP8 \
   --port 8000 \
-  --enable-prefix-caching \
   --gpu-memory-utilization 0.90 \
   --max-num-seqs 32
 # Wait for: "Application startup complete."
@@ -63,7 +68,7 @@ pytest -m vllm tests/smoke/test_local_backends.py -v
 **Overrides:**
 
 ```bash
-VLLM_BASE_URL=http://localhost:9000/v1 VLLM_MODEL=Qwen/Qwen2-VL-7B-Instruct \
+VLLM_BASE_URL=http://localhost:9000/v1 VLLM_MODEL=Qwen/Qwen3-VL-8B-Instruct \
   pytest -m vllm tests/smoke/test_local_backends.py -v
 ```
 
@@ -77,7 +82,7 @@ loads more than one model.
 
 ```bash
 source .venv-sglang/bin/activate
-sglang serve --model-path Qwen/Qwen3-VL-8B-Instruct --port 30000
+sglang serve --model-path Qwen/Qwen3-VL-8B-Instruct-FP8 --port 30000
 # Wait for: "The server is fired up and ready to roll!"
 ```
 
@@ -105,11 +110,16 @@ The smoke test defaults to **port 8002** so it doesn't clash with vLLM
 ```bash
 source .venv-trtllm/bin/activate
 
-# Engine + tokenizer paths from INFERENCE_BACKENDS.md B.3.
-trtllm-serve trt_engines/qwen2-vl-7b-rtx_pro6000-bf16/llm \
-  --tokenizer ./hf_models/qwen2-vl-7b \
+# Disable kv-cache reuse (required for any multimodal model on TRT-LLM).
+cat > /tmp/trtllm-vlm.yml <<'EOF'
+kv_cache_config:
+  enable_block_reuse: false
+EOF
+
+trtllm-serve Qwen/Qwen3-VL-8B-Instruct-FP8 \
+  --backend pytorch \
   --port 8002 \
-  --backend pytorch
+  --extra_llm_api_options /tmp/trtllm-vlm.yml
 # Wait for: "Uvicorn running on http://0.0.0.0:8002"
 ```
 
@@ -120,7 +130,7 @@ source .venv-trtllm/bin/activate
 pytest -m trtllm tests/smoke/test_local_backends.py -v
 ```
 
-**Overrides:** `TRTLLM_BASE_URL`.
+**Overrides:** `TRTLLM_BASE_URL`, `TRTLLM_MODEL`.
 
 ## Run a single scenario interactively
 

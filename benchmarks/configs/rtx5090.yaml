@@ -1,4 +1,20 @@
 # RTX 5090 (consumer baseline)
+#
+# Schema (one GPU = one yaml):
+#   models:          one block per candidate model. Keys = stable ids.
+#                    `backend_args` is the rare per-backend launch flag a
+#                    model needs (e.g. runtime quant when the weights are
+#                    BF16 but the runtime should load them as FP8/NVFP4).
+#   default_model:   pointer into `models`. Single-run target — change this
+#                    one line and re-run to swap the model on all backends.
+#   backends:        launcher params (HTTP url, port, extra_args).
+#                    `variants` are additive flag sets used by sweeps and
+#                    by `--variant <name>` for one-off comparisons.
+#   sweeps:          named ordered lists of rounds. Run via `--sweep <name>`.
+#   aux:             placeholder blocks for tools wired up later.
+#
+# See docs/models.md for per-GPU pick rationale, docs/capacity.md for fit.
+
 display_name: "GeForce RTX 5090"
 arch: blackwell
 vram_gb: 32
@@ -7,42 +23,184 @@ peak_bandwidth_tbps: 1.79
 nvlink: false
 pcie_gen: 5
 
-# Filled in at run time by scripts/gpu_probe.sh.
-driver: "unknown"
+driver: "unknown"             # filled in by scripts/gpu_probe.sh
 cuda: "unknown"
 
-tensor_parallel: 1  # default. TP=2 is an experiment, not a default.
+tensor_parallel: 1            # 5090 has no NVLink — TP=2 is an experiment
 
-frameworks:
+# ─── Models ────────────────────────────────────────────────────────────
+# 5090 has 22 GB usable for weights (32 GB - ~30% KV/vision/framework).
+# FP8 is the production-style default; NVFP4 is needed for ≥30B models
+# because nothing else fits.
+models:
+  qwen3-vl-8b-fp8:
+    hf_id: "Qwen/Qwen3-VL-8B-Instruct-FP8"
+    family: "qwen3-vl"
+    role: "vlm-headline"
+    quantization: "fp8"
+    notes: "Only Qwen3-VL size that fits 32GB with KV/vision headroom."
+    # ~9GB weights leave ~16GB for KV at 0.9 util — 32K is comfortable.
+    # `--no-enable-prefix-caching`: Qwen3-VL deepstack/chunked-prefill bug
+    # (see SMOKE_TESTS.md). Remove once upstream fixes.
+    backend_args:
+      vllm: ["--max-model-len=32768", "--no-enable-prefix-caching"]
+      sglang: ["--context-length=32768"]
+
+  qwen3-vl-30b-a3b-nvfp4:
+    hf_id: "Qwen/Qwen3-VL-30B-A3B-Instruct"
+    family: "qwen3-vl"
+    role: "vlm-moe"
+    quantization: "nvfp4"
+    notes: "MoE squeezed into 32GB via Blackwell-native NVFP4 (~21GB at load). Tight — verify before relying on. FP8 (31GB) starves KV."
+    # NVFP4 weights ~21GB on a 32GB card → only ~5GB for KV. 8K cap is
+    # conservative to ensure startup; bump if KV headroom turns out to be
+    # larger than expected in practice.
+    backend_args:
+      vllm: ["--quantization=nvfp4", "--max-model-len=8192", "--no-enable-prefix-caching"]
+      sglang: ["--quantization=nvfp4", "--context-length=8192"]
+      trtllm: []   # quant configured via /tmp/trtllm-vlm.yml when wired up
+
+  qwen3.5-9b:
+    hf_id: "Qwen/Qwen3.5-9B"
+    family: "qwen3.5"
+    role: "dense-text"
+    quantization: "fp8"
+    notes: "Smallest dense Qwen3.x. Aspirationally a TRT-engine candidate, but TRT-LLM 1.2.1 cannot load it yet — see comment below."
+    # BF16 weights asked to load as FP8 at runtime (no `…-FP8` checkpoint
+    # ships upstream yet). Switch to direct FP8 load if Qwen ever publishes one.
+    # Text-only model — prefix caching stays on (vLLM default).
+    #
+    # ⚠ TRT-LLM 1.2.1 incompatibility: the checkpoint reports model_type
+    # `qwen3_5` (hybrid attention + Mamba/SSM). TRT-LLM's transformers
+    # build doesn't register that arch, so loading fails with
+    # `KeyError: 'qwen3_5'`. Sweeps below pin `backends: [vllm, sglang]`.
+    # See docs/findings/qwen3.6-on-trtllm.md (TBD).
+    backend_args:
+      vllm: ["--quantization=fp8", "--max-model-len=32768"]
+      sglang: ["--quantization=fp8", "--context-length=32768"]
+      trtllm: []
+
+  nemotron-omni-nvfp4:
+    hf_id: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+    family: "nemotron"
+    role: "nv-multimodal-moe"
+    quantization: "nvfp4"
+    notes: "NV-tuned multimodal MoE; NVFP4 is the only quant that fits 32GB. Calibrated NVFP4 checkpoint published by NVIDIA — no runtime quant needed."
+    # Same tight-KV math as the Qwen3-VL 30B-A3B-NVFP4 above. 8K cap.
+    # Different multimodal arch from Qwen3-VL — prefix caching stays on (vLLM default).
+    # HF repo ships custom modeling code; vLLM and SGLang refuse to load
+    # without --trust-remote-code (HF default is off).
+    # First-run cold cache: ~280s download + ~150s safetensors load + compile
+    # blew past the 600s default on FP8. NVFP4 weights are smaller but pad
+    # the budget anyway; warm cache reruns finish in ~120s.
+    ready_timeout_s: 1800
+    # --no-enable-flashinfer-autotune: see rtx_pro6000.yaml. RTX 5090 is also
+    # SM_120 (consumer Blackwell); same flashinfer cuBLASLt-baseline bug hits
+    # this GPU. Disabling autotune lets the SM_120 cutlass path run directly.
+    #
+    # ⚠ sglang incompatible on this GPU: fused-MoE triton kernel asks for
+    # 147 KB shared memory per SM but SM_120 only has ~100 KB; no tuning
+    # config exists for RTX 5090 either. (See rtx_pro6000.yaml for full
+    # diagnosis.)
+    #
+    # ⚠ trtllm 1.2.1 incompatible: PyTorch backend doesn't register
+    # `NemotronH_Nano_Omni_Reasoning_V3` arch — fails to init executor.
+    # GPU-independent gap; same class of issue as the qwen3_5 arch.
+    #
+    # Net effect: sweeps below pin nemotron-omni to [vllm] only here.
+    backend_args:
+      vllm: ["--max-model-len=8192", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
+      sglang: ["--context-length=8192", "--trust-remote-code"]
+
+# Headline model for ad-hoc single runs. Sweeps below override this per round.
+default_model: qwen3-vl-8b-fp8
+
+# ─── Backends ──────────────────────────────────────────────────────────
+backends:
   vllm:
     base_url: "http://localhost:8000/v1"
-    enable_prefix_caching: true
-    enforce_eager: false           # CUDA graph on
-    gpu_memory_utilization: 0.90
-    max_num_seqs: 32
+    port: 8000
+    # Backend-level args here are GPU-shape-only (memory ceiling +
+    # concurrency hint). Anything model-specific lives on
+    # `models.<id>.backend_args.vllm`:
+    #   --max-model-len     — per-model, since the cap depends on weight
+    #                         footprint vs. this GPU's 32 GB.
+    #   --no-enable-prefix-caching
+    #                       — per-model. vLLM default is ON. Qwen3-VL hits
+    #                         a deepstack/chunked-prefill bug; we disable
+    #                         on those models specifically. Other models
+    #                         (Nemotron Omni, Qwen3.5-9B) stay on default.
+    #   --quantization      — per-model runtime override (used here for
+    #                         Qwen3.5-9B BF16 → FP8 since no FP8 checkpoint
+    #                         ships upstream yet).
+    extra_args:
+      - "--gpu-memory-utilization=0.90"
+      - "--max-num-seqs=32"
+    variants:
+      eager: ["--enforce-eager"]
+      chunked_off: ["--no-enable-chunked-prefill"]
+
   sglang:
     base_url: "http://localhost:30000/v1"
-    radix_cache: true  # on by default in SGLang 0.4+; no flag needed
-    structured_output: ebnf        # JSON-schema | regex | ebnf
+    port: 30000
+    extra_args: []
+    variants: {}
+
   trtllm:
-    engine_dir: "trt_engines/qwen3-vl-8b-rtx5090-fp8"
-    paged_kv_cache: true
-    enable_block_reuse: true
-    cuda_graph: true
-    fp8: true
+    base_url: "http://localhost:8002/v1"
+    port: 8002
+    # `backend:` selects the trtllm-serve execution path. Allowed values:
+    #   pytorch     — PyTorch dispatch (HF weights direct; only path that
+    #                 supports day-0 multimodal models like Qwen3-VL / Nemotron).
+    #   trtllm      — AOT-compiled TRT engine (legacy; multimodal coverage
+    #                 limited). Maps to trtllm-serve `--backend tensorrt`.
+    #   _autodeploy — experimental; not for headline runs.
+    backend: pytorch
+    extra_args:
+      - "--extra_llm_api_options=/tmp/trtllm-vlm.yml"
+    variants: {}
+
+# ─── Sweeps ────────────────────────────────────────────────────────────
+# A sweep is a named ordered list of rounds. Each round can set:
+#   model:    id from `models:` (defaults to `default_model`)
+#   variant:  variant name from `backends.<backend>.variants` (defaults to none)
+# Optional `backends:` field on the sweep limits which backends each round
+# runs on; default is all three.
+sweeps:
+  # All four candidate models on all three backends. 4 × 3 = 12 runs.
+  models:
+    rounds:
+      - model: qwen3-vl-8b-fp8
+      - model: qwen3-vl-30b-a3b-nvfp4
+      - model: qwen3.5-9b
+        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
+      - model: nemotron-omni-nvfp4
+        backends: [vllm]   # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
+
+  # vllm flag-knob comparison on the default model. 3 vllm runs.
+  vllm_knobs:
+    backends: [vllm]
+    rounds:
+      - {}
+      - variant: eager
+      - variant: chunked_off
+
+  # Mixed matrix.
+  full:
+    rounds:
+      - {model: qwen3-vl-8b-fp8}
+      - {model: qwen3-vl-8b-fp8,         variant: eager,       backends: [vllm]}
+      - {model: qwen3-vl-8b-fp8,         variant: chunked_off, backends: [vllm]}
+      - {model: qwen3-vl-30b-a3b-nvfp4}
+      - {model: qwen3.5-9b,             backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
+      - {model: nemotron-omni-nvfp4,    backends: [vllm]}            # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
+
+# ─── Aux ───────────────────────────────────────────────────────────────
+# Placeholder blocks for tools wired up later. Not read by the runner today.
+aux:
   modelopt:
-    quant: fp8
-    calibration_samples: 512
+    quant: nvfp4
+    calibration_samples: 256
   triton:
     grpc_url: "localhost:8001"
     ensemble_name: "vlm_pipeline_ensemble"
-
-models:
-  - id: "qwen3-vl-4b"
-    quant: ["bf16", "fp8"]
-  - id: "qwen3-vl-8b"
-    quant: ["bf16", "fp8"]
-  # 30B-A3B may not fit comfortably on a single 5090; flag for FP8-only.
-  - id: "qwen3-vl-30b-a3b"
-    quant: ["fp8"]
-    notes: "MoE — 32GB tight; verify before adding to the run."

@@ -12,7 +12,6 @@ validate.
 from __future__ import annotations
 
 import base64
-import json
 import time
 
 from vlm_pipeline.config import NimConfig
@@ -119,9 +118,6 @@ class NimQwenVlReasoner:
             end = raw.rfind("}")
             if start != -1 and end != -1:
                 raw = raw[start : end + 1]
-        # Validate it's at least JSON-shaped before returning. The decoder
-        # does the strict typed parse.
-        json.loads(raw)
 
         meta = ModelMeta(framework="nim", model_id=self._cfg.model)
         return raw, meta, ttft_ms

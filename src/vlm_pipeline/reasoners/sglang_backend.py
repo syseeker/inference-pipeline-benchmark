@@ -83,26 +83,40 @@ class SglangReasoner:
         t_start = time.perf_counter()
         ttft_ms: float | None = None
         chunks: list[str] = []
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
 
         stream = self._client.chat.completions.create(
             model=self._model,
             messages=messages,
             stream=True,
+            stream_options={"include_usage": True},
             timeout=max(deadline_ms / 1000.0, 120.0),
             response_format={"type": "json_object"},
         )
         for chunk in stream:
-            delta = chunk.choices[0].delta.content if chunk.choices else None
-            if delta:
-                if ttft_ms is None:
-                    ttft_ms = (time.perf_counter() - t_start) * 1000.0
-                chunks.append(delta)
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content if chunk.choices[0].delta else None
+                if delta:
+                    if ttft_ms is None:
+                        ttft_ms = (time.perf_counter() - t_start) * 1000.0
+                    chunks.append(delta)
+            if getattr(chunk, "usage", None) is not None:
+                prompt_tokens = chunk.usage.prompt_tokens
+                completion_tokens = chunk.usage.completion_tokens
 
         raw = "".join(chunks).strip()
         if not raw.startswith("{"):
             start, end = raw.find("{"), raw.rfind("}")
             if start != -1 and end != -1:
                 raw = raw[start : end + 1]
-        json.loads(raw)
 
-        return raw, ModelMeta(framework="sglang", model_id=self._model), ttft_ms
+        meta = ModelMeta(
+            framework="sglang",
+            model_id=self._model,
+            extras={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+        )
+        return raw, meta, ttft_ms

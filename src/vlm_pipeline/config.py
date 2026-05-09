@@ -40,9 +40,11 @@ class SglangConfig:
 
 @dataclass
 class TrtLlmConfig:
+    """TRT-LLM PyTorch backend via `trtllm-serve` over HTTP (OpenAI-compatible).
+    Same client surface as vLLM/SGLang."""
+
     base_url: str = "http://localhost:8002/v1"
-    engine_dir: str = "trt_engines/qwen3-vl-8b"
-    tokenizer_dir: str = "Qwen/Qwen3-VL-8B-Instruct"
+    model: str = "Qwen/Qwen3-VL-8B-Instruct-FP8"
 
 
 @dataclass
@@ -78,6 +80,7 @@ class PipelineConfig:
         cfg.sglang.base_url = os.getenv("SGLANG_BASE_URL", cfg.sglang.base_url)
         cfg.sglang.model = os.getenv("SGLANG_MODEL", cfg.sglang.model)
         cfg.trtllm.base_url = os.getenv("TRTLLM_BASE_URL", cfg.trtllm.base_url)
+        cfg.trtllm.model = os.getenv("TRTLLM_MODEL", cfg.trtllm.model)
         cfg.triton.grpc_url = os.getenv("TRITON_GRPC_URL", cfg.triton.grpc_url)
         if backend := os.getenv("PIPELINE_BACKEND"):
             cfg.backend = backend

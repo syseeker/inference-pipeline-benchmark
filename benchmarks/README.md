@@ -1,46 +1,37 @@
 # benchmarks/
 
-Framework adapters + a runner. Adapters are scaffolded; loops are
-intentionally `NotImplementedError` so reviewers can audit the shape
-before any heavy bring-up.
+Scenario-driven benchmark harness. `runner.py` drives the real
+`vlm_pipeline.Pipeline` over every scenario under `tests/smoke/scenarios/`
+through one backend at a time and writes a `BenchmarkResult` plus
+per-scenario JSON rows. `summary.py` rolls them up into `summary.md`.
 
 ## Layout
 
 ```
 benchmarks/
-├── runner.py                  # CLI: pick framework + gpu + model, run, write results
-├── metrics.py                 # BenchmarkResult, percentile helpers, validity scoring
-├── frameworks/
-│   ├── base.py                # BenchmarkAdapter protocol + shared timing helpers
-│   ├── vllm_bench.py
-│   ├── sglang_bench.py
-│   ├── trtllm_bench.py
-│   ├── modelopt_bench.py
-│   └── triton_bench.py
+├── runner.py             # CLI: --backend {vllm|sglang|trtllm} --gpu <profile>
+├── summary.py            # CLI: --gpu <profile>  → summary.md
+├── metrics.py            # BenchmarkResult, LatencySamples, percentile helpers
+├── scenario_config.py    # YAML dotted-path resolver used by run_all_scenarios.sh
 ├── configs/
 │   ├── rtx5090.yaml
 │   ├── rtx_pro6000.yaml
 │   └── h200.yaml
-└── results/                   # per-GPU, per-run outputs (raw is gitignored)
+└── results/              # per-GPU, per-run outputs
 ```
 
-## How to add a new framework
-
-1. Add a module under `frameworks/` that implements `BenchmarkAdapter`.
-2. Make sure `setup()` records framework version + relevant knobs into the
-   `BenchmarkResult.framework_knobs` field.
-3. Wire the new name into `runner.py`'s adapter table.
-4. Add framework-specific tunables (engine paths, prefix-cache size, etc.)
-   into the `configs/<gpu>.yaml` files where they matter.
+The per-backend "adapter" lives in `src/vlm_pipeline/reasoners/*` — the
+same layer the production pipeline uses. Adding a backend means adding a
+reasoner there and a `backends.<name>` block in the GPU YAMLs, then
+wiring the name into `runner._make_reasoner`.
 
 ## Decision metrics, not tokens/sec
 
-See [../docs/metrics.md](../docs/metrics.md). The runner computes:
+See [../docs/metrics.md](../docs/metrics.md). `BenchmarkResult` carries:
 
-- valid command-sequence latency (e2e)
+- valid command-sequence latency (e2e p50 / p95 / p99)
 - command success rate (executor accepted)
 - safety / grammar validity rate
-- p95 / p99 stability
 
-Diagnostics (TTFT, ITL, mem-bw, KV-cache hit rate, CUDA-graph delta) are
-recorded for explanation, not for pass/fail.
+Diagnostics (TTFT, ITL, vision-encoder latency, KV-cache hit rate,
+CUDA-graph delta) are recorded for explanation, not pass/fail.

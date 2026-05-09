@@ -11,10 +11,10 @@ winner.
 - Already familiar to the customer.
 - Strong story: PagedAttention, continuous batching, prefix caching, CUDA
   graphs, multiple quant formats, streaming, structured outputs, and
-  multimodal models including Qwen-VL / LLaVA / Pixtral.
-- Adapter: `benchmarks/frameworks/vllm_bench.py`.
+  multimodal models including Qwen3-VL / Nemotron-Omni / LLaVA / Pixtral.
 - Reasoner: `src/vlm_pipeline/reasoners/vllm_backend.py` (talks to a vLLM
-  OpenAI-compatible server via `VLLM_BASE_URL`).
+  OpenAI-compatible server via `VLLM_BASE_URL`). Driven by
+  `benchmarks/runner.py`.
 
 ### SGLang — low-latency challenger
 
@@ -23,24 +23,36 @@ winner.
   agentic loops where most of the prompt repeats every turn.
 - **Structured output** (JSON schema, regex, EBNF) is directly useful for
   the action-decoder stage — we want strict grammar on the command list.
-- Adapter: `benchmarks/frameworks/sglang_bench.py`.
-- Reasoner: `src/vlm_pipeline/reasoners/sglang_backend.py`.
+- Reasoner: `src/vlm_pipeline/reasoners/sglang_backend.py`. Driven by
+  `benchmarks/runner.py`.
 
-### TensorRT-LLM — TRT engine-compiled path
+### TensorRT-LLM — PyTorch backend via `trtllm-serve`
 
-- The NVIDIA path: optimised engines, FP8 / INT8, KV-cache reuse, CUDA
-  graphs, paged attention, multi-GPU paths, in-flight batching.
-- Build is heavier (engine compilation per (model, GPU, batch shape)).
-- Adapter: `benchmarks/frameworks/trtllm_bench.py`.
-- Reasoner: `src/vlm_pipeline/reasoners/trtllm_backend.py`.
+TRT-LLM's PyTorch backend loads HF weights directly and runs through
+TRT-LLM's PyTorch dispatch with custom CUDA kernels, paged KV cache,
+inflight batching, and CUDA graphs — same runtime infrastructure as the
+AOT-compiled engine path, just without the build step. Model coverage
+tracks upstream day-by-day (`@register_auto_model` in
+`tensorrt_llm/_torch/models/`), which is why this is the path that
+serves the headline picks (Qwen3-VL, Qwen3.5/3.6, Nemotron-3-Nano-Omni).
+
+Served via `trtllm-serve <hf_id> --backend pytorch` over HTTP — same
+OpenAI-compatible chat-completions surface as vLLM and SGLang.
+
+Multimodal models require `kv_cache_config.enable_block_reuse: false`
+(TRT-LLM limitation).
+
+Reasoner: `src/vlm_pipeline/reasoners/trtllm_backend.py`. Driven by
+`benchmarks/runner.py`.
 
 ### ModelOpt — quantisation / compression layer
 
 - Produces FP8 / INT8 / W8A8 calibrated checkpoints, plus pruning,
   distillation, speculative decoding, sparsity.
 - Feeds **into** TensorRT-LLM (and where compatible, vLLM/SGLang).
-- Adapter: `benchmarks/frameworks/modelopt_bench.py` runs the calibration
-  → quant accuracy delta workflow and emits a small report.
+- Not a serving framework — it produces calibrated checkpoints that the
+  TRT-LLM reasoner then consumes. The `quant_accuracy_delta` field on
+  `BenchmarkResult` is where its output surfaces.
 
 ### TensorRT + Triton — end-to-end serving composition
 
@@ -48,13 +60,14 @@ winner.
 - TensorRT-LLM for the LLM/VLM decoder.
 - Triton **ensembles** glue them into a single dataflow with no extra
   client-side hops between vision and language.
-- Adapter: `benchmarks/frameworks/triton_bench.py` exercises the ensemble
-  end-to-end.
+- Future work — no reasoner exists yet. When wired, it will plug in as
+  another `vlm_pipeline/reasoners/*_backend.py` that calls the ensemble
+  via tritonclient gRPC.
 
-## What each adapter must report
+## What every run reports
 
-Every framework adapter implements `BenchmarkAdapter` and emits a
-`BenchmarkResult` (see `benchmarks/metrics.py`):
+Every run emits a `BenchmarkResult` (see `benchmarks/metrics.py`)
+written by `benchmarks/runner.py`:
 
 - TTFT, ITL, end-to-end, vision-encoder latency (p50/p95/p99)
 - Throughput (sequences/sec, tokens/sec — diagnostic only)

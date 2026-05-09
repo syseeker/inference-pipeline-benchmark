@@ -1,9 +1,10 @@
 # GPU strategy
 
-> **Sizing reference:** for the per-GPU "what Qwen3-VL checkpoint fits"
-> table (BF16 / FP8 / W8A8 / INT4) and the multi-GPU capacity matrix
-> with NVLink-vs-PCIe applicability notes, see
-> [capacity.md](capacity.md).
+> **Sizing reference:** for the per-GPU memory math across the headline
+> checkpoints (Qwen3-VL, Qwen3.5/3.6, Nemotron-3-Nano-Omni) at BF16 /
+> FP8 / NVFP4 and the multi-GPU capacity matrix with NVLink-vs-PCIe
+> applicability notes, see [capacity.md](capacity.md). For the model
+> catalogue and per-GPU pick rationale, see [models.md](models.md).
 
 
 ## Thesis
@@ -30,8 +31,8 @@ NVIDIA datasheet at run time and bake into the per-GPU yaml under
 
 ## Owners
 
-- This user (`boonpingl@nvidia.com`): RTX PRO 6000 + H200 runs.
-- Peer at customer / partner: RTX 5090 runs.
+- NVIDIA: RTX PRO 6000 + H200 runs.
+- Peer at customer / partner: RTX 5090 + RTX PRO 6000 runs.
 - Each side publishes raw + summarised results into
   `benchmarks/results/<gpu>/<run-id>/` and the summary table here.
 

@@ -5,7 +5,8 @@
 
 `load_all()` returns every scenario in lexical order — the parametrised
 smoke test uses this so adding a new scenario directory is enough to
-put it under coverage.
+put it under coverage. Pass `scenarios_dir=` to load from somewhere
+other than the bundled `tests/smoke/scenarios/`.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest
 from vlm_pipeline.pipeline import PipelineRequest
 
-_SCENARIOS_DIR = Path(__file__).parent
+DEFAULT_SCENARIOS_DIR = Path(__file__).parent
 
 
 @dataclass
@@ -39,8 +40,9 @@ class LoadedScenario:
         )
 
 
-def load_scenario(name: str) -> LoadedScenario:
-    sc_dir = _SCENARIOS_DIR / name
+def load_scenario(name: str, scenarios_dir: Path | None = None) -> LoadedScenario:
+    root = Path(scenarios_dir) if scenarios_dir is not None else DEFAULT_SCENARIOS_DIR
+    sc_dir = root / name
     if not sc_dir.is_dir():
         raise FileNotFoundError(f"scenario not found: {sc_dir}")
     spec = ScenarioRequest.model_validate_json((sc_dir / "request.json").read_text())
@@ -55,13 +57,16 @@ def load_scenario(name: str) -> LoadedScenario:
     )
 
 
-def list_scenarios() -> list[str]:
+def list_scenarios(scenarios_dir: Path | None = None) -> list[str]:
+    root = Path(scenarios_dir) if scenarios_dir is not None else DEFAULT_SCENARIOS_DIR
+    if not root.is_dir():
+        raise FileNotFoundError(f"scenarios dir not found: {root}")
     return sorted(
         p.name
-        for p in _SCENARIOS_DIR.iterdir()
+        for p in root.iterdir()
         if p.is_dir() and not p.name.startswith("__") and (p / "request.json").exists()
     )
 
 
-def load_all() -> list[LoadedScenario]:
-    return [load_scenario(name) for name in list_scenarios()]
+def load_all(scenarios_dir: Path | None = None) -> list[LoadedScenario]:
+    return [load_scenario(name, scenarios_dir) for name in list_scenarios(scenarios_dir)]

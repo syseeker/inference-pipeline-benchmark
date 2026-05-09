@@ -1,128 +1,212 @@
 # qwenvl-inference-pipeline-benchmark
 
-Real-time multimodal **VLM-to-action** inference pipeline + benchmark harness.
+A benchmark harness for **VLM-to-action** inference pipelines on NVIDIA
+GPUs. Bring your visual scenarios + a target GPU, get apples-to-apples
+numbers across **vLLM**, **SGLang**, and **TensorRT-LLM** with one
+command.
 
-> **Pipeline goal.** Visual input + short context history + high-level user
-> instruction → a short, validated, low-level control-command sequence ready
-> for interactive execution.
+> **Pipeline**: image + short context history + high-level instruction
+> → schema-validated low-level command sequence (move / click / keypress
+> / say). Pipeline scaffolding lives in [src/vlm_pipeline/](src/vlm_pipeline/);
+> the encoder/executor are passthrough today, the reasoner is the stage
+> wired to vLLM/SGLang/TRT-LLM.
 
-This repo is the **POC + benchmark scaffolding** for a customer-facing study
-NVIDIA is running. It establishes:
+---
 
-1. A pluggable inference pipeline whose first stage is a NIM-hosted Qwen3-VL
-   reasoner, and whose later stages (CV encoder, action decoder, safety
-   validator, executor) are scaffolded as placeholders today and will be
-   filled in as the architecture lands.
-2. A framework-agnostic benchmark harness with placeholders for **vLLM**,
-   **SGLang**, **TensorRT-LLM**, **ModelOpt**, and **TensorRT + Triton**.
-3. GPU-specific configs for **RTX 5090**, **RTX PRO 6000 Blackwell**, and
-   **H200**, so single-GPU baselines can be compared before any
-   tensor-parallel experiments.
-4. Decision metrics that go **beyond tokens/sec** — valid command-sequence
-   latency, command success rate, safety/grammar validity, p95/p99 stability.
+## How to run a benchmark — five steps
 
-## Architecture (target)
+If you're a new user reading this for the first time, follow these in
+order. Each step links to the doc with the full detail.
 
-```
-   ┌────────────┐    ┌───────────────┐    ┌────────────────┐    ┌────────────┐    ┌──────────┐
-   │  CV /      │ →  │  Compact VLM  │ →  │  Constrained   │ →  │ Safety /   │ →  │ Executor │
-   │  visual    │    │  reasoning    │    │  action-cmd    │    │ command    │    │          │
-   │  encoder   │    │  model        │    │  decoder       │    │ validator  │    │          │
-   └────────────┘    └───────────────┘    └────────────────┘    └────────────┘    └──────────┘
-        ↑                  ↑                      ↑                    ↑
-        │                  │                      │                    │
-       (TRT)           (NIM Qwen3-VL,         (grammar /            (rules + LLM
-                        vLLM, SGLang,          JSON-schema-          guardrail)
-                        TRT-LLM)               constrained)
-```
+### 1. Pick a GPU profile and a model
 
-Today the CV encoder is a passthrough; the VLM reasoner is the first thing
-wired up. See [docs/architecture.md](docs/architecture.md).
+The benchmark ships with three GPU profiles — `rtx5090`, `rtx_pro6000`,
+`h200` — each with a curated list of candidate models that fit. Skim
+[docs/models.md](docs/models.md) to see the picks per GPU and
+[docs/capacity.md](docs/capacity.md) for the memory math.
 
-## Repo layout
+The defaults are sensible (`rtx_pro6000` → `Qwen3-VL-32B-Instruct-FP8`).
+You only need this step if you want to change the model.
 
-```
-.
-├── docs/                       # architecture, model list, GPU plan, frameworks, metrics
-├── src/vlm_pipeline/           # pipeline stages (encoder/reasoner/decoder/validator/executor)
-├── benchmarks/                 # framework-specific benchmark adapters + metrics + GPU configs
-├── tests/smoke/                # smoke-test placeholders (golden-path only)
-├── examples/                   # minimal end-to-end example scripts
-└── scripts/                    # one-shot shell helpers (install, env probes, etc.)
-```
+### 2. Set up the inference server venv
 
-## Quickstart
-
-See **[INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md)** for the full setup. TL;DR — three
-modes, picked by what you want to measure:
-
-- **Mode A — pipeline smoke (no GPU).** NIM cloud or stub backend; runs
-  the scenarios + unit tests on a laptop. Tells you nothing about
-  performance.
-- **Mode B — framework benchmark (local GPU required).** Bring up vLLM /
-  SGLang / TRT-LLM on the target GPU, run the
-  [live smoke tests](SMOKE_TESTS.md) to confirm the backend is sane,
-  then `benchmarks.runner` for the real numbers.
-- **Mode C — production rehearsal (local NIM container).** NIM container
-  on the target GPU, benchmarked against the open frameworks.
+One venv per backend, isolated to avoid dependency clashes. See
+[INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) for the install commands.
 
 ```bash
-# Mode A — three commands and you're running
-pip install -e ".[dev,nim]"
-pytest -m "not nim" -q
-python -m examples.run_scenario 01_clash_of_clans_start_attack
+# vLLM
+python3 -m venv .venv-vllm && source .venv-vllm/bin/activate
+pip install -e ".[vllm,dev]" && deactivate
+
+# SGLang
+python3 -m venv .venv-sglang && source .venv-sglang/bin/activate
+pip install -e ".[sglang,dev]" && deactivate
+
+# TRT-LLM (NVIDIA's wheel index — only needed if you want the trtllm leg)
+python3 -m venv .venv-trtllm && source .venv-trtllm/bin/activate
+pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com
+pip install -e ".[dev]" && deactivate
 ```
 
-(Most benchmark adapters are placeholders today — see the
-[benchmarks README](benchmarks/README.md) for what is implemented vs. stubbed.)
+### 3. Smoke-test that one server actually works
 
-## Models
+Before running the full benchmark, bring up one backend and confirm a
+single scenario goes through end-to-end. See
+[SMOKE_TESTS.md](SMOKE_TESTS.md) for the per-backend launch command and
+the smoke-test pytest invocation.
 
-Starting model is **Qwen3-VL** (4B/8B for the small targets, larger MoE
-variants as a reference). Full curated list in [docs/models.md](docs/models.md).
+```bash
+# Shell A: start a server
+source .venv-vllm/bin/activate
+vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 --port 8000
 
-## GPU plan
+# Shell B: run one scenario through it
+source .venv-vllm/bin/activate
+python -m examples.run_scenario 01_clash_of_clans_start_attack --backend vllm
+```
 
-| Stage | GPU | Why |
-| --- | --- | --- |
-| Consumer-target baseline | 1× RTX 5090 | What the customer ships against; 32 GB GDDR7, no NVLink |
-| Server POC | 1× RTX PRO 6000 Blackwell | 96 GB GDDR7, MIG, server workflow |
-| Bandwidth ceiling | 1× H200 | 141 GB HBM3e @ 4.8 TB/s — clean memory-bw benchmark |
+If that prints actual-vs-gold action sequences with non-zero latency,
+your stack is wired correctly.
 
-Tensor parallelism on consumer cards is **an experiment, not the default**.
-See [docs/gpu-strategy.md](docs/gpu-strategy.md) for the staged proposal
-and [docs/capacity.md](docs/capacity.md) for which Qwen3-VL checkpoint
-fits which GPU at BF16 / FP8 / W8A8 / INT4, plus a multi-GPU matrix.
+### 4. Run the benchmark
 
-## Frameworks
+The orchestrator script starts each backend's server, runs every
+scenario through the real `Pipeline`, writes per-scenario + aggregate
+JSON, and regenerates the per-GPU `summary.md`. Full operational detail
+in [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+
+```bash
+# Default model on all three backends (rtx_pro6000)
+scripts/run_all_scenarios.sh
+
+# A different GPU profile
+scripts/run_all_scenarios.sh --gpu h200
+
+# A different model (must be defined in the GPU yaml's `models:` block)
+scripts/run_all_scenarios.sh --model qwen3.6-27b-fp8
+
+# A backend-flag A/B comparison (vllm-only knobs in this case)
+scripts/run_all_scenarios.sh --backends vllm --variants "baseline eager"
+
+# Auto-run every model in the yaml, on every backend
+scripts/run_all_scenarios.sh --sweep models
+```
+
+Outputs land under `benchmarks/results/<gpu>/`:
+- `summary.md` — per-GPU aggregated table (regenerated each run)
+- `<backend>-<model>-<run_id>.json` — one aggregate `BenchmarkResult` per round
+- `<backend>/<scenario>__<run_id>.json` — per-scenario detail
+
+### 5. Run with your own scenarios
+
+Every scenario is a directory with three files — point the runner at a
+folder of them and it iterates. The format is documented in
+[tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md):
+
+```
+my_scenarios/
+├── 01_my_scene/
+│   ├── request.json     # ScenarioRequest: instruction, context_history, image_path, deadline_ms
+│   ├── screen.png       # the image referenced by request.json (PNG or JPEG)
+│   └── expected.json    # ScenarioExpected: gold ActionSequence + ValidationReport
+├── 02_another_scene/
+│   └── ...
+```
+
+Then:
+
+```bash
+scripts/run_all_scenarios.sh --scenarios-dir /path/to/my_scenarios
+```
+
+The Pydantic models for both files are in
+[tests/smoke/scenarios/schema.py](tests/smoke/scenarios/schema.py).
+Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios/)
+— copy one as a template.
+
+---
+
+## Doc map
+
+| File | What's in it |
+| --- | --- |
+| **README.md** | This file — the journey above, project overview below |
+| [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) | Install vLLM / SGLang / TRT-LLM venvs, three operational modes (NIM cloud, local server, NIM container) |
+| [SMOKE_TESTS.md](SMOKE_TESTS.md) | Per-backend "is the server alive" check before benchmarking |
+| [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) | Full benchmark operational reference: yaml schema, sweep design, output structure, troubleshooting |
+| [docs/models.md](docs/models.md) | Per-GPU model picks (Qwen3-VL, Qwen3.5/3.6, Nemotron-3-Nano-Omni) and the rationale |
+| [docs/capacity.md](docs/capacity.md) | Memory math — which checkpoint fits which GPU at BF16 / FP8 / NVFP4 |
+| [docs/metrics.md](docs/metrics.md) | What each metric means and why it's tracked (decision metrics vs diagnostics) |
+| [docs/frameworks.md](docs/frameworks.md) | Per-framework one-pager (vLLM, SGLang, TRT-LLM PyTorch backend, ModelOpt, Triton) |
+| [docs/gpu-strategy.md](docs/gpu-strategy.md) | When to do tensor parallelism vs replicas; PCIe-vs-NVLink considerations |
+| [docs/architecture.md](docs/architecture.md) | Pipeline shape (today: VLM-only; v1+: split CV ↔ VLM ↔ decoder ↔ validator) |
+| [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
+
+---
+
+## What you're benchmarking
+
+Three families per GPU so the cross-backend comparison covers a VLM
+headline, a dense-text TRT-engine win-case, and an NV-tuned multimodal
+MoE:
+
+- **Qwen3-VL** (`Qwen/Qwen3-VL-*-Instruct[-FP8]`) — headline VLM.
+- **Qwen3.5 / Qwen3.6** (`Qwen/Qwen3.5-9B`, `Qwen/Qwen3.6-27B-FP8`,
+  `Qwen/Qwen3.6-35B-A3B-FP8`) — dense text, TRT-LLM trt-engine candidate.
+- **Nemotron-3-Nano-Omni** (`nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16`)
+  — NV multimodal MoE (NVFP4 on 5090, FP8 on PRO 6000, BF16 on H200).
+
+| GPU | VRAM | Default model | Why |
+| --- | --- | --- | --- |
+| RTX 5090 | 32 GB GDDR7 | `qwen3-vl-8b-fp8` | Customer-relevant device; 8B-FP8 is the only Qwen3-VL size that fits with KV headroom |
+| RTX PRO 6000 | 96 GB GDDR7 | `qwen3-vl-32b-fp8` | Server workflow; 32B-FP8 leaves comfortable KV room |
+| H200 | 141 GB HBM3e | `qwen3-vl-32b-bf16` | Bandwidth ceiling; HBM3e at 4.8 TB/s + BF16 = cleanest accuracy baseline |
+
+Tensor parallelism on consumer cards is **an experiment, not the
+default**. See [docs/gpu-strategy.md](docs/gpu-strategy.md) for the
+staged proposal.
+
+---
+
+## What the harness reports
+
+Tokens/sec is **not** the decision metric. The pipeline succeeds when:
+
+- **Valid command-sequence latency** — time from image+instruction in
+  to a schema-valid command list out — meets the interactive budget.
+- **Command success rate** — fraction of generated sequences the
+  executor accepts and that achieve the intended outcome.
+- **Safety / grammar validity** — fraction passing the validator on
+  first try.
+- **p95 / p99 stability** — tail latency under realistic concurrency.
+
+Token-level metrics (TTFT, ITL, vision-encoder latency, mem-bw util,
+KV-cache hit rate, CUDA-graph delta, quant accuracy loss, TP efficiency)
+are tracked as **diagnostics**. See [docs/metrics.md](docs/metrics.md)
+for the full list and per-field definitions.
+
+---
+
+## Frameworks under test
 
 | Framework | Role |
 | --- | --- |
 | vLLM | Baseline (already familiar to the customer) |
 | SGLang | Low-latency challenger; RadixAttention + structured output |
-| TensorRT-LLM | TRT engine-compiled path on NVIDIA GPUs |
-| ModelOpt | FP8 / INT8 / W8A8 quant + calibration |
-| TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving |
+| TensorRT-LLM | PyTorch backend via `trtllm-serve` (HTTP, OpenAI-shape — mirrors vLLM/SGLang) |
+| ModelOpt | FP8 / NVFP4 / W8A8 quant + calibration (placeholder; not wired yet) |
+| TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving (placeholder) |
 
 See [docs/frameworks.md](docs/frameworks.md).
 
-## Success metrics
-
-Tokens/sec is **not** the decision metric. The pipeline succeeds when:
-
-- **Valid command-sequence latency** — time from image+instruction in to a
-  schema-valid command list out — meets the interactive budget.
-- **Command success rate** — fraction of generated sequences the executor
-  accepts and that achieve the intended outcome.
-- **Safety / grammar validity** — fraction passing the validator on first try.
-- **p95 / p99 stability** — tail latency under realistic concurrency.
-
-Token-level metrics (TTFT, ITL, vision-encoder latency, mem-bw util,
-KV-cache hit rate, CUDA-graph delta, quant accuracy loss, 2× TP efficiency)
-are tracked as **diagnostics**. See [docs/metrics.md](docs/metrics.md).
+---
 
 ## Status
 
-This commit lays out the scaffolding only. Backends, benchmark loops, and
-validators are intentionally stubs that raise `NotImplementedError` so the
-shape of the project is reviewable before any heavy implementation lands.
+The pipeline (encoder → reasoner → decoder → validator → executor),
+all four reasoner backends (NIM, vLLM, SGLang, TRT-LLM HTTP), the
+scenario benchmark runner, the orchestrator script, metrics, and the
+summary writer all run today. The vision encoder is currently a
+passthrough and the executor is dry-run. The TRT-LLM reasoner targets
+`trtllm-serve --backend pytorch` — see
+[INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md).
