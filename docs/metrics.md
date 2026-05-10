@@ -43,7 +43,7 @@ saturation, TTFT-vs-decode share, and section-4 status — each
 emitted only when the data warrants it. Caps at 10 bullets.
 
 The **Why** / **How to improve** fields on underperformer bullets are
-filled from `docs/findings_knowledge.yaml` when a
+filled from `docs/findings/knowledge.yaml` when a
 `(gpu, framework, model[/variant], symptom)` match exists. Unmatched
 items show `[TBD]` for an operator pass. **No LLM is required** to
 populate or read the knowledge file — anyone can edit the YAML and

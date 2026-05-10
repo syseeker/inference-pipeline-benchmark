@@ -287,12 +287,13 @@ def _emit_per_model(
 
 # ----------------------------- findings knowledge loader -----------------------
 
-# `docs/findings_knowledge.yaml` is a curated 3-level (gpu → framework →
+# `docs/findings/knowledge.yaml` is a curated 3-level (gpu → framework →
 # model[/variant]) lookup table that fills in [TBD] markers in Core findings
-# bullets. See that file's header for schema details. No LLM is required
-# to populate or read it.
+# bullets. Lives alongside the long-form findings markdowns it cross-
+# references via `ref:` fields. See that file's header for schema details.
+# No LLM is required to populate or read it.
 
-_KNOWLEDGE_PATH = Path(__file__).resolve().parent.parent / "docs" / "findings_knowledge.yaml"
+_KNOWLEDGE_PATH = Path(__file__).resolve().parent.parent / "docs" / "findings" / "knowledge.yaml"
 
 
 @lru_cache(maxsize=1)
@@ -435,7 +436,7 @@ def _framework_gap_bullet(rows: list[dict], gpu: str) -> str | None:
     The headline gap (largest ratio) carries the Why / How-to-improve;
     smaller gaps are listed without an explanation to keep the bullet
     tight. The Why/How for the headline pair comes from
-    `docs/findings_knowledge.yaml` under
+    `docs/findings/knowledge.yaml` under
     `<gpu> → <slower-framework> → <model> → slow_baseline`, falling
     back to a `[TBD]` operator-pass marker when there's no match.
     """
@@ -492,7 +493,7 @@ def _framework_gap_bullet(rows: list[dict], gpu: str) -> str | None:
 def _outlier_bullet(best: dict, e2e_rows: list[dict], gpu: str) -> str | None:
     """If the slowest run is 5×+ the best, call it out as non-competitive.
 
-    The Why / How-to-improve come from `docs/findings_knowledge.yaml`,
+    The Why / How-to-improve come from `docs/findings/knowledge.yaml`,
     keyed on the *outlier's* (gpu, framework, model[/variant]) and
     `ttft_dominance` symptom when TTFT eats >70% of e2e, otherwise
     `slow_baseline`. Falls back to operator-pass `[TBD]` when no entry.
@@ -653,7 +654,7 @@ def _core_findings_section(rows: list[dict], gpu: str) -> list[str]:
     underlying data warrants it. Bullets cap at 10.
 
     Underperformer bullets pull Why / How-to-improve from
-    `docs/findings_knowledge.yaml` via `_lookup_finding(gpu, ...)`.
+    `docs/findings/knowledge.yaml` via `_lookup_finding(gpu, ...)`.
     Anything not covered by that knowledge file is left as `[TBD]` so
     an operator pass can fill it in.
     """
@@ -663,10 +664,10 @@ def _core_findings_section(rows: list[dict], gpu: str) -> list[str]:
     kb_loaded = bool(_load_findings_knowledge())
     kb_note = (
         "Why / How-to-improve are pulled from "
-        "`docs/findings_knowledge.yaml` when a `(gpu, framework, model)` "
+        "`docs/findings/knowledge.yaml` when a `(gpu, framework, model)` "
         "match exists; unmatched items keep `[TBD]` for an operator pass."
         if kb_loaded
-        else "`docs/findings_knowledge.yaml` not found — all Why / "
+        else "`docs/findings/knowledge.yaml` not found — all Why / "
         "How-to-improve fields will show `[TBD]`."
     )
     out.append(
