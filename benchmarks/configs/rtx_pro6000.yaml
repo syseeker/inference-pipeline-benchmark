@@ -67,7 +67,24 @@ models:
     family: "qwen3-vl"
     role: "vlm-moe"
     quantization: "fp8"
-    notes: "MoE (30B total / 3B active); ~31GB at FP8, sweet spot on 96GB. Bandwidth-thesis stress test."
+    notes: "MoE (30B total / 3B active); ~31GB at FP8, sweet spot on 96GB. Bandwidth-thesis stress test. TRT-LLM 1.2.1 cannot run it on Blackwell (SM_120) — see comment below."
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 fused-MoE (CUTLASS→DeepGEMM JIT) hard-checks SM_90; PRO 6000 is SM_120"
+    #
+    # ⚠ TRT-LLM 1.2.1 incompatibility (Blackwell SM_120 only):
+    # the default `CUTLASS` fused-MoE backend dispatches to a DeepGEMM JIT
+    # path whose compiler hard-checks for SM_90 (Hopper). On a PRO 6000
+    # (SM_120) startup fails with:
+    #   `DeepGEMM only supports Hopper (SM90) architectures, but current
+    #    device compute capability is 120.`
+    # at `fused_moe_cutlass.py:441 → run_moe`. Same kernel-availability
+    # shape of issue as Nemotron-Omni FP8 on SGLang SM_120.
+    # Sweeps below pin `backends: [vllm, sglang]`. A per-model
+    # trtllm-vlm.yml override that sets `moe_config.backend: DEEPGEMM`
+    # (or TRITON/TRTLLM) might unblock TRT-LLM in the future, but
+    # changes the global config so it's not safe without per-model
+    # YAML routing — flagged in docs/findings/nemotron-omni-on-trtllm.md.
+    # Detailed write-up: docs/findings/qwen3-vl-30b-a3b-fp8-on-trtllm.md (TBD).
     backend_args:
       vllm: ["--max-model-len=32768", "--no-enable-prefix-caching"]
       sglang: ["--context-length=32768"]
@@ -84,9 +101,10 @@ models:
     # ⚠ TRT-LLM 1.2.1 incompatibility: the checkpoint reports model_type
     # `qwen3_5` (hybrid attention + Mamba/SSM). The transformers build TRT-LLM
     # ships against doesn't register that arch, so loading fails with
-    # `KeyError: 'qwen3_5'`. vLLM and SGLang have native support. Sweeps
-    # below pin `backends: [vllm, sglang]` for this model. See
-    # docs/findings/qwen3.6-on-trtllm.md (TBD).
+    # `KeyError: 'qwen3_5'`. vLLM and SGLang have native support. See
+    # docs/findings/qwen3.6-on-trtllm.md.
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 transformers registry missing qwen3_5 arch (KeyError on load)"
     backend_args:
       vllm: ["--max-model-len=32768"]
       sglang: ["--context-length=32768"]
@@ -122,10 +140,13 @@ models:
     # `ValueError: Unknown architecture for AutoModelForCausalLM`.
     # Same class of issue as the qwen3_5 arch gap.
     #
-    # Net effect: sweeps below pin nemotron-omni to [vllm] only on this
-    # GPU until either (a) sglang ships an SM_120 fused-MoE config or
-    # modelopt_quant honors --moe-runner-backend, and (b) trtllm registers
-    # the NemotronH multimodal arch.
+    # Net effect: this GPU's only working path is vllm until either (a)
+    # sglang ships an SM_120 fused-MoE config or modelopt_quant honors
+    # --moe-runner-backend, and (b) trtllm registers the NemotronH
+    # multimodal arch.
+    unsupported_backends:
+      sglang: "Triton fused-MoE asks 147KB shmem on modelopt FP8; SM_120 has ~100KB → OutOfResources at JIT"
+      trtllm: "TRT-LLM 1.2.1 PyTorch backend rejects NemotronH_Nano_Omni_Reasoning_V3 arch"
     backend_args:
       vllm: ["--max-model-len=32768", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
       sglang: ["--context-length=32768", "--trust-remote-code"]
@@ -183,7 +204,7 @@ backends:
     #   _autodeploy — experimental auto-routing path; not for headline runs.
     backend: pytorch
     extra_args:
-      - "--extra_llm_api_options=/tmp/trtllm-vlm.yml"
+      - "--extra_llm_api_options=benchmarks/configs/trtllm-vlm.yml"
     variants: {}
 
 # ─── Sweeps ────────────────────────────────────────────────────────────
@@ -198,13 +219,16 @@ sweeps:
   # All candidate models on all three backends. 4 rounds × 3 backends = 12 runs.
   models:
     rounds:
+      # Per-backend filtering — including which (model, backend) pairs are
+      # hardware/version-incompatible — is now driven by each model's
+      # `unsupported_backends:` field. Sweep mode silently skips those
+      # combinations. Single-round invocations (`--backends X --model Y`)
+      # are also rejected via the same field.
       - model: qwen3-vl-32b-fp8
       # - model: qwen3-vl-32b-bf16
       - model: qwen3-vl-30b-a3b-fp8
       - model: qwen3.6-27b-fp8
-        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
       - model: nemotron-omni-fp8
-        backends: [vllm]   # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
 
   # vllm flag-knob comparison on the default model. 3 vllm runs.
   vllm_knobs:
@@ -222,9 +246,9 @@ sweeps:
       - {model: qwen3-vl-32b-fp8,  variant: eager,       backends: [vllm]}
       - {model: qwen3-vl-32b-fp8,  variant: chunked_off, backends: [vllm]}
       # - {model: qwen3-vl-32b-bf16}
-      - {model: qwen3-vl-30b-a3b-fp8}
-      - {model: qwen3.6-27b-fp8,   backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
-      - {model: nemotron-omni-fp8, backends: [vllm]}            # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
+      - {model: qwen3-vl-30b-a3b-fp8}   # trtllm dropped via unsupported_backends
+      - {model: qwen3.6-27b-fp8}        # trtllm dropped via unsupported_backends
+      - {model: nemotron-omni-fp8}      # sglang+trtllm dropped via unsupported_backends
 
 # ─── Aux ───────────────────────────────────────────────────────────────
 # Placeholder blocks for tools wired up later. Not read by the runner today.

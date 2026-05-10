@@ -15,6 +15,10 @@ Schema (see e.g. benchmarks/configs/rtx_pro6000.yaml):
           vllm:   ["--quantization=fp8"]
           sglang: []
           trtllm: []
+        unsupported_backends:               # optional, dict[backend -> reason]
+          trtllm: "TRT-LLM 1.2.1 fused-MoE backend needs SM_90 (DeepGEMM)"
+          # Sweep mode silently skips these. resolve_round() raises a
+          # ValueError with the reason for direct (non-sweep) invocations.
     default_model: <id>
     backends:
       vllm:
@@ -133,6 +137,16 @@ def resolve_round(
         raise ValueError(f"unknown model {mid!r}; defined: {sorted(models)}")
     model = models[mid]
 
+    # Refuse hardware/version-incompatible (backend, model) pairs up front so
+    # that direct `--backend X --model Y` invocations don't get past server
+    # launch. Sweep iteration filters silently in `iter_sweep`.
+    unsupported = (model.get("unsupported_backends") or {})
+    if backend in unsupported:
+        raise ValueError(
+            f"backend {backend!r} is not supported for model {mid!r}: "
+            f"{unsupported[backend]}"
+        )
+
     variant_args: list[str] = []
     if variant is not None:
         variants = bk.get("variants") or {}
@@ -177,10 +191,20 @@ def iter_sweep(cfg: dict[str, Any], sweep_name: str) -> Iterator[Round]:
     all_backends = list((cfg.get("backends") or {}).keys())
     sweep_backends = list(sweep.get("backends") or all_backends)
 
+    models_cfg = cfg.get("models") or {}
     for round_spec in sweep.get("rounds") or []:
         rs: dict[str, Any] = dict(round_spec) if round_spec else {}
         round_backends = list(rs.get("backends") or sweep_backends)
+        mid = rs.get("model") or cfg.get("default_model")
+        unsupported = (models_cfg.get(mid, {}).get("unsupported_backends") or {})
         for bk in round_backends:
+            if bk in unsupported:
+                # Tell the operator why we're skipping; the sweep continues.
+                print(
+                    f">> sweep skip {bk}/{mid}: {unsupported[bk]}",
+                    file=sys.stderr,
+                )
+                continue
             yield resolve_round(
                 cfg,
                 backend=bk,
@@ -232,6 +256,14 @@ def main(
         None, "--has-variant",
         help="rc 0 if the named variant exists for --backend, rc 2 otherwise.",
     ),
+    unsupported_reason: bool = typer.Option(
+        False, "--unsupported-reason",
+        help=(
+            "Print the `unsupported_backends.<backend>` reason for "
+            "(--backend, --model) and exit 0. Empty stdout = supported. "
+            "Lets bash callers cheaply check before launching a server."
+        ),
+    ),
 ) -> None:
     try:
         cfg = load_gpu_config(gpu)
@@ -253,6 +285,17 @@ def main(
             raise typer.Exit(2)
         variants = backends[backend].get("variants") or {}
         raise typer.Exit(0 if has_variant in variants else 2)
+
+    if unsupported_reason:
+        if not backend:
+            typer.echo("--unsupported-reason requires --backend", err=True)
+            raise typer.Exit(2)
+        models = cfg.get("models") or {}
+        mid = model or cfg.get("default_model")
+        m = models.get(mid) or {}
+        reason = (m.get("unsupported_backends") or {}).get(backend, "")
+        typer.echo(reason)
+        return
 
     # Sweep iteration ──────────────────────────────────────────────
     if emit_rounds is not None:

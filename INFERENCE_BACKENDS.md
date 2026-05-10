@@ -243,26 +243,21 @@ deactivate
 > trail vLLM/SGLang. That's a real cross-backend finding worth
 > reporting, not a harness bug.
 
+The trtllm-vlm extra-options YAML is committed at
+[`benchmarks/configs/trtllm-vlm.yml`](benchmarks/configs/trtllm-vlm.yml)
+— previously written into `/tmp/`, but `/tmp/` is wiped on instance
+restart. Run from the repo root so the relative path resolves.
+
 ```bash
 source .venv-trtllm/bin/activate
-
-# Disable kv-cache reuse (required for any multimodal model on TRT-LLM).
-# Enable perf-metrics so the runner can scrape /prometheus/metrics
-# for queue_time histograms and /metrics for KV-cache usage.
-# Do NOT add `guided_decoding_backend: xgrammar` here — see the callout above.
-cat > /tmp/trtllm-vlm.yml <<'EOF'
-kv_cache_config:
-  enable_block_reuse: false
-return_perf_metrics: true
-perf_metrics_max_requests: 1024
-EOF
+cd "$(git rev-parse --show-toplevel)"   # cwd must be repo root
 
 # Shell 1 — start the server. Pick the HF id for your GPU from docs/models.md;
 # example below is the PRO 6000 headline (Qwen3-VL-32B-FP8).
 trtllm-serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
   --backend pytorch \
   --port 8002 \
-  --extra_llm_api_options /tmp/trtllm-vlm.yml
+  --extra_llm_api_options benchmarks/configs/trtllm-vlm.yml
 
 # Shell 2 — run the harness.
 source .venv-trtllm/bin/activate

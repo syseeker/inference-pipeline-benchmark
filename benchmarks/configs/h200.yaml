@@ -78,8 +78,10 @@ models:
     #
     # ⚠ TRT-LLM 1.2.1 incompatibility: model_type `qwen3_5` (hybrid
     # attention + Mamba/SSM) isn't registered in TRT-LLM's transformers
-    # build. Loading fails with `KeyError: 'qwen3_5'`. Sweeps below pin
-    # `backends: [vllm, sglang]`. See docs/findings/qwen3.6-on-trtllm.md (TBD).
+    # build. Loading fails with `KeyError: 'qwen3_5'`. See
+    # docs/findings/qwen3.6-on-trtllm.md.
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 transformers registry missing qwen3_5 arch (KeyError on load)"
     backend_args:
       vllm: ["--max-model-len=32768"]
       sglang: ["--context-length=32768"]
@@ -91,7 +93,8 @@ models:
     quantization: "fp8"
     notes: "Dense sanity probe paired with the 35B-A3B run. Same TRT-LLM 1.2.1 incompatibility as the 35B-A3B sibling — see comment below."
     # Same `qwen3_5` arch + same TRT-LLM 1.2.1 gap as the 35B-A3B above.
-    # Sweeps pin `backends: [vllm, sglang]`.
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 transformers registry missing qwen3_5 arch (KeyError on load)"
     backend_args:
       vllm: ["--max-model-len=32768"]
       sglang: ["--context-length=32768"]
@@ -110,7 +113,9 @@ models:
     ready_timeout_s: 1800
     # ⚠ trtllm 1.2.1 incompatible: PyTorch backend doesn't register
     # `NemotronH_Nano_Omni_Reasoning_V3` arch (GPU-independent — also fails
-    # on RTX PRO 6000 / RTX 5090). Sweeps below pin to [vllm, sglang].
+    # on RTX PRO 6000 / RTX 5090).
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 PyTorch backend rejects NemotronH_Nano_Omni_Reasoning_V3 arch"
     backend_args:
       vllm: ["--max-model-len=32768", "--trust-remote-code"]
       sglang: ["--context-length=32768", "--trust-remote-code"]
@@ -159,7 +164,7 @@ backends:
     #   _autodeploy — experimental; not for headline runs.
     backend: pytorch
     extra_args:
-      - "--extra_llm_api_options=/tmp/trtllm-vlm.yml"
+      - "--extra_llm_api_options=benchmarks/configs/trtllm-vlm.yml"
     variants: {}
 
 # ─── Sweeps ────────────────────────────────────────────────────────────
@@ -167,15 +172,14 @@ sweeps:
   # All six candidate models on all three backends. 6 × 3 = 18 runs.
   models:
     rounds:
+      # Per-(model, backend) incompatibility lives on each model's
+      # `unsupported_backends:` field; sweep mode silently skips those.
       - model: qwen3-vl-32b-bf16
       - model: qwen3-vl-32b-fp8
       - model: qwen3-vl-30b-a3b-bf16
       - model: qwen3.6-35b-a3b-fp8
-        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
       - model: qwen3.6-27b-fp8
-        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
       - model: nemotron-omni-bf16
-        backends: [vllm, sglang]   # trtllm 1.2.1 rejects NemotronH arch (see model entry)
 
   # vllm flag-knob comparison on the default model.
   vllm_knobs:
@@ -199,9 +203,9 @@ sweeps:
       - {model: qwen3-vl-32b-bf16,    variant: chunked_off, backends: [vllm]}
       - {model: qwen3-vl-32b-fp8}
       - {model: qwen3-vl-30b-a3b-bf16}
-      - {model: qwen3.6-35b-a3b-fp8,    backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
-      - {model: qwen3.6-27b-fp8,        backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
-      - {model: nemotron-omni-bf16,     backends: [vllm, sglang]}   # trtllm 1.2.1 rejects NemotronH arch (see model entry)
+      - {model: qwen3.6-35b-a3b-fp8}   # trtllm dropped via unsupported_backends
+      - {model: qwen3.6-27b-fp8}       # trtllm dropped via unsupported_backends
+      - {model: nemotron-omni-bf16}    # trtllm dropped via unsupported_backends
 
 # ─── Aux ───────────────────────────────────────────────────────────────
 # Placeholder blocks for tools wired up later. Not read by the runner today.

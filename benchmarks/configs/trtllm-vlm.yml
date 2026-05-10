@@ -1,0 +1,27 @@
+# trtllm-serve `--extra_llm_api_options` for multimodal benchmarks.
+#
+# Used by all three GPU configs (rtx_pro6000.yaml, rtx5090.yaml, h200.yaml)
+# under `backends.trtllm.extra_args`.
+#
+# Why the contents:
+#   - `kv_cache_config.enable_block_reuse: false`
+#       TRT-LLM 1.2.1 multimodal is incompatible with KV-block reuse on
+#       VLMs. Leaving it on hits a different bug at startup.
+#
+#   - `return_perf_metrics: true` + `perf_metrics_max_requests: 1024`
+#       Enables `/prometheus/metrics` (queue_time histograms) and
+#       `/perf_metrics` JSON. Without `return_perf_metrics: true` only
+#       the iteration-stats `/metrics` endpoint is mounted, and
+#       `benchmarks/probes/prom_scrape.py` can't fill queue_time fields.
+#
+# Do NOT add:
+#   - `guided_decoding_backend: xgrammar`
+#       Triggers a startup crash on Qwen3-VL specifically; see
+#       docs/findings/trtllm-1.2.1-qwen3-vl-32b-fp8.md. Keep off until
+#       upstream fixes the `vocab_size_padded` lookup on the multimodal
+#       wrapper.
+
+kv_cache_config:
+  enable_block_reuse: false
+return_perf_metrics: true
+perf_metrics_max_requests: 1024

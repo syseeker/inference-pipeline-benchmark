@@ -58,7 +58,7 @@ models:
     backend_args:
       vllm: ["--quantization=nvfp4", "--max-model-len=8192", "--no-enable-prefix-caching"]
       sglang: ["--quantization=nvfp4", "--context-length=8192"]
-      trtllm: []   # quant configured via /tmp/trtllm-vlm.yml when wired up
+      trtllm: []   # quant configured via benchmarks/configs/trtllm-vlm.yml when wired up
 
   qwen3.5-9b:
     hf_id: "Qwen/Qwen3.5-9B"
@@ -73,12 +73,12 @@ models:
     # ⚠ TRT-LLM 1.2.1 incompatibility: the checkpoint reports model_type
     # `qwen3_5` (hybrid attention + Mamba/SSM). TRT-LLM's transformers
     # build doesn't register that arch, so loading fails with
-    # `KeyError: 'qwen3_5'`. Sweeps below pin `backends: [vllm, sglang]`.
-    # See docs/findings/qwen3.6-on-trtllm.md (TBD).
+    # `KeyError: 'qwen3_5'`. See docs/findings/qwen3.6-on-trtllm.md.
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 transformers registry missing qwen3_5 arch (KeyError on load)"
     backend_args:
       vllm: ["--quantization=fp8", "--max-model-len=32768"]
       sglang: ["--quantization=fp8", "--context-length=32768"]
-      trtllm: []
 
   nemotron-omni-nvfp4:
     hf_id: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
@@ -107,7 +107,10 @@ models:
     # `NemotronH_Nano_Omni_Reasoning_V3` arch — fails to init executor.
     # GPU-independent gap; same class of issue as the qwen3_5 arch.
     #
-    # Net effect: sweeps below pin nemotron-omni to [vllm] only here.
+    # Net effect: only vllm works on this GPU.
+    unsupported_backends:
+      sglang: "Triton fused-MoE asks 147KB shmem on modelopt FP8/NVFP4; SM_120 has ~100KB → OutOfResources at JIT"
+      trtllm: "TRT-LLM 1.2.1 PyTorch backend rejects NemotronH_Nano_Omni_Reasoning_V3 arch"
     backend_args:
       vllm: ["--max-model-len=8192", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
       sglang: ["--context-length=8192", "--trust-remote-code"]
@@ -157,7 +160,7 @@ backends:
     #   _autodeploy — experimental; not for headline runs.
     backend: pytorch
     extra_args:
-      - "--extra_llm_api_options=/tmp/trtllm-vlm.yml"
+      - "--extra_llm_api_options=benchmarks/configs/trtllm-vlm.yml"
     variants: {}
 
 # ─── Sweeps ────────────────────────────────────────────────────────────
@@ -170,10 +173,11 @@ sweeps:
   # All four candidate models on all three backends. 4 × 3 = 12 runs.
   models:
     rounds:
+      # Per-(model, backend) incompatibility lives on each model's
+      # `unsupported_backends:` field; sweep mode silently skips those.
       - model: qwen3-vl-8b-fp8
       - model: qwen3-vl-30b-a3b-nvfp4
       - model: qwen3.5-9b
-        backends: [vllm, sglang]   # trtllm 1.2.1 rejects qwen3_5 arch
       - model: nemotron-omni-nvfp4
         backends: [vllm]   # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
 
@@ -192,8 +196,8 @@ sweeps:
       - {model: qwen3-vl-8b-fp8,         variant: eager,       backends: [vllm]}
       - {model: qwen3-vl-8b-fp8,         variant: chunked_off, backends: [vllm]}
       - {model: qwen3-vl-30b-a3b-nvfp4}
-      - {model: qwen3.5-9b,             backends: [vllm, sglang]}   # trtllm 1.2.1 rejects qwen3_5 arch
-      - {model: nemotron-omni-nvfp4,    backends: [vllm]}            # sglang OOMs on SM_120, trtllm 1.2.1 rejects arch (see model entry)
+      - {model: qwen3.5-9b}            # trtllm dropped via unsupported_backends
+      - {model: nemotron-omni-nvfp4}   # sglang+trtllm dropped via unsupported_backends
 
 # ─── Aux ───────────────────────────────────────────────────────────────
 # Placeholder blocks for tools wired up later. Not read by the runner today.

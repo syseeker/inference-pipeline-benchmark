@@ -289,6 +289,16 @@ start_server() {
   WAIT_URL="http://localhost:${port}/v1/models"
 }
 
+# Probe whether (backend, model) is hardware/version-incompatible per the
+# YAML's `unsupported_backends:` field. Echoes the reason on stdout (empty
+# = supported). Always rc 0.
+cfg_unsupported_reason() {
+  local backend="$1" model="${2:-}"
+  local args=(--gpu "$GPU" --backend "$backend" --unsupported-reason)
+  [[ -n "$model" ]] && args+=(--model "$model")
+  python -m benchmarks.scenario_config "${args[@]}" 2>/dev/null || true
+}
+
 # Run one (backend, model, variant) round end-to-end.
 run_round() {
   local backend="$1" model="${2:-}" variant="${3:-}"
@@ -299,6 +309,16 @@ run_round() {
   fi
   if ! cfg_has_variant "$backend" "$variant"; then
     echo ">> skipping ${backend} [${variant}]: variant not defined for this backend"
+    return 0
+  fi
+  # Hardware/version incompatibility check — covers both single-round
+  # (`--backends X --model Y`) and sweep-level "you happened to ask for
+  # an unsupported combo via --variants" invocations. Prints the reason
+  # and skips cleanly (rc 0, not a failure).
+  local unsupported_reason
+  unsupported_reason=$(cfg_unsupported_reason "$backend" "$model")
+  if [[ -n "$unsupported_reason" ]]; then
+    echo ">> skipping ${backend}/${model:-<default>}: ${unsupported_reason}"
     return 0
   fi
 
