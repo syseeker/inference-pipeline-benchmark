@@ -30,10 +30,54 @@
 #                      already filtered out via unsupported_backends)
 #   validity_low     — grammar_validity_rate stays at the floor across runs
 #                      (rarely framework-specific; usually content-bound)
+#   runaway_decode   — `mean_completion_tokens` near `max_model_len - prompt`,
+#                      i.e. the model never emitted EOS and decoded until the
+#                      runtime cut it off. Caused by stop-token misses,
+#                      repetition loops, or no `max_tokens` cap in the request.
+#                      Symptom: a single scenario takes minutes when the
+#                      correct answer is ~256 tokens (~8 s at 33 tok/s).
 #
 # When seeding new entries, prefer evidence already visible in summary.md
 # (ITL, DRAM_ACTIVE %, TTFT share) over external claims. The full reasoning
 # can live in the linked `docs/findings/*.md`.
+
+# ─── Tunable parameters (cross-cutting) ───────────────────────────────────────
+# Things that aren't bugs in any specific (gpu, framework, model) tuple but
+# *should* be tuned for every benchmark run. Keyed under `_tunables` so
+# summary.py's lookup never matches them; these are guidance, not auto-fill.
+
+_tunables:
+  max_tokens:
+    why_it_matters: |
+      The OpenAI-style API call from the runner doesn't currently set
+      `max_tokens`. When the model fails to emit EOS — repetition loop,
+      schema confusion, missing instruction — it decodes until the
+      runtime cap (`max_model_len - prompt_tokens`). On
+      qwen3-vl-32b-fp8 with `--max-model-len=32768` and a ~1.8K prompt
+      that is ~30,941 tokens. At ~33 tok/s on RTX PRO 6000 a single
+      runaway scenario costs ~15 minutes of wall time and dominates
+      e2e p95 / p99, energy/req, and GPU occupancy for the rest of the
+      sweep round.
+    how_to_set: |
+      Add `max_tokens` to the chat-completions request payload sent by
+      `OpenAIReasoner` (or wherever the request body is constructed).
+      A reasonable cap for action-sequence outputs is **256–512** —
+      enough for a 16-command sequence with arg fields, small enough
+      that a runaway bails out in 8–15 seconds instead of 15 minutes.
+      Make it a `PipelineConfig` field with a default so individual
+      scenarios can override (longer reasoning chains, etc.).
+    diagnosis: |
+      You are runaway-decoding when, in §3 of summary.md, a row's
+      `mean comp_toks` is suspiciously close to
+      `max_model_len - mean prompt_toks`. Cross-check §7
+      (per-scenario) for `total_ms` outliers — usually one scenario
+      eats the entire wall clock.
+    related_knobs: |
+      `stop` sequences (e.g. `"]}"` to close a JSON array), tighter
+      prompts ("at most 8 commands"), and grammar-constrained decoding
+      (xgrammar/outlines) all reduce the chance of a runaway. They
+      complement `max_tokens` rather than replace it — `max_tokens` is
+      the hard backstop.
 
 rtx_pro6000:
 
