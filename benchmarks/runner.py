@@ -23,6 +23,7 @@ variant name, or "baseline"). Use it to pair runs in summary.py.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 import time
@@ -42,6 +43,7 @@ from benchmarks.metrics import (
     utc_now_iso,
 )
 from benchmarks.probes.gpu_sampler import GpuSampler
+from benchmarks.probes.prom_poller import PromPoller
 from benchmarks.probes.prom_scrape import ScrapeError, scrape
 from benchmarks.scenario_config import (
     Round,
@@ -121,19 +123,55 @@ def _apply_round_to_cfg(cfg: PipelineConfig, round_: Round) -> None:
         cfg.trtllm.model = round_.hf_id
 
 
-def _detect_server_flags(launch_args: list[str]) -> tuple[bool | None, bool | None]:
-    """Read chunked-prefill and enforce-eager state from launch flags."""
+# Framework defaults applied when no explicit launch flag overrides them.
+# vllm and sglang both ship chunked_prefill on / cuda-graphs on (eager off).
+# trtllm-serve has no equivalent CLI knobs at this layer; leave None.
+_FW_FLAG_DEFAULTS: dict[str, dict[str, bool | None]] = {
+    "vllm":   {"chunked_prefill": True,  "enforce_eager": False},
+    "sglang": {"chunked_prefill": True,  "enforce_eager": False},
+    "trtllm": {"chunked_prefill": None,  "enforce_eager": None},
+}
+
+
+def _detect_server_flags(
+    backend: str, launch_args: list[str]
+) -> tuple[bool | None, bool | None]:
+    """Read chunked-prefill and enforce-eager state from launch flags.
+
+    Returns (chunked_prefill, enforce_eager). When the launch args don't
+    mention either flag, falls back to the framework default — both vllm
+    and sglang ship with chunked-prefill on and cuda-graphs on, so a run
+    with no overrides is "on, off" rather than unknown.
+
+    Recognized flags:
+      vllm:   --enable-chunked-prefill / --no-enable-chunked-prefill,
+              --enforce-eager / --no-enforce-eager
+      sglang: --chunked-prefill-size N (>0 → on, <=0 → off),
+              --disable-cuda-graph (→ enforce_eager=True)
+    """
     joined = " ".join(launch_args)
-    chunked: bool | None = None
+    defaults = _FW_FLAG_DEFAULTS.get(backend, {})
+    chunked: bool | None = defaults.get("chunked_prefill")
+    eager: bool | None = defaults.get("enforce_eager")
+
     if "--no-enable-chunked-prefill" in joined or "--disable-chunked-prefill" in joined:
         chunked = False
     elif "--enable-chunked-prefill" in joined:
         chunked = True
-    eager: bool | None = None
+
+    if backend == "sglang":
+        m = re.search(r"--chunked-prefill-size[= ]\s*(-?\d+)", joined)
+        if m:
+            chunked = int(m.group(1)) > 0
+
     if "--enforce-eager" in joined or "enforce_eager=true" in joined.lower():
         eager = True
     elif "--no-enforce-eager" in joined:
         eager = False
+
+    if backend == "sglang" and "--disable-cuda-graph" in joined:
+        eager = True
+
     return chunked, eager
 
 
@@ -217,10 +255,20 @@ def _run_round(
         if gpu_index >= 0
         else None
     )
+    # Poll /metrics during the run so we capture peak gauges
+    # (kv_cache_usage_pct, prefix_cache_hit_rate). The post-run scrape
+    # below stays for cumulative histograms / counter ratios.
+    poller_ctx = (
+        PromPoller(base_url=round_.base_url, framework=round_.backend)
+        if round_.backend in ("vllm", "sglang", "trtllm")
+        else None
+    )
 
     t_loop_start = time.perf_counter()
     if gs_ctx is not None:
         gs_ctx.__enter__()
+    if poller_ctx is not None:
+        poller_ctx.__enter__()
     try:
         for sc in scenarios:
             resp, is_valid, was_exec = _run_one(pipe, sc, samples)
@@ -268,6 +316,8 @@ def _run_round(
                 f"completion_toks={extras.get('completion_tokens')}"
             )
     finally:
+        if poller_ctx is not None:
+            poller_ctx.__exit__(None, None, None)
         if gs_ctx is not None:
             gs_ctx.__exit__(None, None, None)
             sampler_summary = gs_ctx.summary
@@ -284,23 +334,36 @@ def _run_round(
         wall_time_s=wall_time_s,
     )
 
-    chunked_prefill, enforce_eager = _detect_server_flags(round_.launch_args)
+    chunked_prefill, enforce_eager = _detect_server_flags(
+        round_.backend, round_.launch_args
+    )
     notes = [
         f"scenario-mode run over {n} scenarios from {scenarios_dir or 'tests/smoke/scenarios'}",
         f"warmup_requests={warmup_requests} (discarded before timing)",
         "command_success_rate counts DryRunExecutor accepts (≈ validity unless executor is wired)",
     ]
 
-    # Phase 2: scrape /metrics once at the end. For trtllm, queue_time +
-    # kv_cache usage only fill in if the server was launched with
-    # `return_perf_metrics: true` in --extra_llm_api_options.
+    # Phase 2: scrape /metrics once at the end (cumulative histograms +
+    # counter ratios), then merge in the in-run gauge peaks captured by
+    # PromPoller. For trtllm, queue_time + kv_cache usage only fill in if
+    # the server was launched with `return_perf_metrics: true` in
+    # --extra_llm_api_options.
     prom_fields: dict[str, Any] = {}
     if round_.backend in ("vllm", "sglang", "trtllm"):
+        poller_peaks = poller_ctx.peaks if poller_ctx is not None else {}
         try:
             prom = scrape(round_.base_url, round_.backend)
+            # For gauge fields, prefer the run-time peak over the post-run
+            # snapshot; fall back to the final scrape if polling caught nothing.
+            kv_peak = poller_peaks.get("kv_cache_usage_pct")
+            pc_peak = poller_peaks.get("prefix_cache_hit_rate")
             prom_fields = {
-                "prefix_cache_hit_rate": prom.prefix_cache_hit_rate,
-                "kv_cache_usage_pct": prom.kv_cache_usage_pct,
+                "prefix_cache_hit_rate": (
+                    pc_peak if pc_peak is not None else prom.prefix_cache_hit_rate
+                ),
+                "kv_cache_usage_pct": (
+                    kv_peak if kv_peak is not None else prom.kv_cache_usage_pct
+                ),
                 "prefill_time_p50_ms": prom.prefill_time_p50_ms,
                 "prefill_time_p95_ms": prom.prefill_time_p95_ms,
                 "prefill_time_p99_ms": prom.prefill_time_p99_ms,
@@ -319,6 +382,20 @@ def _run_round(
                 )
         except ScrapeError as e:
             notes.append(f"prometheus scrape failed: {e}")
+            # Even when the post-run scrape fails (server already gone),
+            # the in-run peaks may still be valid.
+            kv_peak = poller_peaks.get("kv_cache_usage_pct")
+            pc_peak = poller_peaks.get("prefix_cache_hit_rate")
+            if kv_peak is not None or pc_peak is not None:
+                prom_fields = {
+                    "prefix_cache_hit_rate": pc_peak,
+                    "kv_cache_usage_pct": kv_peak,
+                }
+        if poller_ctx is not None and poller_ctx.n_errors > 0:
+            notes.append(
+                f"prom poller: {poller_ctx.n_samples} samples, "
+                f"{poller_ctx.n_errors} errors (last: {poller_ctx.last_error})"
+            )
 
     # Phase 3: GPU sampler aggregates → BenchmarkResult fields.
     gpu_fields: dict[str, Any] = {}
@@ -371,9 +448,9 @@ def _run_round(
         chunked_prefill_enabled=chunked_prefill,
         enforce_eager=enforce_eager,
         wall_time_s=wall_time_s,
-        valid_e2e_p50_ms=pct["valid_e2e_p50_ms"],
-        valid_e2e_p95_ms=pct["valid_e2e_p95_ms"],
-        valid_e2e_p99_ms=pct["valid_e2e_p99_ms"],
+        e2e_p50_ms=pct["e2e_p50_ms"],
+        e2e_p95_ms=pct["e2e_p95_ms"],
+        e2e_p99_ms=pct["e2e_p99_ms"],
         command_success_rate=(n_executed / n) if n else None,
         grammar_validity_rate=(n_valid / n) if n else None,
         ttft_p50_ms=pct["ttft_p50_ms"],

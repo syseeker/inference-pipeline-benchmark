@@ -1,0 +1,124 @@
+# Auto-fill source for the "Core findings" section of summary.md.
+#
+# benchmarks/summary.py reads this file at run-time and substitutes the
+# `[TBD]` placeholders in the Why / How-to-improve fields of underperformer
+# bullets when a (gpu, framework, model[/variant], symptom) match is found.
+# When there is no match, the bullet keeps its `[TBD]` so a human (or LLM)
+# operator can fill it in. No LLM is required to populate this file.
+#
+# Schema (3-level: gpu → framework → model[/variant]):
+#
+#   <gpu>:                              # YAML key, e.g. rtx_pro6000
+#     <framework>:                      # vllm | sglang | trtllm
+#       <model>[/<variant>]:            # bare model id matches all variants;
+#                                       # use `<model>/<variant>` for
+#                                       # variant-specific overrides.
+#         <symptom>:                    # see "Symptom vocabulary" below
+#           why: |
+#             one-paragraph mechanism, evidenced from the data and/or the
+#             linked deep-dive.
+#           how_to_improve: |
+#             concrete next step: knob to flip, kernel/arch fix to upstream,
+#             next sweep variant to diagnose, or "pin out" reference.
+#           ref: docs/findings/<file>.md  # optional — long-form doc
+#
+# Symptom vocabulary (matches summary.py bullet generators):
+#   ttft_dominance   — TTFT p50 is >70% of e2e p50 (cold-start / first-token)
+#   slow_baseline    — this framework's baseline e2e p50 is >1.1× the fastest
+#                      framework's baseline on the same model
+#   cannot_load      — backend can't even start (informational; the row is
+#                      already filtered out via unsupported_backends)
+#   validity_low     — grammar_validity_rate stays at the floor across runs
+#                      (rarely framework-specific; usually content-bound)
+#
+# When seeding new entries, prefer evidence already visible in summary.md
+# (ITL, DRAM_ACTIVE %, TTFT share) over external claims. The full reasoning
+# can live in the linked `docs/findings/*.md`.
+
+rtx_pro6000:
+
+  trtllm:
+    qwen3-vl-32b-fp8:
+      ttft_dominance:
+        why: |
+          TRT-LLM 1.2.1's pytorch flow on Qwen3-VL multimodal pays
+          per-shape graph capture and DeepGEMM JIT on the first token —
+          the fused-MoE FP8 paths it would otherwise hit are gated to
+          SM_90, so PRO 6000 (SM_120) falls back to a heavy compile path.
+          First token costs ~40s; steady-state decode is fine (~28 ms ITL).
+        how_to_improve: |
+          Add `return_perf_metrics: true` to `--extra_llm_api_options` to
+          split first-vs-steady-state TTFT in section 2; pin trtllm out
+          for this model on PRO 6000 until a TRT-LLM build with SM_120
+          fused-MoE FP8 is available.
+        ref: docs/findings/trtllm-1.2.1-qwen3-vl-32b-fp8.md
+      slow_baseline:
+        why: |
+          Same root cause as ttft_dominance — the per-shape graph-capture
+          tax compounds across scenarios because the SM_120 fused-MoE
+          fast path is missing in TRT-LLM 1.2.1.
+        how_to_improve: |
+          See the ttft_dominance entry, or remove from the sweep matrix
+          until SM_120 fused-MoE FP8 lands upstream.
+        ref: docs/findings/trtllm-1.2.1-qwen3-vl-32b-fp8.md
+
+    qwen3-vl-30b-a3b-fp8:
+      cannot_load:
+        why: |
+          TRT-LLM 1.2.1 fused-MoE (CUTLASS → DeepGEMM JIT) hard-checks
+          SM_90; PRO 6000 is SM_120 so the kernel selector refuses to
+          bind at load time.
+        how_to_improve: |
+          Already pinned via
+          `models.qwen3-vl-30b-a3b-fp8.unsupported_backends.trtllm`.
+          Track upstream SM_120 fused-MoE rollout.
+
+    qwen3.6-27b-fp8:
+      cannot_load:
+        why: |
+          TRT-LLM 1.2.1's bundled `transformers` doesn't register the
+          qwen3_5 model_type (hybrid attention + Mamba/SSM); config
+          loading raises `KeyError: 'qwen3_5'` before any GPU work.
+        how_to_improve: |
+          Pinned via unsupported_backends. Wait for a TRT-LLM build
+          bundling a transformers release with Qwen3.5 arch support.
+        ref: docs/findings/qwen3.6-on-trtllm.md
+
+    nemotron-omni-fp8:
+      cannot_load:
+        why: |
+          TRT-LLM 1.2.1 PyTorch backend has no
+          `NemotronH_Nano_Omni_Reasoning_V3` arch — executor init raises
+          `ValueError: Unknown architecture for AutoModelForCausalLM`.
+          NeMo cookbook requires TRT-LLM 1.3.0rc13 + CUDA 13.0 + Mamba
+          SSM cache flags that the matrix doesn't ship.
+        how_to_improve: |
+          Pinned via unsupported_backends. Move to TRT-LLM 1.3.0rc13 per
+          the NeMo cookbook to unblock.
+        ref: docs/findings/nemotron-omni-on-trtllm.md
+
+  sglang:
+    nemotron-omni-fp8:
+      cannot_load:
+        why: |
+          Triton fused-MoE asks 147 KB shared memory on modelopt FP8;
+          SM_120 caps shmem at ~100 KB → `OutOfResources` at JIT compile.
+        how_to_improve: |
+          Pinned via unsupported_backends. Upstream needs a lower-shmem
+          fused-MoE path or an SM_120-tuned kernel.
+
+    qwen3-vl-32b-fp8:
+      slow_baseline:
+        why: |
+          ITL p50 on this run is ~1.85× vllm's (50.7 ms vs 27.4 ms) and
+          DRAM_ACTIVE peak is 41% vs vllm's 76% — points at scheduler /
+          fused-MoE kernel underutilization on SM_120, not a hardware
+          ceiling.
+        how_to_improve: |
+          A/B `--chunked-prefill-size`, raise concurrency / `max-running-
+          requests`, or toggle `--disable-cuda-graph` to isolate
+          graph-capture impact. Compare ITL deltas in section 6.
+
+  vllm:
+    # vllm has no known underperformer findings on rtx_pro6000 today.
+    # Add entries here when a sweep surfaces one.

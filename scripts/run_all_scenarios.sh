@@ -258,17 +258,21 @@ start_server() {
   port=$(cfg_field "$backend" port "$model" "$variant")
   cfg_launch_args launch "$backend" "$model" "$variant"
 
+  # Always close stdin on backgrounded servers (`< /dev/null`). Without
+  # this, the engine's child workers inherit the script's stdin and can
+  # silently drain whatever's piped in (e.g. sweep rounds via process
+  # substitution), making the outer while-loop exit early with no error.
   case "$backend" in
     vllm)
       echo ">> vllm serve $hf_id --port $port ${launch[*]:-}"
       vllm serve "$hf_id" --port "$port" "${launch[@]}" \
-        >> "$LOG_DIR/vllm.log" 2>&1 &
+        < /dev/null >> "$LOG_DIR/vllm.log" 2>&1 &
       ;;
     sglang)
       echo ">> python -m sglang.launch_server --model-path $hf_id --port $port ${launch[*]:-}"
       python -m sglang.launch_server \
         --model-path "$hf_id" --port "$port" "${launch[@]}" \
-        >> "$LOG_DIR/sglang.log" 2>&1 &
+        < /dev/null >> "$LOG_DIR/sglang.log" 2>&1 &
       ;;
     trtllm)
       # Translate yaml `backend:` → trtllm-serve `--backend` (yaml uses `trtllm`
@@ -279,7 +283,7 @@ start_server() {
       echo ">> trtllm-serve $hf_id --backend $trt_backend --port $port ${launch[*]:-}"
       trtllm-serve "$hf_id" \
         --backend "$trt_backend" --port "$port" "${launch[@]}" \
-        >> "$LOG_DIR/trtllm.log" 2>&1 &
+        < /dev/null >> "$LOG_DIR/trtllm.log" 2>&1 &
       ;;
     *)
       echo "!! unknown backend: $backend" >&2
@@ -388,7 +392,15 @@ failed=()
 if [[ -n "$SWEEP" ]]; then
   # Sweep mode: iterate the yaml's sweep rounds, run each on its named backends.
   echo ">> sweep '$SWEEP' on $GPU"
-  while IFS= read -r round_json; do
+  # Read all rounds into an array up front rather than streaming via
+  # `done < <(...)`. Process substitution would attach the FIFO to the
+  # loop's stdin, and any backgrounded server inside run_round would
+  # inherit that fd and silently drain it — so only the first 1-3 rounds
+  # ran before the loop saw EOF. mapfile dodges the inheritance entirely.
+  declare -a SWEEP_ROUNDS
+  mapfile -t SWEEP_ROUNDS < <(python -m benchmarks.scenario_config --gpu "$GPU" --emit-rounds "$SWEEP")
+  echo ">> sweep '$SWEEP' resolved to ${#SWEEP_ROUNDS[@]} round(s)"
+  for round_json in "${SWEEP_ROUNDS[@]}"; do
     [[ -z "$round_json" ]] && continue
     backend=$(printf '%s' "$round_json" | python -c 'import json,sys;d=json.load(sys.stdin);print(d["backend"])')
     model=$(printf '%s'   "$round_json" | python -c 'import json,sys;d=json.load(sys.stdin);print(d["model_id"])')
@@ -403,7 +415,7 @@ if [[ -n "$SWEEP" ]]; then
       echo "!! halting at first failure (sweep round: ${backend}/${model}/${variant:-baseline})" >&2
       break
     fi
-  done < <(python -m benchmarks.scenario_config --gpu "$GPU" --emit-rounds "$SWEEP")
+  done
 else
   # Variant / single-round mode.
   variant_list="${VARIANTS:-baseline}"

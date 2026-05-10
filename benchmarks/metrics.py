@@ -77,9 +77,9 @@ class BenchmarkResult:
     wall_time_s: float | None = None       # full timed loop, used for throughput
 
     # Decision metrics
-    valid_e2e_p50_ms: float | None = None
-    valid_e2e_p95_ms: float | None = None
-    valid_e2e_p99_ms: float | None = None
+    e2e_p50_ms: float | None = None    # full Pipeline.run wall time, all completed reqs
+    e2e_p95_ms: float | None = None
+    e2e_p99_ms: float | None = None
     command_success_rate: float | None = None
     grammar_validity_rate: float | None = None
 
@@ -205,9 +205,9 @@ def derive_itl(samples: LatencySamples) -> list[float]:
 
 def summarise_latencies(samples: LatencySamples) -> dict[str, float | None]:
     out: dict[str, float | None] = {}
-    out["valid_e2e_p50_ms"] = percentile(samples.end_to_end, 0.50)
-    out["valid_e2e_p95_ms"] = percentile(samples.end_to_end, 0.95)
-    out["valid_e2e_p99_ms"] = percentile(samples.end_to_end, 0.99)
+    out["e2e_p50_ms"] = percentile(samples.end_to_end, 0.50)
+    out["e2e_p95_ms"] = percentile(samples.end_to_end, 0.95)
+    out["e2e_p99_ms"] = percentile(samples.end_to_end, 0.99)
     out["ttft_p50_ms"] = percentile(samples.ttft, 0.50)
     out["ttft_p95_ms"] = percentile(samples.ttft, 0.95)
     out["ttft_p99_ms"] = percentile(samples.ttft, 0.99)
