@@ -1,4 +1,4 @@
-# qwenvl-inference-pipeline-benchmark
+# inference-pipeline-benchmark
 
 A benchmark harness for **VLM-to-action** inference pipelines on NVIDIA
 GPUs. Bring your visual scenarios + a target GPU, get apples-to-apples

@@ -22,8 +22,8 @@ want to know nothing broke.
 
 ```bash
 # 1. clone + install
-git clone git@github.com:syseeker/qwenvl-inference-pipeline-benchmark.git
-cd qwenvl-inference-pipeline-benchmark
+git clone git@github.com:syseeker/inference-pipeline-benchmark.git
+cd inference-pipeline-benchmark
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,nim]"
 
@@ -85,7 +85,7 @@ All three commands must succeed before continuing. Run from the repo
 root for everything below:
 
 ```bash
-cd qwenvl-inference-pipeline-benchmark
+cd inference-pipeline-benchmark
 ```
 
 Capture host-level metadata once (driver, CUDA, GPU model, topology) so
