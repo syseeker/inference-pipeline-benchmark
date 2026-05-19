@@ -109,6 +109,26 @@ models:
       vllm: ["--max-model-len=32768"]
       sglang: ["--context-length=32768"]
 
+  gemma-4-31b-it-fp8:
+    hf_id: "RedHatAI/gemma-4-31B-it-FP8-block"
+    family: "gemma-4"
+    role: "vlm-google"
+    quantization: "fp8"
+    notes: "Google Gemma 4 31B dense VLM (text+image+video, 256K ctx). RedHatAI FP8-block community quant (Google ships BF16 only). ~31GB at FP8 → fits 96GB with comfortable KV room; cross-vendor twin to qwen3-vl-32b-fp8 and brings the first video-capable modality into the matrix."
+    # ⚠ TRT-LLM 1.2.1 incompatibility (expected, unverified on this host):
+    # Gemma 4 is an April-2026 release; TRT-LLM 1.2.1's bundled transformers
+    # almost certainly doesn't register the `gemma4` arch — same KeyError
+    # failure mode as qwen3_5 (qwen3.6-27b-fp8) and NemotronH_Nano_Omni
+    # (nemotron-omni-fp8). Pinned out until TRT-LLM is bumped; revisit then.
+    # When unblocked, also check whether Gemma3's per-arch trtllm constraints
+    # carry to Gemma 4 (FLASHINFER attn backend, chunked prefill off — see
+    # TensorRT-LLM/examples/models/core/multimodal/README.md §Gemma3).
+    unsupported_backends:
+      trtllm: "TRT-LLM 1.2.1 transformers registry expected to be missing gemma4 arch (Apr-2026 release); revisit after TRT-LLM bump"
+    backend_args:
+      vllm: ["--max-model-len=32768"]
+      sglang: ["--context-length=32768"]
+
   nemotron-omni-fp8:
     hf_id: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8"
     family: "nemotron"
@@ -228,6 +248,7 @@ sweeps:
       # - model: qwen3-vl-32b-bf16
       - model: qwen3-vl-30b-a3b-fp8
       - model: qwen3.6-27b-fp8
+      - model: gemma-4-31b-it-fp8
       - model: nemotron-omni-fp8
 
   # vllm flag-knob comparison on the default model. 3 vllm runs.
@@ -248,6 +269,7 @@ sweeps:
       # - {model: qwen3-vl-32b-bf16}
       - {model: qwen3-vl-30b-a3b-fp8}   # trtllm dropped via unsupported_backends
       - {model: qwen3.6-27b-fp8}        # trtllm dropped via unsupported_backends
+      - {model: gemma-4-31b-it-fp8}     # trtllm dropped via unsupported_backends (until bump)
       - {model: nemotron-omni-fp8}      # sglang+trtllm dropped via unsupported_backends
 
 # ─── Aux ───────────────────────────────────────────────────────────────

@@ -59,13 +59,14 @@ tower, before KV / activations):
 | Qwen3.6-27B (dense, text) | ~27 B | 54 GB | 27 GB | 17 GB |
 | Qwen3.6-35B-A3B (MoE) | ~35 B total | 70 GB | 35 GB | 22 GB |
 | Nemotron-3-Nano-Omni-30B-A3B (MoE) | ~30 B total | 60 GB | 33 GB | 21 GB |
+| Gemma-4-31B (dense, VLM, image+video) | ~31 B | 61 GB | 31 GB | 21 GB |
 
 ## Single-GPU capacity (1× GPU, no tensor parallelism)
 
 | GPU | VRAM | Usable for weights† | Headline pick (precision) | Fits? |
 | --- | --- | --- | --- | --- |
 | **RTX 5090** (Blackwell) | 32 GB GDDR7 | ~22 GB | Qwen3-VL-8B-FP8 (9 GB); Qwen3.5-9B-FP8 (9 GB); Nemotron Omni @ NVFP4 (21 GB) | All three fit; Nemotron at NVFP4 is the only quant that works |
-| **RTX PRO 6000 Blackwell Server** | 96 GB GDDR7 | ~70 GB | Qwen3-VL-32B-FP8 (33 GB); Qwen3.6-27B-FP8 (27 GB); Nemotron Omni @ FP8 (33 GB) | All three fit comfortably with KV/ctx room |
+| **RTX PRO 6000 Blackwell Server** | 96 GB GDDR7 | ~70 GB | Qwen3-VL-32B-FP8 (33 GB); Qwen3.6-27B-FP8 (27 GB); Nemotron Omni @ FP8 (33 GB); Gemma-4-31B @ FP8 (31 GB) | All four fit comfortably with KV/ctx room |
 | **H200** (Hopper) | 141 GB HBM3e | ~105 GB | Qwen3-VL-32B-BF16 (66 GB); Qwen3.6-35B-A3B-FP8 (35 GB) + 27B-FP8 (27 GB); Nemotron Omni @ BF16 (60 GB) | All three fit at the BF16 accuracy baseline; FP8 sweep has trivial headroom |
 | **B300** (Blackwell Ultra) | 288 GB HBM3e | ~210 GB | reference; not in the headline matrix | All three fit at any precision; reserved for 235B-class follow-ups |
 
