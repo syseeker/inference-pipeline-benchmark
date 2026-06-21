@@ -86,9 +86,10 @@ OpenAI HTTP API. It plugs in at the **reasoner seam** like every other backend:
   KEYPRESS) so the existing decoder/validator/executor and latency stages all
   still apply, and stashes the **raw** gamepad action in `ModelMeta.extras` for
   the accuracy-vs-gold metric.
-- The "framework" knob here is the **execution backend** (eager / compile /
-  CUDA-graph / TensorRT / ONNX) × precision × denoise steps, not a serving
-  engine. See [nitrogen.md](nitrogen.md) and
+- The **backend** here is the execution engine that runs the NitroGen model —
+  `nitrogen-eager` / `nitrogen-compile` / `nitrogen-cudagraph` /
+  `nitrogen-tensorrt` / `nitrogen-onnx` — crossed with precision × denoise steps.
+  One engine per run. See [nitrogen.md](nitrogen.md) and
   [frameworks.md](frameworks.md#nitrogen-execution-backends).
 
 ## Why this shape

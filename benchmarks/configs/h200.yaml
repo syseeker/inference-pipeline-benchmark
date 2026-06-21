@@ -126,6 +126,7 @@ models:
   nitrogen-500m-bf16:
     family: "nitrogen"
     role: "policy-reference"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "bf16"
     notes: "BF16 reference; accuracy-vs-gold baseline."
     backend_args:
@@ -133,6 +134,7 @@ models:
   nitrogen-500m-fp8:
     family: "nitrogen"
     role: "policy-quant"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
     notes: "FP8 (Hopper-native) quant of DiT + vision tower."
     backend_args:
@@ -140,6 +142,7 @@ models:
   nitrogen-500m-fp8-4step:
     family: "nitrogen"
     role: "policy-quant-fast"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
     notes: "FP8 + 4 denoise steps — latency floor."
     backend_args:
@@ -178,20 +181,38 @@ backends:
     variants:
       tp2: ["--tp-size=2"]
 
-  # NitroGen diffusion-policy backend — ZMQ, served by scripts/serve_nitrogen.py.
-  # `variants` select the execution backend (the optimization knob).
-  nitrogen:
+  # NitroGen execution-engine backends — one ZMQ runtime (serve_nitrogen.py) per
+  # engine, each RUNS the NitroGen model. Pick one per run, not a combo.
+  nitrogen-eager:
     transport: zmq
+    family: nitrogen
     base_url: "tcp://localhost:5555"
     port: 5555
-    ckpt: "nvidia/NitroGen:ng.pt"
-    extra_args: ["--seed=0"]
-    variants:
-      eager:     ["--exec=eager"]
-      compile:   ["--exec=compile"]
-      cudagraph: ["--exec=cudagraph"]
-      trt:       ["--exec=tensorrt"]
-      onnx:      ["--exec=onnxruntime"]
+    extra_args: ["--exec=eager", "--seed=0"]
+  nitrogen-compile:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=compile", "--seed=0"]
+  nitrogen-cudagraph:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=cudagraph", "--seed=0"]
+  nitrogen-tensorrt:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=tensorrt", "--seed=0"]
+  nitrogen-onnx:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=onnxruntime", "--seed=0"]
 
   trtllm:
     base_url: "http://localhost:8002/v1"
@@ -233,14 +254,13 @@ sweeps:
   #   python -m benchmarks.runner --gpu h200 --sweep nitrogen-backends \
   #       --scenarios-dir tests/smoke/scenarios_nitrogen
   nitrogen-backends:
-    backends: [nitrogen]
     rounds:
-      - {model: nitrogen-500m-bf16, variant: eager}        # reference
-      - {model: nitrogen-500m-bf16, variant: compile}
-      - {model: nitrogen-500m-bf16, variant: cudagraph}
-      - {model: nitrogen-500m-fp8,  variant: trt}
-      - {model: nitrogen-500m-fp8,  variant: onnx}
-      - {model: nitrogen-500m-fp8-4step, variant: trt}
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-eager]}      # reference
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-compile]}
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-cudagraph]}
+      - {model: nitrogen-500m-fp8,       backends: [nitrogen-tensorrt]}
+      - {model: nitrogen-500m-fp8,       backends: [nitrogen-onnx]}
+      - {model: nitrogen-500m-fp8-4step, backends: [nitrogen-tensorrt]}
 
   # TP=2 comparison (requires 2× H200 with NVLink). Default model only.
   tp2:

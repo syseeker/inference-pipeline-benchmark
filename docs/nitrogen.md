@@ -124,25 +124,29 @@ small enough to iterate quickly and run head-to-head against the VLM backends.
 
 ## The inference-optimization study
 
-NitroGen runs are swept across the execution axes (one 500M checkpoint, varied):
+The NitroGen **model** runs are swept across the execution axes:
 
-- **execution backend** — eager · `torch.compile` · CUDA graph · TensorRT · ONNX
-  Runtime (the `variants` in the `nitrogen` backend block)
+- **execution engine = backend** — `nitrogen-eager` · `nitrogen-compile` ·
+  `nitrogen-cudagraph` · `nitrogen-tensorrt` · `nitrogen-onnx`. One per run, never
+  a combo (just as a VLM runs on one of vLLM/SGLang/TRT-LLM per run).
 - **precision** — BF16 (reference) · FP8 · NVFP4 (Blackwell only)
 - **denoise steps** — e.g. 16 vs 4 (latency↔quality knob)
 - **GPU** — RTX PRO 6000 · H200 · RTX 5090
 
+So a run reads: *run model `nitrogen-500m-fp8` on backend `nitrogen-tensorrt`.*
 Every run records the full metric set — latency p50/p95/p99, throughput, GPU
-util / power / energy — **plus accuracy-vs-gold** (does the optimized backend
+util / power / energy — **plus accuracy-vs-gold** (does the optimized engine
 still produce the same action as BF16?). See
 [metrics.md](metrics.md#policy-accuracy-vs-gold-nitrogen). Denoising noise is
 **seed-pinned** so FP8-vs-BF16 deltas reflect precision, not sampling.
 
-Run it with:
+Run it with (the `nitrogen-backends` sweep pairs each engine backend with the
+right model automatically):
 
 ```bash
-scripts/run_all_scenarios.sh --gpu rtx_pro6000 --backends nitrogen \
-    --sweep nitrogen-backends --scenarios-dir tests/smoke/scenarios_nitrogen
+scripts/run_all_scenarios.sh --gpu rtx_pro6000 --sweep nitrogen-backends \
+    --backends "nitrogen-eager nitrogen-compile nitrogen-cudagraph nitrogen-tensorrt nitrogen-onnx" \
+    --scenarios-dir tests/smoke/scenarios_nitrogen
 ```
 
 The NitroGen scenarios are built from the `nvidia/NitroGen` dataset (action

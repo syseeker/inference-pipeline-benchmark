@@ -74,12 +74,14 @@ def _make_reasoner(backend: str, cfg: PipelineConfig) -> VlmReasoner:
         from vlm_pipeline.reasoners.trtllm_backend import TrtLlmReasoner
 
         return TrtLlmReasoner(cfg.trtllm)
-    if backend == "nitrogen":
+    if backend.startswith("nitrogen"):
+        # nitrogen-eager / nitrogen-tensorrt / ... — engine backends that run the
+        # NitroGen model. All share one reasoner; the engine is a server launch flag.
         from vlm_pipeline.reasoners.nitrogen_backend import NitrogenReasoner
 
         return NitrogenReasoner(cfg.nitrogen)
     raise typer.BadParameter(
-        f"unknown backend: {backend} (expected vllm | sglang | trtllm | nitrogen)"
+        f"unknown backend: {backend} (expected vllm | sglang | trtllm | nitrogen-*)"
     )
 
 
@@ -97,7 +99,7 @@ def _framework_version(backend: str) -> str:
             import tensorrt_llm
 
             return getattr(tensorrt_llm, "__version__", "unknown")
-        if backend == "nitrogen":
+        if backend.startswith("nitrogen"):
             import nitrogen
 
             return getattr(nitrogen, "__version__", "unknown")
@@ -133,7 +135,7 @@ def _apply_round_to_cfg(cfg: PipelineConfig, round_: Round) -> None:
     elif round_.backend == "trtllm":
         cfg.trtllm.base_url = round_.base_url
         cfg.trtllm.model = round_.hf_id
-    elif round_.backend == "nitrogen":
+    elif round_.backend.startswith("nitrogen"):
         cfg.nitrogen.base_url = round_.base_url
         cfg.nitrogen.model_id = round_.ckpt or round_.hf_id
         # Pin the denoising seed from the round's launch args so accuracy deltas
