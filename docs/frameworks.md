@@ -68,18 +68,20 @@ Reasoner: `src/vlm_pipeline/reasoners/trtllm_backend.py`. Driven by
 
 NitroGen is a different kind of model — a diffusion **policy**, not a token-
 generating VLM — so it does not run on vLLM/SGLang/TRT-LLM (those serve
-autoregressive transformer architectures behind an OpenAI API). Instead it is
-served over ZMQ by [`scripts/serve_nitrogen.py`](../scripts/serve_nitrogen.py),
-and the "framework" axis becomes the **execution backend** that runs the same
-500M checkpoint. These are the `variants` in the `nitrogen` backend block.
+autoregressive transformer architectures behind an OpenAI API). Instead the
+NitroGen **model** is served over ZMQ by
+[`scripts/serve_nitrogen.py`](../scripts/serve_nitrogen.py), and the choice of
+**execution engine is the backend** it runs on — exactly the way vLLM is the
+backend that runs Qwen3-VL. Each engine is its own `backends:` entry; you run
+NitroGen on **one** of them per run, never a combo.
 
-| Variant | What it does | Notes |
+| Backend | Engine | Notes |
 | --- | --- | --- |
-| `eager` | plain PyTorch | reference baseline |
-| `compile` | `torch.compile` | fuses the repeated DiT denoise step |
-| `cudagraph` | CUDA graph capture | fixed-shape denoise loop is ideal for capture |
-| `trt` | **TensorRT** engine (via ModelOpt export) | the compiler — *distinct from TensorRT-LLM* |
-| `onnx` | ONNX Runtime (CUDA/TRT EP) | portable graph path |
+| `nitrogen-eager` | plain PyTorch | reference baseline |
+| `nitrogen-compile` | `torch.compile` | fuses the repeated DiT denoise step |
+| `nitrogen-cudagraph` | CUDA graph capture | fixed-shape denoise loop is ideal for capture |
+| `nitrogen-tensorrt` | **TensorRT** engine (via ModelOpt export) | the compiler — *distinct from TensorRT-LLM* |
+| `nitrogen-onnx` | ONNX Runtime (CUDA/TRT EP) | portable graph path |
 
 Crossed with **precision** (BF16 / FP8 / NVFP4) and **denoise steps**
 (`--steps`). Two diffusion-specific notes:

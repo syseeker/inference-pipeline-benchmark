@@ -105,11 +105,13 @@ All checkpoints live on Hugging Face Hub. vLLM, SGLang, and TRT-LLM
 A second kind of model also runs in this harness: **NitroGen**, a 500M
 diffusion-policy that reads a frame + `game_id` and emits gamepad actions. It is
 not a VLM and not served by vLLM/SGLang/TRT-LLM — full background in
-[nitrogen.md](nitrogen.md). The "models" below are the **same checkpoint** run at
-different precision / denoise-step settings; the execution backend (eager /
-compile / TensorRT / ONNX) is the *variant*, not the model.
+[nitrogen.md](nitrogen.md). The models below are the **same checkpoint** at
+different precision / denoise-step settings; the execution engine (eager /
+compile / cudagraph / TensorRT / ONNX) is the **backend** the model runs on —
+e.g. `nitrogen-tensorrt` — not part of the model. One engine per run, never a
+combo.
 
-| Policy "model" | Precision | Steps | Where |
+| NitroGen model | Precision | Steps | Where |
 | --- | --- | --- | --- |
 | `nitrogen-500m-bf16` | BF16 | 16 | all GPUs — accuracy-vs-gold reference |
 | `nitrogen-500m-fp8` | FP8 | 16 | all GPUs |

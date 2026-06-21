@@ -171,14 +171,17 @@ models:
       vllm: ["--max-model-len=32768", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
       sglang: ["--context-length=32768", "--trust-remote-code"]
 
-  # ─── NitroGen policy "models" ──────────────────────────────────────────
-  # These are the SAME 500M checkpoint run at different precision/denoise-step
-  # settings — `quantization` is recorded on the result; `--steps` rides on
-  # backend_args.nitrogen. The execution backend (eager/compile/trt/onnx) is the
-  # `variant`, not the model. bf16-16step is the accuracy/latency reference.
+  # ─── NitroGen policy models ────────────────────────────────────────────
+  # The NitroGen MODEL (500M params, ckpt nvidia/NitroGen:ng.pt) at different
+  # precision/denoise-step settings. `quantization` is recorded on the result;
+  # precision/--steps ride on `backend_args.nitrogen` (the `nitrogen` family key,
+  # applied to every nitrogen-* engine backend). The execution engine
+  # (eager/compile/cudagraph/tensorrt/onnx) is the BACKEND this model runs on,
+  # not part of the model. bf16-16step is the accuracy/latency reference.
   nitrogen-500m-bf16:
     family: "nitrogen"
     role: "policy-reference"
+    ckpt: "nvidia/NitroGen:ng.pt"          # `hf download nvidia/NitroGen ng.pt` on the instance
     quantization: "bf16"
     notes: "BF16 reference; accuracy-vs-gold baseline for the quant delta."
     backend_args:
@@ -186,6 +189,7 @@ models:
   nitrogen-500m-fp8:
     family: "nitrogen"
     role: "policy-quant"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
     notes: "FP8 quant of the DiT + vision tower; same 16 denoise steps."
     backend_args:
@@ -193,6 +197,7 @@ models:
   nitrogen-500m-fp8-4step:
     family: "nitrogen"
     role: "policy-quant-fast"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
     notes: "FP8 + reduced denoise steps (4) — latency floor; check accuracy cost."
     backend_args:
@@ -200,6 +205,7 @@ models:
   nitrogen-500m-nvfp4:
     family: "nitrogen"
     role: "policy-quant-blackwell"
+    ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "nvfp4"
     notes: "NVFP4 — Blackwell-only datatype (PRO 6000 / 5090; not H200 SM_90)."
     backend_args:
@@ -245,24 +251,43 @@ backends:
     extra_args: []
     variants: {}
 
-  # NitroGen diffusion-policy backend. NOT an HTTP/OpenAI server — served over
-  # ZMQ by scripts/serve_nitrogen.py. `transport: zmq` tells the runner to talk
-  # to it via NitrogenReasoner (not an OpenAI client) and tells
-  # run_all_scenarios.sh to launch serve_nitrogen.py. `variants` here select the
-  # EXECUTION backend — the optimization-study knob — exactly the way vllm's
-  # eager/chunked_off variants select a launch flag.
-  nitrogen:
+  # NitroGen execution-engine backends. One ZMQ runtime (serve_nitrogen.py) per
+  # engine; `transport: zmq` tells the runner to use NitrogenReasoner (not an
+  # OpenAI client) and tells run_all_scenarios.sh to launch serve_nitrogen.py.
+  # Each backend = one engine that RUNS the NitroGen model (parallel to how vllm
+  # runs Qwen3-VL). You run NitroGen on exactly ONE of these per run, not a combo.
+  # `family: nitrogen` lets the model's `backend_args.nitrogen` (precision/steps)
+  # apply to all of them. `--exec` selects the engine; `--seed` pins denoising.
+  nitrogen-eager:
     transport: zmq
+    family: nitrogen
     base_url: "tcp://localhost:5555"
     port: 5555
-    ckpt: "nvidia/NitroGen:ng.pt"          # `hf download nvidia/NitroGen ng.pt` on the instance
-    extra_args: ["--seed=0"]               # pinned denoising → precision-only deltas
-    variants:
-      eager:     ["--exec=eager"]
-      compile:   ["--exec=compile"]
-      cudagraph: ["--exec=cudagraph"]
-      trt:       ["--exec=tensorrt"]
-      onnx:      ["--exec=onnxruntime"]
+    extra_args: ["--exec=eager", "--seed=0"]
+  nitrogen-compile:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=compile", "--seed=0"]
+  nitrogen-cudagraph:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=cudagraph", "--seed=0"]
+  nitrogen-tensorrt:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=tensorrt", "--seed=0"]
+  nitrogen-onnx:
+    transport: zmq
+    family: nitrogen
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    extra_args: ["--exec=onnxruntime", "--seed=0"]
 
   trtllm:
     base_url: "http://localhost:8002/v1"
@@ -319,15 +344,14 @@ sweeps:
   #   python -m benchmarks.runner --gpu rtx_pro6000 --sweep nitrogen-backends \
   #       --scenarios-dir tests/smoke/scenarios_nitrogen
   nitrogen-backends:
-    backends: [nitrogen]
     rounds:
-      - {model: nitrogen-500m-bf16, variant: eager}        # reference
-      - {model: nitrogen-500m-bf16, variant: compile}
-      - {model: nitrogen-500m-bf16, variant: cudagraph}
-      - {model: nitrogen-500m-fp8,  variant: trt}
-      - {model: nitrogen-500m-fp8,  variant: onnx}
-      - {model: nitrogen-500m-fp8-4step, variant: trt}
-      - {model: nitrogen-500m-nvfp4, variant: trt}         # Blackwell-only
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-eager]}      # reference
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-compile]}
+      - {model: nitrogen-500m-bf16,      backends: [nitrogen-cudagraph]}
+      - {model: nitrogen-500m-fp8,       backends: [nitrogen-tensorrt]}
+      - {model: nitrogen-500m-fp8,       backends: [nitrogen-onnx]}
+      - {model: nitrogen-500m-fp8-4step, backends: [nitrogen-tensorrt]}
+      - {model: nitrogen-500m-nvfp4,     backends: [nitrogen-tensorrt]}   # Blackwell-only
 
   # Full matrix — every model × every variant on the relevant backends.
   # Variants here are vllm-only; rounds without a variant run on all three.

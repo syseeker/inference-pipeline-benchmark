@@ -9,7 +9,7 @@ from vlm_pipeline.config import PipelineConfig
 
 def _nitrogen_round(launch_args):
     return Round(
-        backend="nitrogen",
+        backend="nitrogen-tensorrt",
         model_id="nitrogen-500m-fp8",
         hf_id="nvidia/NitroGen:ng.pt",
         family="nitrogen",

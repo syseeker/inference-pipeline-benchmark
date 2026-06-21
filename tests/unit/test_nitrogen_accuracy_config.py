@@ -60,14 +60,15 @@ def test_aggregate_means_and_empty():
 @pytest.mark.parametrize("gpu", ["rtx_pro6000", "h200", "rtx5090"])
 def test_nitrogen_backend_resolves_per_gpu(gpu):
     cfg = load_gpu_config(gpu)
-    r = resolve_round(cfg, backend="nitrogen", model_id="nitrogen-500m-fp8", variant="trt")
+    # Engine = backend; NitroGen = model. ckpt + precision/steps come from the
+    # model; the --exec engine flag comes from the backend.
+    r = resolve_round(cfg, backend="nitrogen-tensorrt", model_id="nitrogen-500m-fp8")
     assert r.transport == "zmq"
-    assert r.ckpt == "nvidia/NitroGen:ng.pt"
+    assert r.ckpt == "nvidia/NitroGen:ng.pt"          # from the MODEL now
     assert r.base_url.startswith("tcp://")
     assert r.quantization == "fp8"
-    # exec flag (variant) + precision/steps (model backend_args) + seed (extra_args)
-    assert "--exec=tensorrt" in r.launch_args
-    assert "--precision=fp8" in r.launch_args
+    assert "--exec=tensorrt" in r.launch_args          # from the backend
+    assert "--precision=fp8" in r.launch_args          # from model backend_args.nitrogen
     assert "--steps=16" in r.launch_args
     assert "--seed=0" in r.launch_args
 
@@ -77,13 +78,16 @@ def test_nitrogen_sweep_iterates(gpu):
     cfg = load_gpu_config(gpu)
     rounds = list(iter_sweep(cfg, "nitrogen-backends"))
     assert len(rounds) >= 6
-    assert all(r.backend == "nitrogen" and r.transport == "zmq" for r in rounds)
-    # The exec plan parses cleanly for every round.
+    assert all(r.backend.startswith("nitrogen-") and r.transport == "zmq" for r in rounds)
+    # Each round pairs an engine backend with the NitroGen model + parses cleanly.
     from benchmarks.nitrogen_exec import parse_exec_plan
 
     for r in rounds:
+        assert r.ckpt == "nvidia/NitroGen:ng.pt"
         plan = parse_exec_plan(r.launch_args)
         assert plan.steps >= 1
+    # bf16 reference runs on the eager engine backend.
+    assert any(r.backend == "nitrogen-eager" and r.quantization == "bf16" for r in rounds)
 
 
 def test_nvfp4_only_on_blackwell():

@@ -293,14 +293,15 @@ start_server() {
         --backend "$trt_backend" --port "$port" "${launch[@]}" \
         < /dev/null >> "$LOG_DIR/trtllm.log" 2>&1 &
       ;;
-    nitrogen)
-      # ZMQ policy server. The yaml `ckpt` is "repo:file"; resolve to a local
-      # path with `hf download` (override via NITROGEN_CKPT_PATH). The launch
-      # args carry --exec/--precision/--steps/--seed (from variant+backend_args).
-      # Game conditioning is per-request (NitrogenReasoner sends game_id), so we
-      # don't pin --game at launch.
+    nitrogen-*)
+      # ZMQ policy server (engine backends: nitrogen-eager / -tensorrt / ...).
+      # The model's `ckpt` is "repo:file"; resolve to a local path with
+      # `hf download` (override via NITROGEN_CKPT_PATH). The launch args carry
+      # --exec (from the backend) + --precision/--steps/--seed (from the model's
+      # backend_args.nitrogen). Game conditioning is per-request (NitrogenReasoner
+      # sends game_id), so we don't pin --game at launch.
       local ckpt ckpt_path
-      ckpt=$(cfg_field nitrogen ckpt "$model" "$variant")
+      ckpt=$(cfg_field "$backend" ckpt "$model" "$variant")
       if [[ -n "${NITROGEN_CKPT_PATH:-}" ]]; then
         ckpt_path="$NITROGEN_CKPT_PATH"
       else
@@ -334,7 +335,10 @@ cfg_unsupported_reason() {
 # Run one (backend, model, variant) round end-to-end.
 run_round() {
   local backend="$1" model="${2:-}" variant="${3:-}"
+  # All nitrogen-* engine backends share one venv (.venv-nitrogen); other
+  # backends map 1:1 to their own venv.
   local venv=".venv-${backend}"
+  [[ "$backend" == nitrogen-* ]] && venv=".venv-nitrogen"
   if [[ ! -d "$venv" ]]; then
     echo "!! skipping ${backend} [${variant:-baseline}]: ${venv} missing" >&2
     return 0
@@ -461,7 +465,7 @@ fi
 # Generate summary regardless of partial failures.
 echo
 echo ">> generating summary.md for ${GPU}"
-for v in vllm sglang trtllm; do
+for v in vllm sglang trtllm nitrogen; do
   if [[ -d ".venv-${v}" ]]; then
     # shellcheck source=/dev/null
     source ".venv-${v}/bin/activate"

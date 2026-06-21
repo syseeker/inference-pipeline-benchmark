@@ -197,7 +197,7 @@ for the full list and per-field definitions.
 | TensorRT-LLM | PyTorch backend via `trtllm-serve` (HTTP, OpenAI-shape — mirrors vLLM/SGLang) |
 | ModelOpt | FP8 / NVFP4 / W8A8 quant + calibration (placeholder; not wired yet) |
 | TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving (placeholder) |
-| NitroGen | Diffusion **policy** backend (not a VLM); swept across execution backends — eager / `torch.compile` / CUDA-graph / TensorRT / ONNX × precision × denoise steps. See [docs/nitrogen.md](docs/nitrogen.md). |
+| NitroGen | Diffusion **policy** model (not a VLM). Run on execution-engine backends — `nitrogen-eager` / `-compile` / `-cudagraph` / `-tensorrt` / `-onnx` — × precision × denoise steps. See [docs/nitrogen.md](docs/nitrogen.md). |
 
 See [docs/frameworks.md](docs/frameworks.md).
 

@@ -164,8 +164,17 @@ def resolve_round(
             )
         variant_args = list(variants[variant] or [])
 
+    # Per-model launch flags: keyed by the exact backend, else by the backend's
+    # `family` (e.g. all nitrogen-* engine backends share `backend_args.nitrogen`,
+    # so a model writes its precision/steps once rather than per engine).
+    model_backend_args = model.get("backend_args") or {}
+    family_key = str(bk.get("family", "")) or None
+    backend_args_per_model = (
+        model_backend_args.get(backend)
+        or (model_backend_args.get(family_key) if family_key else None)
+        or []
+    )
     launch_args = list(bk.get("extra_args") or []) + variant_args
-    backend_args_per_model = (model.get("backend_args") or {}).get(backend) or []
     launch_args.extend(backend_args_per_model)
 
     trtllm_backend = bk.get("backend") if backend == "trtllm" else None
@@ -174,7 +183,9 @@ def resolve_round(
     ready_timeout_s = int(ready_timeout_s) if ready_timeout_s is not None else None
 
     transport = str(bk.get("transport", "http"))
-    ckpt = bk.get("ckpt")
+    # Checkpoint identity for policy backends (zmq) lives on the MODEL; fall back
+    # to a backend-level ckpt for compatibility.
+    ckpt = model.get("ckpt") or bk.get("ckpt")
     # HTTP backends require an hf_id; policy backends (zmq) identify by ckpt.
     if "hf_id" in model:
         hf_id = str(model["hf_id"])
