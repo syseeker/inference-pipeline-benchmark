@@ -73,3 +73,12 @@ that result rows are self-describing:
 - `nvidia-smi topo -m`
 - `dcgmi diag -r 1` summary
 - CUDA / TRT / TRT-LLM / vLLM / SGLang versions in the active env
+
+## NitroGen policy
+
+The [NitroGen](nitrogen.md) diffusion policy (~500M) is always single-GPU —
+tensor parallelism and replicas don't enter the picture. Its tuning axis is the
+**execution backend** (eager / `torch.compile` / CUDA-graph / TensorRT / ONNX),
+**precision** (BF16 / FP8 / NVFP4 — NVFP4 Blackwell-only), and **denoise steps**.
+The same per-GPU run repeats across RTX PRO 6000 → H200 → RTX 5090 with only
+`--gpu` changing, so cross-hardware deltas are apples-to-apples.

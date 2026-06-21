@@ -54,8 +54,27 @@ class TritonConfig:
 
 
 @dataclass
+class NitrogenConfig:
+    """NitroGen diffusion-policy backend (ZMQ, not HTTP/OpenAI).
+
+    The server (`scripts/serve_nitrogen.py` / NitroGen's `serve.py`) holds the
+    checkpoint + execution backend + precision + denoise steps; this client
+    only needs the ZMQ endpoint and the per-request game id. `seed` is sent so
+    the server can pin denoising noise — making FP8-vs-BF16 action deltas
+    reflect precision, not sampling randomness.
+    """
+
+    base_url: str = "tcp://localhost:5555"  # ZMQ REQ endpoint
+    model_id: str = "nvidia/NitroGen"       # checkpoint identity (for ModelMeta)
+    game_id: str | None = None              # default game; per-request overrides
+    seed: int = 0                           # pinned denoising seed
+    move_scale: int = 512                   # joystick -> MOVE px scale (lossy adapter)
+    timeout_ms: int = 30000
+
+
+@dataclass
 class PipelineConfig:
-    backend: str = "nim"  # nim | vllm | sglang | trtllm | triton
+    backend: str = "nim"  # nim | vllm | sglang | trtllm | triton | nitrogen
     deadline_ms: int = 1500  # interactive budget per request
     max_history_turns: int = 6
     nim: NimConfig = field(default_factory=NimConfig)
@@ -63,9 +82,10 @@ class PipelineConfig:
     sglang: SglangConfig = field(default_factory=SglangConfig)
     trtllm: TrtLlmConfig = field(default_factory=TrtLlmConfig)
     triton: TritonConfig = field(default_factory=TritonConfig)
+    nitrogen: NitrogenConfig = field(default_factory=NitrogenConfig)
 
     @classmethod
-    def from_env(cls, yaml_path: str | Path | None = None) -> "PipelineConfig":
+    def from_env(cls, yaml_path: str | Path | None = None) -> PipelineConfig:
         cfg = cls()
         if yaml_path:
             data = yaml.safe_load(Path(yaml_path).read_text()) or {}
@@ -82,6 +102,11 @@ class PipelineConfig:
         cfg.trtllm.base_url = os.getenv("TRTLLM_BASE_URL", cfg.trtllm.base_url)
         cfg.trtllm.model = os.getenv("TRTLLM_MODEL", cfg.trtllm.model)
         cfg.triton.grpc_url = os.getenv("TRITON_GRPC_URL", cfg.triton.grpc_url)
+        cfg.nitrogen.base_url = os.getenv("NITROGEN_ZMQ_URL", cfg.nitrogen.base_url)
+        cfg.nitrogen.model_id = os.getenv("NITROGEN_MODEL", cfg.nitrogen.model_id)
+        cfg.nitrogen.game_id = os.getenv("NITROGEN_GAME_ID", cfg.nitrogen.game_id)
+        if seed := os.getenv("NITROGEN_SEED"):
+            cfg.nitrogen.seed = int(seed)
         if backend := os.getenv("PIPELINE_BACKEND"):
             cfg.backend = backend
         return cfg

@@ -189,6 +189,43 @@ read the host metadata file (`host_<hostname>.json` from
 `scripts/gpu_probe.sh`) — re-run the probe and the next sweep will
 populate.
 
+## Policy accuracy-vs-gold (NitroGen)
+
+For the **NitroGen** diffusion-policy backend there is no notion of grammar
+validity vs gold *text* — the model emits a gamepad action, and "correct" means
+"close to the dataset's recorded action." These fields are populated only for
+the `nitrogen` backend (computed per-scenario from `ModelMeta.extras["gamepad"]`
+vs the scenario's `gold_action.json` sidecar, then averaged) by
+[`benchmarks/accuracy.py`](../benchmarks/accuracy.py):
+
+| Field | Meaning | Target |
+| --- | --- | --- |
+| `action_mse` | MSE over the joined action vector (stick axes + the 17 shared buttons) | low |
+| `button_agreement_rate` | fraction of the 17 dataset buttons whose 0/1 state matches gold | high — close to 1.0 |
+| `joystick_mae` | mean absolute error over the 4 analog-stick axes ([-1,1]) | low |
+| `denoise_steps` | flow-matching iterations this run (a knob, recorded for context) | — |
+
+This is the lever for the optimization study: it tells you whether an FP8 /
+NVFP4 / TensorRT / reduced-step run **still produces the same action** as the
+BF16 reference, not just whether it's faster. Denoising noise is **seed-pinned**
+across runs so the delta reflects precision, not sampling. The bf16/eager run is
+the reference; `quant_accuracy_delta` (§6) pairs a quantized run against it.
+
+### Which metrics apply to which backend
+
+| Metric group | VLM backends | NitroGen |
+| --- | --- | --- |
+| e2e latency p50/p95/p99 | ✓ | ✓ |
+| throughput / goodput | ✓ | ✓ |
+| GPU util / power / energy (§5) | ✓ | ✓ (sampler is backend-agnostic) |
+| TTFT / ITL / token counts (§2–3) | ✓ | — (no token stream) |
+| prefix-cache / KV / prefill / decode / queue (§4) | ✓ | — (no Prometheus server) |
+| `grammar_validity_rate` / `command_success_rate` | ✓ | ✓ (against the lossy `ActionSequence`) |
+| `action_mse` / `button_agreement_rate` / `joystick_mae` | — | ✓ |
+
+Fields that don't apply are recorded as `null` and the run's `notes` say why —
+they are not silently zeroed.
+
 ## Reporting shape
 
 Each benchmark cell produces one `BenchmarkResult` row; rows are joined

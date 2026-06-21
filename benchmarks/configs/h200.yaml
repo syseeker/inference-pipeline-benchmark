@@ -120,6 +120,31 @@ models:
       vllm: ["--max-model-len=32768", "--trust-remote-code"]
       sglang: ["--context-length=32768", "--trust-remote-code"]
 
+  # ─── NitroGen policy "models" ──────────────────────────────────────────
+  # Same 500M checkpoint at different precision/denoise steps. H200 is Hopper
+  # (SM_90): FP8 yes, NVFP4 no — so no nvfp4 entry here (see rtx5090/pro6000).
+  nitrogen-500m-bf16:
+    family: "nitrogen"
+    role: "policy-reference"
+    quantization: "bf16"
+    notes: "BF16 reference; accuracy-vs-gold baseline."
+    backend_args:
+      nitrogen: ["--precision=bf16", "--steps=16"]
+  nitrogen-500m-fp8:
+    family: "nitrogen"
+    role: "policy-quant"
+    quantization: "fp8"
+    notes: "FP8 (Hopper-native) quant of DiT + vision tower."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=16"]
+  nitrogen-500m-fp8-4step:
+    family: "nitrogen"
+    role: "policy-quant-fast"
+    quantization: "fp8"
+    notes: "FP8 + 4 denoise steps — latency floor."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=4"]
+
 # Headline model for ad-hoc single runs. Sweeps below override this per round.
 default_model: qwen3-vl-32b-bf16
 
@@ -152,6 +177,21 @@ backends:
     extra_args: []
     variants:
       tp2: ["--tp-size=2"]
+
+  # NitroGen diffusion-policy backend — ZMQ, served by scripts/serve_nitrogen.py.
+  # `variants` select the execution backend (the optimization knob).
+  nitrogen:
+    transport: zmq
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    ckpt: "nvidia/NitroGen:ng.pt"
+    extra_args: ["--seed=0"]
+    variants:
+      eager:     ["--exec=eager"]
+      compile:   ["--exec=compile"]
+      cudagraph: ["--exec=cudagraph"]
+      trt:       ["--exec=tensorrt"]
+      onnx:      ["--exec=onnxruntime"]
 
   trtllm:
     base_url: "http://localhost:8002/v1"
@@ -188,6 +228,19 @@ sweeps:
       - {}
       - variant: eager
       - variant: chunked_off
+
+  # NitroGen inference-optimization study (Hopper: no NVFP4 round).
+  #   python -m benchmarks.runner --gpu h200 --sweep nitrogen-backends \
+  #       --scenarios-dir tests/smoke/scenarios_nitrogen
+  nitrogen-backends:
+    backends: [nitrogen]
+    rounds:
+      - {model: nitrogen-500m-bf16, variant: eager}        # reference
+      - {model: nitrogen-500m-bf16, variant: compile}
+      - {model: nitrogen-500m-bf16, variant: cudagraph}
+      - {model: nitrogen-500m-fp8,  variant: trt}
+      - {model: nitrogen-500m-fp8,  variant: onnx}
+      - {model: nitrogen-500m-fp8-4step, variant: trt}
 
   # TP=2 comparison (requires 2× H200 with NVLink). Default model only.
   tp2:

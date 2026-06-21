@@ -100,6 +100,26 @@ All checkpoints live on Hugging Face Hub. vLLM, SGLang, and TRT-LLM
 | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16` | BF16 reference checkpoint. NVIDIA also publishes calibrated `…-FP8` and `…-NVFP4` siblings — load those directly on PRO 6000 / 5090 respectively (no runtime quant needed). | NV multimodal MoE; 30B total / 3B active; 131K context. |
 | `google/gemma-4-31B-it` | BF16 reference. Google ships BF16 only — FP8 / NVFP4 come from RedHatAI (`RedHatAI/gemma-4-31B-it-FP8-block`, `…-FP8-Dynamic`, `…-NVFP4`). | Dense 30.7 B VLM; image + video + text; 256K context; Apache 2.0. April 2026 release. |
 
+## NitroGen — diffusion policy (separate model class)
+
+A second kind of model also runs in this harness: **NitroGen**, a 500M
+diffusion-policy that reads a frame + `game_id` and emits gamepad actions. It is
+not a VLM and not served by vLLM/SGLang/TRT-LLM — full background in
+[nitrogen.md](nitrogen.md). The "models" below are the **same checkpoint** run at
+different precision / denoise-step settings; the execution backend (eager /
+compile / TensorRT / ONNX) is the *variant*, not the model.
+
+| Policy "model" | Precision | Steps | Where |
+| --- | --- | --- | --- |
+| `nitrogen-500m-bf16` | BF16 | 16 | all GPUs — accuracy-vs-gold reference |
+| `nitrogen-500m-fp8` | FP8 | 16 | all GPUs |
+| `nitrogen-500m-fp8-4step` | FP8 | 4 | all GPUs — latency floor |
+| `nitrogen-500m-nvfp4` | NVFP4 | 16 | **Blackwell only** (RTX PRO 6000 / 5090; not H200) |
+
+At 500M params NitroGen fits trivially on every target GPU, so this is a pure
+latency / throughput / accuracy study, not a fit study. Checkpoint:
+`nvidia/NitroGen` (`hf download nvidia/NitroGen ng.pt`).
+
 ## Out of scope
 
 - **`Qwen/Qwen3-VL-2B`/`-4B`** — too small to stress any of the three GPUs in this benchmark.

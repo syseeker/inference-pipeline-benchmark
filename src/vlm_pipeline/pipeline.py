@@ -36,6 +36,9 @@ class PipelineRequest:
     session_id: str | None = None
     request_id: str | None = None
     deadline_ms: int | None = None
+    # Game conditioning for policy backends (e.g. NitroGen). Text-driven VLM
+    # reasoners ignore it; carried here so it survives into reasoner.generate().
+    game_id: str | None = None
 
 
 @dataclass
@@ -82,6 +85,7 @@ class Pipeline:
             instruction=req.instruction,
             history=req.context_history[-self.config.max_history_turns :],
             deadline_ms=req.deadline_ms or self.config.deadline_ms,
+            game_id=req.game_id,
         )
         latency.reasoner_total_ms = _ms_since(t0)
         latency.reasoner_ttft_ms = ttft_ms

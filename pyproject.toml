@@ -40,6 +40,15 @@ sglang  = [
 trtllm  = []
 modelopt= []                                  # nvidia-modelopt is installed from NVIDIA's index
 triton  = ["tritonclient[grpc]>=2.45"]
+# NitroGen diffusion-policy backend. `nitrogen` itself (the package + ng.pt
+# checkpoint) is installed from its own repo (pip install -e ../NitroGen) plus
+# `hf download nvidia/NitroGen ng.pt`; torch/diffusers/transformers come with
+# it. We list the client-side deps the reasoner needs here. TensorRT / ONNX /
+# modelopt (FP8/NVFP4 export) install from NVIDIA's index on the GPU box.
+nitrogen= ["pyzmq>=25", "torch", "transformers", "diffusers", "einops"]
+# Dataset → scenario converter (scripts/build_nitrogen_scenarios.py): reads the
+# action parquet, fetches source videos, decodes frames.
+dataset = ["polars>=1.0", "av>=12.0", "yt-dlp>=2024.0"]
 dev     = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

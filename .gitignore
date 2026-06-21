@@ -63,3 +63,8 @@ trt_engines/
 # OS
 Thumbs.db
 .claude/settings.local.json
+
+# NitroGen: generated scenarios + source-video cache (NC-licensed frames; regenerate
+# on the instance with scripts/build_nitrogen_scenarios.py — don't commit pixels)
+tests/smoke/scenarios_nitrogen/
+.cache/nitrogen_videos/

@@ -171,6 +171,40 @@ models:
       vllm: ["--max-model-len=32768", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
       sglang: ["--context-length=32768", "--trust-remote-code"]
 
+  # ─── NitroGen policy "models" ──────────────────────────────────────────
+  # These are the SAME 500M checkpoint run at different precision/denoise-step
+  # settings — `quantization` is recorded on the result; `--steps` rides on
+  # backend_args.nitrogen. The execution backend (eager/compile/trt/onnx) is the
+  # `variant`, not the model. bf16-16step is the accuracy/latency reference.
+  nitrogen-500m-bf16:
+    family: "nitrogen"
+    role: "policy-reference"
+    quantization: "bf16"
+    notes: "BF16 reference; accuracy-vs-gold baseline for the quant delta."
+    backend_args:
+      nitrogen: ["--precision=bf16", "--steps=16"]
+  nitrogen-500m-fp8:
+    family: "nitrogen"
+    role: "policy-quant"
+    quantization: "fp8"
+    notes: "FP8 quant of the DiT + vision tower; same 16 denoise steps."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=16"]
+  nitrogen-500m-fp8-4step:
+    family: "nitrogen"
+    role: "policy-quant-fast"
+    quantization: "fp8"
+    notes: "FP8 + reduced denoise steps (4) — latency floor; check accuracy cost."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=4"]
+  nitrogen-500m-nvfp4:
+    family: "nitrogen"
+    role: "policy-quant-blackwell"
+    quantization: "nvfp4"
+    notes: "NVFP4 — Blackwell-only datatype (PRO 6000 / 5090; not H200 SM_90)."
+    backend_args:
+      nitrogen: ["--precision=nvfp4", "--steps=16"]
+
 # Headline model for ad-hoc single runs. Sweeps below override this per round.
 default_model: qwen3-vl-32b-fp8
 
@@ -210,6 +244,25 @@ backends:
     # (SGLang flag: `--context-length`). Same reasoning as vllm.
     extra_args: []
     variants: {}
+
+  # NitroGen diffusion-policy backend. NOT an HTTP/OpenAI server — served over
+  # ZMQ by scripts/serve_nitrogen.py. `transport: zmq` tells the runner to talk
+  # to it via NitrogenReasoner (not an OpenAI client) and tells
+  # run_all_scenarios.sh to launch serve_nitrogen.py. `variants` here select the
+  # EXECUTION backend — the optimization-study knob — exactly the way vllm's
+  # eager/chunked_off variants select a launch flag.
+  nitrogen:
+    transport: zmq
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    ckpt: "nvidia/NitroGen:ng.pt"          # `hf download nvidia/NitroGen ng.pt` on the instance
+    extra_args: ["--seed=0"]               # pinned denoising → precision-only deltas
+    variants:
+      eager:     ["--exec=eager"]
+      compile:   ["--exec=compile"]
+      cudagraph: ["--exec=cudagraph"]
+      trt:       ["--exec=tensorrt"]
+      onnx:      ["--exec=onnxruntime"]
 
   trtllm:
     base_url: "http://localhost:8002/v1"
@@ -258,6 +311,23 @@ sweeps:
       - {}                          # baseline (no variant)
       - variant: eager
       - variant: chunked_off
+
+  # NitroGen inference-optimization study: one 500M policy across execution
+  # backends × precision × denoise steps. bf16/eager is the reference; each
+  # other round is scored for latency/throughput/GPU AND accuracy-vs-gold.
+  # Run against the NitroGen scenarios:
+  #   python -m benchmarks.runner --gpu rtx_pro6000 --sweep nitrogen-backends \
+  #       --scenarios-dir tests/smoke/scenarios_nitrogen
+  nitrogen-backends:
+    backends: [nitrogen]
+    rounds:
+      - {model: nitrogen-500m-bf16, variant: eager}        # reference
+      - {model: nitrogen-500m-bf16, variant: compile}
+      - {model: nitrogen-500m-bf16, variant: cudagraph}
+      - {model: nitrogen-500m-fp8,  variant: trt}
+      - {model: nitrogen-500m-fp8,  variant: onnx}
+      - {model: nitrogen-500m-fp8-4step, variant: trt}
+      - {model: nitrogen-500m-nvfp4, variant: trt}         # Blackwell-only
 
   # Full matrix — every model × every variant on the relevant backends.
   # Variants here are vllm-only; rounds without a variant run on all three.

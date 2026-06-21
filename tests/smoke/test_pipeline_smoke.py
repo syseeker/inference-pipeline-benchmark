@@ -26,6 +26,7 @@ class _StubReasoner:
         instruction: str,
         history: list[ContextTurn],
         deadline_ms: int,
+        game_id: str | None = None,
     ) -> tuple[str, ModelMeta, float | None]:
         raw = json.dumps(
             {

@@ -115,6 +115,38 @@ models:
       vllm: ["--max-model-len=8192", "--trust-remote-code", "--no-enable-flashinfer-autotune"]
       sglang: ["--context-length=8192", "--trust-remote-code"]
 
+  # ─── NitroGen policy "models" ──────────────────────────────────────────
+  # Same 500M checkpoint at different precision/denoise steps. 5090 is Blackwell
+  # (SM_120): FP8 + NVFP4 both available; 500M fits 32GB with room to spare.
+  nitrogen-500m-bf16:
+    family: "nitrogen"
+    role: "policy-reference"
+    quantization: "bf16"
+    notes: "BF16 reference; accuracy-vs-gold baseline."
+    backend_args:
+      nitrogen: ["--precision=bf16", "--steps=16"]
+  nitrogen-500m-fp8:
+    family: "nitrogen"
+    role: "policy-quant"
+    quantization: "fp8"
+    notes: "FP8 quant of DiT + vision tower."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=16"]
+  nitrogen-500m-fp8-4step:
+    family: "nitrogen"
+    role: "policy-quant-fast"
+    quantization: "fp8"
+    notes: "FP8 + 4 denoise steps — latency floor."
+    backend_args:
+      nitrogen: ["--precision=fp8", "--steps=4"]
+  nitrogen-500m-nvfp4:
+    family: "nitrogen"
+    role: "policy-quant-blackwell"
+    quantization: "nvfp4"
+    notes: "NVFP4 — Blackwell-native 4-bit float."
+    backend_args:
+      nitrogen: ["--precision=nvfp4", "--steps=16"]
+
 # Headline model for ad-hoc single runs. Sweeps below override this per round.
 default_model: qwen3-vl-8b-fp8
 
@@ -148,6 +180,21 @@ backends:
     port: 30000
     extra_args: []
     variants: {}
+
+  # NitroGen diffusion-policy backend — ZMQ, served by scripts/serve_nitrogen.py.
+  # `variants` select the execution backend (the optimization knob).
+  nitrogen:
+    transport: zmq
+    base_url: "tcp://localhost:5555"
+    port: 5555
+    ckpt: "nvidia/NitroGen:ng.pt"
+    extra_args: ["--seed=0"]
+    variants:
+      eager:     ["--exec=eager"]
+      compile:   ["--exec=compile"]
+      cudagraph: ["--exec=cudagraph"]
+      trt:       ["--exec=tensorrt"]
+      onnx:      ["--exec=onnxruntime"]
 
   trtllm:
     base_url: "http://localhost:8002/v1"
@@ -188,6 +235,20 @@ sweeps:
       - {}
       - variant: eager
       - variant: chunked_off
+
+  # NitroGen inference-optimization study (Blackwell: includes NVFP4 round).
+  #   python -m benchmarks.runner --gpu rtx5090 --sweep nitrogen-backends \
+  #       --scenarios-dir tests/smoke/scenarios_nitrogen
+  nitrogen-backends:
+    backends: [nitrogen]
+    rounds:
+      - {model: nitrogen-500m-bf16, variant: eager}        # reference
+      - {model: nitrogen-500m-bf16, variant: compile}
+      - {model: nitrogen-500m-bf16, variant: cudagraph}
+      - {model: nitrogen-500m-fp8,  variant: trt}
+      - {model: nitrogen-500m-fp8,  variant: onnx}
+      - {model: nitrogen-500m-fp8-4step, variant: trt}
+      - {model: nitrogen-500m-nvfp4, variant: trt}
 
   # Mixed matrix.
   full:

@@ -11,8 +11,10 @@ other than the bundled `tests/smoke/scenarios/`.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest
 from vlm_pipeline.pipeline import PipelineRequest
@@ -27,6 +29,9 @@ class LoadedScenario:
     spec: ScenarioRequest      # on-disk request spec (image referenced by path)
     expected: ScenarioExpected
     image_bytes: bytes
+    # Faithful gamepad ground truth for policy backends (NitroGen), loaded from
+    # the optional `gold_action.json` sidecar. None for text-VLM scenarios.
+    gold_action: dict[str, Any] | None = None
 
     def pipeline_request(self) -> PipelineRequest:
         """Materialise the on-disk spec into a runtime PipelineRequest."""
@@ -37,6 +42,7 @@ class LoadedScenario:
             context_history=self.spec.context_history,
             request_id=self.name,
             deadline_ms=self.spec.deadline_ms,
+            game_id=self.spec.game_id,
         )
 
 
@@ -48,12 +54,15 @@ def load_scenario(name: str, scenarios_dir: Path | None = None) -> LoadedScenari
     spec = ScenarioRequest.model_validate_json((sc_dir / "request.json").read_text())
     expected = ScenarioExpected.model_validate_json((sc_dir / "expected.json").read_text())
     image_bytes = (sc_dir / spec.image_path).read_bytes()
+    gold_path = sc_dir / "gold_action.json"
+    gold_action = json.loads(gold_path.read_text()) if gold_path.exists() else None
     return LoadedScenario(
         name=name,
         dir=sc_dir,
         spec=spec,
         expected=expected,
         image_bytes=image_bytes,
+        gold_action=gold_action,
     )
 
 
