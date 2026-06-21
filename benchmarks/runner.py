@@ -33,6 +33,7 @@ from typing import Any
 
 import typer
 
+from benchmarks.accuracy import GamepadAccuracy, aggregate_accuracy, compare_gamepad
 from benchmarks.metrics import (
     BenchmarkResult,
     LatencySamples,
@@ -42,6 +43,7 @@ from benchmarks.metrics import (
     summarise_token_counts,
     utc_now_iso,
 )
+from benchmarks.nitrogen_exec import parse_exec_plan
 from benchmarks.probes.gpu_sampler import GpuSampler
 from benchmarks.probes.prom_poller import PromPoller
 from benchmarks.probes.prom_scrape import ScrapeError, scrape
@@ -72,7 +74,13 @@ def _make_reasoner(backend: str, cfg: PipelineConfig) -> VlmReasoner:
         from vlm_pipeline.reasoners.trtllm_backend import TrtLlmReasoner
 
         return TrtLlmReasoner(cfg.trtllm)
-    raise typer.BadParameter(f"unknown backend: {backend} (expected vllm | sglang | trtllm)")
+    if backend == "nitrogen":
+        from vlm_pipeline.reasoners.nitrogen_backend import NitrogenReasoner
+
+        return NitrogenReasoner(cfg.nitrogen)
+    raise typer.BadParameter(
+        f"unknown backend: {backend} (expected vllm | sglang | trtllm | nitrogen)"
+    )
 
 
 def _framework_version(backend: str) -> str:
@@ -89,6 +97,10 @@ def _framework_version(backend: str) -> str:
             import tensorrt_llm
 
             return getattr(tensorrt_llm, "__version__", "unknown")
+        if backend == "nitrogen":
+            import nitrogen
+
+            return getattr(nitrogen, "__version__", "unknown")
     except ImportError:
         return "not-installed"
     return "unknown"
@@ -121,6 +133,14 @@ def _apply_round_to_cfg(cfg: PipelineConfig, round_: Round) -> None:
     elif round_.backend == "trtllm":
         cfg.trtllm.base_url = round_.base_url
         cfg.trtllm.model = round_.hf_id
+    elif round_.backend == "nitrogen":
+        cfg.nitrogen.base_url = round_.base_url
+        cfg.nitrogen.model_id = round_.ckpt or round_.hf_id
+        # Pin the denoising seed from the round's launch args so accuracy deltas
+        # across precisions reflect precision, not sampling noise.
+        from benchmarks.nitrogen_exec import parse_exec_plan
+
+        cfg.nitrogen.seed = parse_exec_plan(round_.launch_args).seed
 
 
 # Framework defaults applied when no explicit launch flag overrides them.
@@ -245,6 +265,7 @@ def _run_round(
                 typer.echo(f"   warm-up {i+1} ({sc.name}) failed: {e}", err=True)
 
     samples = LatencySamples()
+    accuracies: list[GamepadAccuracy] = []  # policy backends only (NitroGen)
     n_valid = 0
     n_executed = 0
     n_completed = 0
@@ -277,6 +298,15 @@ def _run_round(
             n_executed += int(was_exec)
 
             extras = (resp.model_meta.extras if resp.model_meta else {}) or {}
+
+            # Accuracy-vs-gold for policy backends: compare the raw predicted
+            # gamepad (extras["gamepad"]) against the scenario's gold_action.json
+            # sidecar. Skipped for text-VLM scenarios (no sidecar / no gamepad).
+            scenario_acc = None
+            if sc.gold_action is not None and isinstance(extras.get("gamepad"), dict):
+                scenario_acc = compare_gamepad(extras["gamepad"], sc.gold_action)
+                accuracies.append(scenario_acc)
+
             # Per-scenario row split into two top-level groups:
             #   - configs: fixture data + runner config (deterministic across runs)
             #   - results: this request's outputs and measurements
@@ -305,6 +335,8 @@ def _run_round(
                     "validation": resp.validation.model_dump(),
                     "was_executed": resp.was_executed,
                     "error": resp.error,
+                    "gamepad": extras.get("gamepad"),  # raw policy output (NitroGen)
+                    "accuracy_vs_gold": scenario_acc.to_dict() if scenario_acc else None,
                 },
             }
             (per_scenario_dir / f"{sc.name}__{run_id}.json").write_text(
@@ -429,6 +461,24 @@ def _run_round(
     if round_.trtllm_backend is not None:
         framework_knobs["trtllm_backend"] = round_.trtllm_backend
 
+    # Policy backend (NitroGen): accuracy-vs-gold + execution-plan knobs.
+    accuracy_fields: dict[str, Any] = {}
+    if round_.transport == "zmq":
+        agg = aggregate_accuracy(accuracies)
+        plan = parse_exec_plan(round_.launch_args)
+        framework_knobs.update(plan.to_knobs())
+        accuracy_fields = {
+            "action_mse": agg["action_mse"],
+            "button_agreement_rate": agg["button_agreement_rate"],
+            "joystick_mae": agg["joystick_mae"],
+            "denoise_steps": plan.steps,
+        }
+        if not accuracies:
+            notes.append(
+                "accuracy-vs-gold skipped: scenarios have no gold_action.json "
+                "sidecar (run build_nitrogen_scenarios.py to generate them)"
+            )
+
     aggregate = BenchmarkResult(
         run_id=run_id,
         started_at=started_at,
@@ -470,6 +520,7 @@ def _run_round(
         notes=notes,
         **prom_fields,
         **gpu_fields,
+        **accuracy_fields,
     )
 
     out_path = out_dir / gpu / f"{round_.backend}-{round_.model_id}-{run_id}.json"
@@ -482,7 +533,7 @@ def _run_round(
 def main(
     gpu: str = typer.Option(..., help="GPU profile name; resolves benchmarks/configs/<gpu>.yaml"),
     backend: str = typer.Option(
-        None, help="vllm | sglang | trtllm. Required unless --sweep is given."
+        None, help="vllm | sglang | trtllm | nitrogen. Required unless --sweep is given."
     ),
     model: str = typer.Option(
         None,

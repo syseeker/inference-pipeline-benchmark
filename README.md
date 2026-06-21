@@ -140,6 +140,7 @@ Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios
 | [docs/frameworks.md](docs/frameworks.md) | Per-framework one-pager (vLLM, SGLang, TRT-LLM PyTorch backend, ModelOpt, Triton) |
 | [docs/gpu-strategy.md](docs/gpu-strategy.md) | When to do tensor parallelism vs replicas; PCIe-vs-NVLink considerations |
 | [docs/architecture.md](docs/architecture.md) | Pipeline shape (today: VLM-only; v1+: split CV ↔ VLM ↔ decoder ↔ validator) |
+| [docs/nitrogen.md](docs/nitrogen.md) | NitroGen diffusion-policy backend: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend optimization study |
 | [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
 
 ---
@@ -196,6 +197,7 @@ for the full list and per-field definitions.
 | TensorRT-LLM | PyTorch backend via `trtllm-serve` (HTTP, OpenAI-shape — mirrors vLLM/SGLang) |
 | ModelOpt | FP8 / NVFP4 / W8A8 quant + calibration (placeholder; not wired yet) |
 | TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving (placeholder) |
+| NitroGen | Diffusion **policy** backend (not a VLM); swept across execution backends — eager / `torch.compile` / CUDA-graph / TensorRT / ONNX × precision × denoise steps. See [docs/nitrogen.md](docs/nitrogen.md). |
 
 See [docs/frameworks.md](docs/frameworks.md).
 

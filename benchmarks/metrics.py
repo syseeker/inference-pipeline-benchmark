@@ -128,6 +128,13 @@ class BenchmarkResult:
     power_peak_w: float | None = None
     energy_per_request_j: float | None = None        # power_avg_w * wall_time_s / n_completed
 
+    # Policy-backend accuracy-vs-gold (NitroGen). None for text-VLM backends.
+    # Per-scenario from ModelMeta.extras["gamepad"] vs gold_action.json, averaged.
+    action_mse: float | None = None                  # MSE over sticks + shared buttons
+    button_agreement_rate: float | None = None       # 0-1, fraction of 17 buttons matching gold
+    joystick_mae: float | None = None                # mean abs error over 4 stick axes
+    denoise_steps: int | None = None                 # flow-matching iterations this run
+
     # Cross-run deltas (Phase 5 — computed by summary.py from paired runs, not the runner)
     cuda_graph_speedup: float | None = None          # latency(eager) / latency(graph)
     quant_accuracy_delta: float | None = None        # baseline_acc - quant_acc

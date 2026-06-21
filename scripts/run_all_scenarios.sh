@@ -90,8 +90,8 @@ print_kill_recipe() {
   cat >&2 <<'EOF'
 
    Recovery — kill any orphan inference servers and worker processes:
-     pkill -f 'vllm serve|sglang.launch_server|trtllm-serve|tensorrt_llm' ; sleep 2
-     pkill -9 -f 'vllm serve|sglang.launch_server|trtllm-serve|tensorrt_llm'
+     pkill -f 'vllm serve|sglang.launch_server|trtllm-serve|tensorrt_llm|serve_nitrogen' ; sleep 2
+     pkill -9 -f 'vllm serve|sglang.launch_server|trtllm-serve|tensorrt_llm|serve_nitrogen'
 
    Verify the GPU is empty (only the header line should print):
      nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
@@ -238,7 +238,15 @@ wait_for_ready() {
       echo "!! ${label} server died before ready (see log)" >&2
       return 1
     fi
-    if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
+    if [[ "$url" == tcp://* ]]; then
+      # ZMQ policy server (nitrogen): no HTTP health URL — probe the TCP port.
+      local hostport="${url#tcp://}"
+      if (exec 3<>"/dev/tcp/${hostport%%:*}/${hostport##*:}") 2>/dev/null; then
+        exec 3>&- 3<&- 2>/dev/null || true
+        echo ">> ${label} is ready after ${elapsed}s"
+        return 0
+      fi
+    elif curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
       echo ">> ${label} is ready after ${elapsed}s"
       return 0
     fi
@@ -284,6 +292,26 @@ start_server() {
       trtllm-serve "$hf_id" \
         --backend "$trt_backend" --port "$port" "${launch[@]}" \
         < /dev/null >> "$LOG_DIR/trtllm.log" 2>&1 &
+      ;;
+    nitrogen)
+      # ZMQ policy server. The yaml `ckpt` is "repo:file"; resolve to a local
+      # path with `hf download` (override via NITROGEN_CKPT_PATH). The launch
+      # args carry --exec/--precision/--steps/--seed (from variant+backend_args).
+      # Game conditioning is per-request (NitrogenReasoner sends game_id), so we
+      # don't pin --game at launch.
+      local ckpt ckpt_path
+      ckpt=$(cfg_field nitrogen ckpt "$model" "$variant")
+      if [[ -n "${NITROGEN_CKPT_PATH:-}" ]]; then
+        ckpt_path="$NITROGEN_CKPT_PATH"
+      else
+        ckpt_path=$(hf download "${ckpt%%:*}" "${ckpt##*:}")
+      fi
+      echo ">> serve_nitrogen.py $ckpt_path --port $port ${launch[*]:-}"
+      python scripts/serve_nitrogen.py "$ckpt_path" --port "$port" "${launch[@]}" \
+        < /dev/null >> "$LOG_DIR/nitrogen.log" 2>&1 &
+      SERVER_PID=$!
+      WAIT_URL="tcp://localhost:${port}"
+      return 0
       ;;
     *)
       echo "!! unknown backend: $backend" >&2

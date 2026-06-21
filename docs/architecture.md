@@ -65,6 +65,32 @@ re-encoding pixels every frame. This is where Triton ensembles enter:
   the same GPU but uses a separate instance group.
 - KV-cache is owned by the VLM reasoner; the CV encoder is stateless.
 
+## Policy backends (NitroGen)
+
+The same pipeline shape also hosts a **diffusion-policy** backend that is not a
+vision-language model. NitroGen reads a frame + `game_id` and emits a continuous
+gamepad action via flow-matching denoising, served over ZMQ rather than an
+OpenAI HTTP API. It plugs in at the **reasoner seam** like every other backend:
+
+```
+       ┌────────────┐
+       │  reasoner  │   NitrogenReasoner ──(ZMQ)──► serve_nitrogen.py
+       └────────────┘        │ predict(frame, game_id, seed) → gamepad
+              │              ▼ lossy adapter: gamepad → ActionSequence JSON
+              ▼         (decoder / validator / executor unchanged)
+```
+
+- `game_id` rides on `PipelineRequest` so it survives into `reasoner.generate()`;
+  text-driven VLM reasoners ignore it.
+- The reasoner returns a **lossy** `ActionSequence` (left stick → MOVE, buttons →
+  KEYPRESS) so the existing decoder/validator/executor and latency stages all
+  still apply, and stashes the **raw** gamepad action in `ModelMeta.extras` for
+  the accuracy-vs-gold metric.
+- The "framework" knob here is the **execution backend** (eager / compile /
+  CUDA-graph / TensorRT / ONNX) × precision × denoise steps, not a serving
+  engine. See [nitrogen.md](nitrogen.md) and
+  [frameworks.md](frameworks.md#nitrogen-execution-backends).
+
 ## Why this shape
 
 - **Replaceable backends.** The reasoner is the only stage that changes

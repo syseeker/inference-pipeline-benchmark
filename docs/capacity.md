@@ -142,3 +142,12 @@ baseline is published.
 - NIM cloud's catalogue does not currently expose Qwen3-VL, Qwen3.5/3.6,
   or Nemotron Nano Omni endpoints reliably; for live inference you must
   self-host. See [INFERENCE_BACKENDS.md](../INFERENCE_BACKENDS.md) Mode B.
+
+## NitroGen policy (not a headline checkpoint)
+
+The [NitroGen](nitrogen.md) diffusion policy is ~500M params — negligible
+against any of these GPUs (≈1 GB at BF16, less at FP8/NVFP4). It needs no
+capacity planning: it fits trivially on the RTX 5090's 32 GB with room for
+batching. The interesting axis for NitroGen is **execution backend × precision ×
+denoise steps**, not fit — see [nitrogen.md](nitrogen.md) and
+[frameworks.md](frameworks.md#nitrogen-execution-backends).

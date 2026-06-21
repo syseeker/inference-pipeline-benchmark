@@ -72,9 +72,10 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import typer
 import yaml
@@ -100,6 +101,12 @@ class Round:
     variant: str | None = None
     # trtllm-only — pytorch | trtllm | _autodeploy. None for non-trtllm.
     trtllm_backend: str | None = None
+    # Transport for the backend: "http" (vllm/sglang/trtllm/nim) or "zmq"
+    # (nitrogen). The launcher picks how to start/talk to the server from this.
+    transport: str = "http"
+    # Checkpoint identity for non-HTTP policy backends (nitrogen). None for
+    # HTTP backends, which resolve the served model from `hf_id`.
+    ckpt: str | None = None
     # Per-model override for the runner's server-readiness wait. None = use
     # the runner's global default. Set on models with cold-cache loads that
     # exceed the default (e.g. Nemotron-Omni: ~280s download + ~150s load).
@@ -166,10 +173,20 @@ def resolve_round(
     ready_timeout_s = model.get("ready_timeout_s")
     ready_timeout_s = int(ready_timeout_s) if ready_timeout_s is not None else None
 
+    transport = str(bk.get("transport", "http"))
+    ckpt = bk.get("ckpt")
+    # HTTP backends require an hf_id; policy backends (zmq) identify by ckpt.
+    if "hf_id" in model:
+        hf_id = str(model["hf_id"])
+    elif ckpt is not None:
+        hf_id = str(ckpt)
+    else:
+        hf_id = mid
+
     return Round(
         backend=backend,
         model_id=mid,
-        hf_id=str(model["hf_id"]),
+        hf_id=hf_id,
         family=str(model.get("family", "")),
         quantization=str(model.get("quantization", "bf16")),
         base_url=str(bk["base_url"]),
@@ -178,6 +195,8 @@ def resolve_round(
         variant=variant,
         trtllm_backend=trtllm_backend,
         ready_timeout_s=ready_timeout_s,
+        transport=transport,
+        ckpt=str(ckpt) if ckpt is not None else None,
     )
 
 
@@ -227,6 +246,8 @@ _SCALAR_FIELDS = {
     "variant",
     "trtllm_backend",
     "ready_timeout_s",
+    "transport",
+    "ckpt",
 }
 _LIST_FIELDS = {"launch_args"}
 

@@ -38,6 +38,7 @@ class _GoldReasoner:
         instruction: str,
         history: list[ContextTurn],
         deadline_ms: int,
+        game_id: str | None = None,
     ) -> tuple[str, ModelMeta, float | None]:
         return self._raw, ModelMeta(framework="gold-stub", model_id="gold"), None
 

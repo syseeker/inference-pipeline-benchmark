@@ -81,6 +81,7 @@ class TrtLlmReasoner:
         instruction: str,
         history: list[ContextTurn],
         deadline_ms: int,
+        game_id: str | None = None,  # unused: text VLM is conditioned on the instruction
     ) -> tuple[str, ModelMeta, float | None]:
         messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
         for turn in history:

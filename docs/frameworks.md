@@ -64,6 +64,36 @@ Reasoner: `src/vlm_pipeline/reasoners/trtllm_backend.py`. Driven by
   another `vlm_pipeline/reasoners/*_backend.py` that calls the ensemble
   via tritonclient gRPC.
 
+## NitroGen execution backends
+
+NitroGen is a different kind of model — a diffusion **policy**, not a token-
+generating VLM — so it does not run on vLLM/SGLang/TRT-LLM (those serve
+autoregressive transformer architectures behind an OpenAI API). Instead it is
+served over ZMQ by [`scripts/serve_nitrogen.py`](../scripts/serve_nitrogen.py),
+and the "framework" axis becomes the **execution backend** that runs the same
+500M checkpoint. These are the `variants` in the `nitrogen` backend block.
+
+| Variant | What it does | Notes |
+| --- | --- | --- |
+| `eager` | plain PyTorch | reference baseline |
+| `compile` | `torch.compile` | fuses the repeated DiT denoise step |
+| `cudagraph` | CUDA graph capture | fixed-shape denoise loop is ideal for capture |
+| `trt` | **TensorRT** engine (via ModelOpt export) | the compiler — *distinct from TensorRT-LLM* |
+| `onnx` | ONNX Runtime (CUDA/TRT EP) | portable graph path |
+
+Crossed with **precision** (BF16 / FP8 / NVFP4) and **denoise steps**
+(`--steps`). Two diffusion-specific notes:
+
+- **Quantize selectively.** FP8/NVFP4 are applied to the DiT + vision-tower
+  Linear layers; norms, timestep embeddings, and the action decoder stay at the
+  compute dtype — per-step error compounds across the denoise loop.
+- **NVFP4 is Blackwell-only** (RTX PRO 6000 / 5090; not H200 SM_90). The GPU
+  YAMLs include the `nvfp4` policy model only where the silicon supports it.
+
+The exec plan is parsed in [`benchmarks/nitrogen_exec.py`](../benchmarks/nitrogen_exec.py);
+the reasoner is [`nitrogen_backend.py`](../src/vlm_pipeline/reasoners/nitrogen_backend.py).
+Full background: [nitrogen.md](nitrogen.md).
+
 ## What every run reports
 
 Every run emits a `BenchmarkResult` (see `benchmarks/metrics.py`)
