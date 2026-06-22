@@ -65,6 +65,15 @@ nitrogen= [
     "transformers>=4.40,<5",
     "diffusers", "einops",
 ]
+# FP8 / NVFP4 quantization + ONNX-Runtime serving for the
+# nitrogen-tensorrt / nitrogen-onnx exec backends. Kept in its own extra
+# so the base nitrogen install stays slim — `bench setup` installs this
+# only when a sweep that needs FP8/NVFP4 is queued. nvidia-modelopt lives
+# on the NVIDIA index; pass --extra-index-url=https://pypi.nvidia.com.
+nitrogen-quant = [
+    "nvidia-modelopt>=0.44",
+    "onnxruntime-gpu>=1.18",
+]
 # Dataset → scenario converter (scripts/build_nitrogen_scenarios.py): reads the
 # action parquet, fetches source videos, decodes frames.
 dataset = ["polars>=1.0", "av>=12.0", "yt-dlp>=2024.0"]

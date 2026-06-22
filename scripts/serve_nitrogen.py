@@ -71,7 +71,69 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
     )
     # Non-interactive game selection (bypass the stock input() prompt).
     session.selected_game = args.game
-    session.model = apply_optimization(session.model, plan)
+
+    # For FP8 / NVFP4 + ONNX or TRT exec paths: calibrate, export, and swap
+    # the DiT submodule for a runtime wrapper that runs the QDQ'd graph on
+    # the accelerator. Done BEFORE apply_optimization so that fn sees the
+    # post-quant module shape it expects.
+    from benchmarks.nitrogen_exec import ExecBackend, Precision
+
+    if (
+        plan.precision in (Precision.FP8, Precision.NVFP4)
+        and plan.exec_backend in (ExecBackend.ONNXRUNTIME, ExecBackend.TENSORRT)
+    ):
+        # Calibration + ONNX export are working (modelopt 0.44 path). The
+        # remaining piece is the runtime serving:
+        #   - ORT-TRT-EP can't load modelopt's `trt:TRT_FP8QuantizeLinear`
+        #     ops — they're a TRT extension that needs native TRT runtime,
+        #     not ORT's schema validator.
+        #   - `trtexec` ships only with the full TensorRT SDK, not the pip
+        #     wheel, so we can't pre-compile a `.plan` from a pip-only venv.
+        #   - The right path is direct `tensorrt.Builder` + `OnnxParser` +
+        #     `execute_async_v3` binding management — tracked as PR #5.1.
+        #
+        # For PR #5 we ship the calibration + export scaffolding (so users
+        # can produce the ONNX), and refuse to serve from it cleanly.
+        from pathlib import Path
+
+        from benchmarks.nitrogen_export import (
+            cache_paths,
+            export_dit_to_onnx,
+        )
+        from benchmarks.nitrogen_quant import (
+            load_calib_images_from_scenarios,
+            quantize_for_serving,
+        )
+
+        paths = cache_paths(plan.precision.value, plan.steps)
+        if not paths["onnx"].exists():
+            print(f"[ng-quant] calibrating + exporting {plan.label()} -> {paths['onnx']}")
+            scen_roots = [
+                Path("tests/smoke/scenarios"),            # real VLM frames
+                Path("tests/smoke/scenarios_nitrogen"),   # policy frames (often synthetic)
+            ]
+            calib = load_calib_images_from_scenarios(*scen_roots)
+            print(f"[ng-quant] calibrating on {len(calib)} frames from {[str(r) for r in scen_roots]}")
+
+            def _drive(_model, frame):
+                _ = session.predict(frame)
+
+            quantize_for_serving(
+                session.model, precision=plan.precision.value,
+                calib_images=calib, predict_fn=_drive,
+            )
+            export_dit_to_onnx(session.model, precision=plan.precision.value, steps=plan.steps)
+            print(f"[ng-quant] export complete: {paths['onnx']}")
+
+        raise SystemExit(
+            f"--exec={plan.exec_backend.value} --precision={plan.precision.value} "
+            f"requires the native TensorRT runtime swap, which lands in PR #5.1.\n"
+            f"The calibrated ONNX is ready at {paths['onnx']} — drop in a custom\n"
+            f"`TrtDitWrapper` that uses `tensorrt.Builder` + `execute_async_v3`\n"
+            f"to consume it. See benchmarks/nitrogen_export.py for the stub."
+        )
+    else:
+        session.model = apply_optimization(session.model, plan)
 
     # Mixed-precision compute via autocast, not a model.to(dtype=...) cast —
     # the cast would desync NitroGen's float32 action buffers with the

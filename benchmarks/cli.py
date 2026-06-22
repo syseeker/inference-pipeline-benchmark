@@ -185,6 +185,7 @@ _BACKEND_EXTRAS = {
     "sglang": ["sglang", "dev"],
     "trtllm": ["dev"],          # tensorrt-llm wheel installed separately (NVIDIA index)
     "nitrogen": ["nitrogen", "dataset", "dev"],
+    "nitrogen-quant": ["nitrogen", "nitrogen-quant", "dataset", "dev"],
     "nim": ["nim", "dev"],
 }
 
