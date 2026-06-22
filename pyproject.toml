@@ -20,6 +20,12 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.scripts]
+# One CLI entry point so agents (Claude Code skills, Codex AGENTS.md,
+# Cursor rules) call `bench` instead of memorising five scripts. JSON
+# status contract documented in benchmarks/cli.py.
+bench = "benchmarks.cli:app"
+
 [project.optional-dependencies]
 # Pipeline backend extras — install only what your machine supports.
 # Versions pinned exact to keep benchmark numbers reproducible. Bump
