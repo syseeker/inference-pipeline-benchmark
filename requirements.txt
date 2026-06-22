@@ -1,6 +1,12 @@
 # Minimal runtime deps for the pipeline scaffolding.
 # Framework-specific deps (vllm, sglang, tensorrt-llm, modelopt, tritonclient)
 # are intentionally NOT pinned here — install via `pip install -e ".[vllm]"` etc.
+#
+# System tools (nsight-systems, nsight-compute, the native TensorRT runtime
+# libs) can't live in this file either — they aren't pip-installable.
+# Use `bench setup --backend profile` (nsys) or `bench setup --backend
+# trtllm` (NVIDIA wheel) — they handle the apt-get + NVIDIA-index work.
+# See INFERENCE_BACKENDS.md for the per-backend matrix.
 pydantic>=2.6
 httpx>=0.27
 numpy>=1.26

@@ -52,6 +52,15 @@ Under the hood we wrap three NVIDIA tools so customers don't need to learn them:
 You can still call each tool directly if you need to — these are
 wrappers, not abstractions over.
 
+> **Note on system tools (nsys, modelopt, tensorrt, etc.).** These are
+> system binaries / NVIDIA-index wheels, not regular Python packages —
+> they're **not in `requirements.txt` or `pyproject.toml`** by design
+> (you can't `pip install nsight-systems-cli`). Don't go hunting there.
+> Run `bench setup --backend <name>` for each backend you want; it
+> handles the system-level installs (apt-get for nsys, NVIDIA wheel
+> index for tensorrt + modelopt, post-install chmod and symlinks). You
+> only see `sudo` once at install time, then forget about it.
+
 ---
 
 ## How to run a benchmark — five steps (low-level)

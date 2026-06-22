@@ -17,6 +17,16 @@ the venv + extras + license/auth checks in one command per backend:
 
 All of these are idempotent (skip when the venv/tool already exists, pass `--force` to rebuild). All emit JSON status, exit-code 0/2/3/4 (see [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) §CLI wrapper).
 
+> **About system tools vs Python deps.** `requirements.txt` and
+> `pyproject.toml` only carry pip-installable packages. The `trtllm`,
+> `nitrogen-quant`, and `profile` rows install **system binaries** or
+> NVIDIA-index wheels under the hood (apt-get / NVIDIA pypi index),
+> which is why you won't find `nsight-systems-cli` or `tensorrt-llm`
+> in those files. `bench setup --backend <name>` handles each
+> category: `pip install -e ".[X]"` for Python extras, `apt-get` for
+> nsys, and the right `--extra-index-url` for the NVIDIA wheels. You
+> get prompted for `sudo` once per category, never again.
+
 The per-backend recipes below describe **what `bench setup` does under the hood**. Read them when you're debugging or doing custom work; for the standard flow `bench setup --backend <name>` is the only command you need.
 
 ## Three operational modes — pick by what you actually want to measure
