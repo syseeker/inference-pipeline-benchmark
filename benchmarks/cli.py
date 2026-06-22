@@ -626,6 +626,239 @@ def load_test(
 
 
 # --------------------------------------------------------------------------- #
+# bench profile (PR #7 — Nsight Systems / Compute opt-in profiling)           #
+# --------------------------------------------------------------------------- #
+#
+# Wraps `nsys profile` (timeline) or `ncu --launch-replay` (kernel-level)
+# around a single sweep round so the customer can confirm what summary.md
+# only inferred. Used when section 5 flags "DRAM_ACTIVE low + e2e high"
+# (launch-bound) or section 2 shows TTFT dominating e2e (capture/JIT
+# overhead) — the agent surfaces this command so the customer can SEE
+# the gaps in a Nsight timeline rather than trust an inferred label.
+#
+# Not auto-run on every sweep: nsys adds ~5–10% overhead, ncu serializes
+# kernels (10x+ slowdown). Strictly an escalation step.
+
+
+_PROFILE_TOOLS = ("nsys", "ncu")
+
+
+def _profile_tool_check(tool: str) -> str | None:
+    """Locate `nsys` or `ncu` on PATH. Returns the absolute path, or None
+    if not installed (caller surfaces an install hint)."""
+    import shutil
+
+    if tool not in _PROFILE_TOOLS:
+        raise ValueError(f"unknown profile tool: {tool!r}; expected one of {_PROFILE_TOOLS}")
+    return shutil.which(tool)
+
+
+def _profile_install_hint(tool: str) -> str:
+    """Customer-facing install instructions when nsys/ncu is missing."""
+    if tool == "nsys":
+        return (
+            "nsys (Nsight Systems) not on PATH. Install:\n"
+            "  apt-get install nsight-systems-<cuda_ver>\n"
+            "OR download the tarball from\n"
+            "  https://developer.nvidia.com/nsight-systems/get-started\n"
+            "and add `<dir>/bin` to PATH."
+        )
+    return (
+        "ncu (Nsight Compute) not on PATH — usually ships with the CUDA Toolkit\n"
+        "under /usr/local/cuda-*/bin/. Ensure that directory is on your PATH."
+    )
+
+
+@app.command(
+    "profile",
+    help="One-shot Nsight profiling pass over a single round (escalation tool for under-performers in summary.md).",
+)
+def profile(
+    tool: str = typer.Option(
+        "nsys",
+        help="Which Nsight tool: `nsys` (timeline; default, ~5–10% overhead) or `ncu` (kernel deep-dive; serializes kernels, 10x+ slowdown — use only for one or two kernels).",
+    ),
+    gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
+    backend: str = typer.Option(..., help="Backend id from the yaml (e.g. nitrogen-eager)."),
+    model: str = typer.Option(None, help="Model id; defaults to the yaml's default_model."),
+    scenarios_dir: Path = typer.Option(None, help="Scenarios to profile. Defaults to the yaml's standard set."),
+    nitrogen_ckpt_path: Path = typer.Option(None, help="ng.pt path; needed for nitrogen backends."),
+    output: Path = typer.Option(None, help="Output path for the profile report. Default: benchmarks/results/<gpu>/profiles/<backend>-<model>-<ts>.<ext>."),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Wrap `nsys profile` (or `ncu`) around a single `bench smoke`-style
+    round and write the report under `benchmarks/results/<gpu>/profiles/`.
+
+    The output is a binary report you open in the Nsight Systems / Compute
+    desktop UI. For an inline summary the skill points at the auto-emitted
+    `<output>.summary.md` (nsys-only — from `nsys stats`).
+    """
+    tool_path = _profile_tool_check(tool)
+    if tool_path is None:
+        emit(
+            command="profile",
+            status="error",
+            error={"code": EXIT_MISSING_DEP, "remediation": _profile_install_hint(tool)},
+            json_out=json_out,
+            exit_code=EXIT_MISSING_DEP,
+        )
+
+    import time
+
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    profile_dir = RESULTS_ROOT / gpu / "profiles"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    out_stem = f"{backend}-{(model or 'default').replace('/', '-')}-{ts}"
+    if output is None:
+        suffix = ".nsys-rep" if tool == "nsys" else ".ncu-rep"
+        output = profile_dir / f"{out_stem}{suffix}"
+
+    # Build the sweep command (single round) that nsys/ncu wraps. We use
+    # `bash scripts/run_all_scenarios.sh` for identical setup to the
+    # measured sweep, so timeline labels line up with the rows in
+    # summary.md. nsys can launch the bash script directly; ncu must
+    # attach to a child process — we wrap the same script and let ncu
+    # follow forks via --target-processes=all.
+    inner_script = REPO_ROOT / "scripts" / "run_all_scenarios.sh"
+    inner_cmd = [
+        "bash", str(inner_script),
+        "--gpu", gpu,
+        "--backends", backend,
+    ]
+    if model:
+        inner_cmd += ["--model", model]
+    if scenarios_dir:
+        inner_cmd += ["--scenarios-dir", str(scenarios_dir)]
+
+    env: dict[str, str] = {}
+    if nitrogen_ckpt_path:
+        env["NITROGEN_CKPT_PATH"] = str(nitrogen_ckpt_path)
+
+    if tool == "nsys":
+        # nsys profile -o <out> <cmd...> — the canonical wrap. We capture
+        # NVTX + CUDA + OS signposts; kernel-level data needs ncu.
+        cmd = [
+            tool_path, "profile",
+            "--output", str(output.with_suffix("")),  # nsys appends .nsys-rep
+            "--trace=cuda,nvtx,osrt",
+            "--force-overwrite=true",
+            "--",  # stop nsys flag parsing
+            *inner_cmd,
+        ]
+    else:  # ncu
+        cmd = [
+            tool_path,
+            "--target-processes=all",
+            "--export", str(output.with_suffix("")),  # ncu appends .ncu-rep
+            "--force-overwrite",
+            "--set", "basic",  # minimal metric set; user can re-run with --set full
+            "--",
+            *inner_cmd,
+        ]
+
+    res = _run(cmd, capture=True, env=env)
+    report_path = output
+    if not report_path.exists():
+        # Some versions write .qdrep or different extensions; widen the
+        # match so we surface whatever was produced.
+        candidates = sorted(profile_dir.glob(f"{out_stem}.*"))
+        if candidates:
+            report_path = candidates[0]
+
+    if res.returncode != 0:
+        # Decode the common known failures into actionable remediation
+        # text. ncu writes profiler errors to STDOUT (not stderr), and
+        # nsys produces messages on both — scan everything.
+        merged = (res.stdout or "") + "\n" + (res.stderr or "")
+        remediation: str
+        if "ERR_NVGPUCTRPERM" in merged or "permission to access NVIDIA GPU Performance Counters" in merged:
+            remediation = (
+                f"{tool} can't read GPU performance counters (driver-level permission). Fix: "
+                "set `NVreg_RestrictProfilingToAdminUsers=0` and reload the nvidia kernel "
+                "module, OR run the bench profile command as root. See "
+                "https://developer.nvidia.com/ERR_NVGPUCTRPERM for the full procedure."
+            )
+        else:
+            remediation = (
+                merged.strip()[-500:]
+                or f"{tool} failed; check the server log under benchmarks/results/{gpu}/server-logs/"
+            )
+        emit(
+            command="profile",
+            status="error",
+            error={"code": EXIT_RUNTIME, "remediation": remediation},
+            artifacts=[str(report_path)] if report_path.exists() else [],
+            json_out=json_out,
+            exit_code=EXIT_RUNTIME,
+        )
+
+    summary_md = _maybe_emit_profile_summary(tool_path, tool, report_path)
+    artifacts = [str(report_path)]
+    if summary_md and summary_md.exists():
+        artifacts.append(str(summary_md))
+
+    emit(
+        command="profile",
+        status="ok",
+        artifacts=artifacts,
+        next_action=(
+            f"open {report_path.name} in the Nsight {'Systems' if tool == 'nsys' else 'Compute'} UI; "
+            + (f"read {summary_md.name} for a text narrative; " if summary_md else "")
+            + "the report is GPU-specific — keep it next to the summary.md row it diagnoses."
+        ),
+        data={
+            "tool": tool, "gpu": gpu, "backend": backend, "model": model,
+            "report": str(report_path),
+            "summary_md": str(summary_md) if summary_md else None,
+        },
+        json_out=json_out,
+    )
+
+
+def _maybe_emit_profile_summary(tool_path: str, tool: str, report_path: Path) -> Path | None:
+    """Best-effort text narrative of the report for agent consumption.
+
+    For nsys: `nsys stats --report cuda_gpu_kern_sum,nvtx_sum` over the
+    .nsys-rep gives a kernel-time top-N and NVTX-region timing — enough
+    for an agent to say "kernel X took Y% of GPU time, NVTX region Z
+    dominates." For ncu: `ncu --import <report>` re-prints the per-kernel
+    metric block which is already markdown-shaped.
+
+    Returns the path to the .summary.md or None on failure (we don't
+    fail the parent `bench profile` over a missing narrative).
+    """
+    out = report_path.with_suffix(".summary.md")
+    try:
+        if tool == "nsys":
+            res = subprocess.run(  # noqa: S603
+                [tool_path, "stats", "--report", "cuda_gpu_kern_sum,nvtx_sum", "--format=table", str(report_path)],
+                capture_output=True, text=True, check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                out.write_text(
+                    f"# nsys stats — {report_path.name}\n\n"
+                    f"Auto-generated by `bench profile`. The full timeline lives in `{report_path.name}`; open it in Nsight Systems for the visual.\n\n"
+                    f"```\n{res.stdout.rstrip()}\n```\n"
+                )
+                return out
+        else:
+            res = subprocess.run(  # noqa: S603
+                [tool_path, "--import", str(report_path), "--page", "details", "--print-summary", "per-kernel"],
+                capture_output=True, text=True, check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                out.write_text(
+                    f"# ncu summary — {report_path.name}\n\n"
+                    f"Auto-generated by `bench profile --tool ncu`. The per-kernel details live in `{report_path.name}`; open it in Nsight Compute for the metric drill-down.\n\n"
+                    f"```\n{res.stdout.rstrip()}\n```\n"
+                )
+                return out
+    except Exception:
+        return None
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # bench install-skill                                                         #
 # --------------------------------------------------------------------------- #
 

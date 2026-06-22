@@ -365,6 +365,34 @@ Then rewrite the Core findings section in place. Keep section 1
 - **grammar_valid / exec_accept** — VLM-only. **For policy (nitrogen) rows these collapse to 100% by construction** and tell you nothing about policy quality. Grade those by the action-MSE / button-agreement columns from PR #5+.
 - **Section 9 — Concurrency profile (AIPerf)** *(PR #6)* — TTFT/req-throughput at concurrency `1/4/16/32` from `bench load-test`. **Different scope from section 2**: AIPerf measures the **reasoner HTTP call only**, not the full pipeline. Use it to read off "where does throughput cap" and "where does TTFT degrade". Section 2 stays the customer-experience number; section 9 is the engine-scaling number. HTTP backends only (vLLM/SGLang/TRT-LLM); NitroGen is single-flight by ZMQ design and gets a stub row until PR #8 (replicate-per-GPU).
 
+## Escalation: when a row looks "wrong", profile it
+
+If the heuristics below give you a hypothesis ("X is launch-bound",
+"TRT-LLM TTFT dominates because of graph capture") and the customer
+asks for proof, **don't try to infer it from the numbers** — surface
+`bench profile` so they can see the actual GPU timeline:
+
+```bash
+# nsys gives the timeline (best-first; ~5–10% overhead)
+bench profile --tool nsys --gpu rtx_pro6000 \
+  --backend nitrogen-eager --model nitrogen-500m-bf16 --json
+
+# ncu gives kernel-level detail (run only on the ONE kernel you suspect;
+# serializes execution — 10x+ slowdown)
+bench profile --tool ncu --gpu rtx_pro6000 \
+  --backend nitrogen-eager --model nitrogen-500m-bf16 --json
+```
+
+Output:
+- `<backend>-<model>-<ts>.nsys-rep` (or `.ncu-rep`) — open in the
+  Nsight Systems/Compute UI.
+- `<backend>-<model>-<ts>.summary.md` — auto-generated text narrative
+  (`nsys stats` top-kernels + NVTX regions). Quote from this in the
+  finding's "Why".
+
+**Never auto-run on every sweep** — overhead is real, and the rep file
+is only useful when you have a specific row in summary.md to explain.
+
 ## Decision tree for under-performers
 
 For each backend that's not the winner, ask:
