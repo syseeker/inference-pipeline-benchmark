@@ -895,6 +895,121 @@ def _env_block(rows: list[dict]) -> list[str]:
 
 # ----------------------------- main entrypoint ---------------------------------
 
+# --------------------------------------------------------------------------- #
+# AIPerf concurrency-curve section (PR #6)                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _aiperf_concurrency_section(gpu_dir: Path) -> list[str]:
+    """Build the "9. Concurrency profile (AIPerf)" section.
+
+    Walks `gpu_dir / "aiperf" / *` looking for per-run AIPerf artifact
+    directories with `profile_export_aiperf.json` inside. Schema-tolerant:
+    we read the keys we know about and ignore the rest, so an AIPerf
+    version bump won't break the table.
+
+    Returns the section lines, or [] if no AIPerf artifacts were found.
+    """
+    aiperf_root = gpu_dir / "aiperf"
+    if not aiperf_root.is_dir():
+        return []
+
+    runs: list[dict[str, Any]] = []
+    for run_dir in sorted(aiperf_root.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        # AIPerf may nest by concurrency, so glob for the canonical file.
+        for jpath in run_dir.rglob("profile_export_aiperf.json"):
+            try:
+                data = json.loads(jpath.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            row = _extract_aiperf_row(data, run_dir.name, jpath)
+            if row:
+                runs.append(row)
+
+    if not runs:
+        return []
+
+    runs.sort(key=lambda r: (r.get("backend", ""), r.get("model", ""), r.get("concurrency", 0)))
+
+    out = [
+        "## 9. Concurrency profile (AIPerf)",
+        "",
+        "Client-side load-test curve from `bench load-test`. **Different metric "
+        "scope from sections 1–8**: AIPerf measures the reasoner HTTP call only "
+        "(TTFT / inter-token / request throughput at variable concurrency), "
+        "while sections above measure the full `Pipeline.run()` at concurrency=1. "
+        "Both numbers matter and they answer different questions; see "
+        "[docs/metrics.md](../../docs/metrics.md) for the split.",
+        "",
+        "| backend | model | concurrency | TTFT p50 | TTFT p99 | req/s | tok/s | err % |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for r in runs:
+        out.append(
+            "| {bk} | {m} | {c} | {t50} | {t99} | {rps} | {tps} | {err} |".format(
+                bk=r.get("backend", "-"),
+                m=r.get("model", "-"),
+                c=r.get("concurrency", "-"),
+                t50=_fmt(r.get("ttft_p50_ms"), " ms"),
+                t99=_fmt(r.get("ttft_p99_ms"), " ms"),
+                rps=_fmt(r.get("request_throughput")),
+                tps=_fmt(r.get("output_token_throughput")),
+                err=_fmt_pct(r.get("error_rate")),
+            )
+        )
+    return out
+
+
+def _extract_aiperf_row(data: Any, run_label: str, jpath: Path) -> dict[str, Any] | None:
+    """Pull (TTFT, throughput, error_rate, concurrency) out of an AIPerf JSON.
+
+    AIPerf 0.10's `profile_export_aiperf.json` is a dict with keys like
+    `time_to_first_token`, `request_throughput`, `request_count`, plus
+    nested structured percentiles. We parse defensively — any missing
+    key becomes None and the row is included with a "-" in that cell.
+    """
+    if not isinstance(data, dict):
+        return None
+
+    def _ns_to_ms(v: Any) -> float | None:
+        # AIPerf 0.10 emits ns for time fields; convert.
+        try:
+            return float(v) / 1e6
+        except (TypeError, ValueError):
+            return None
+
+    def _num(v: Any) -> float | None:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    ttft = data.get("time_to_first_token") or {}
+    rps = data.get("request_throughput") or {}
+    tps = data.get("output_token_throughput") or {}
+    err = data.get("error_rate") or data.get("request_error_rate")
+
+    # `parts` are the human-readable filename segments AIPerf often
+    # encodes (e.g. concurrency, model). Fall back to splitting run_label.
+    parts = run_label.split("-")
+    backend = parts[0] if parts else "?"
+    model = "-".join(parts[1:-1]) if len(parts) >= 3 else (parts[1] if len(parts) > 1 else "?")
+    concurrency = data.get("concurrency") or data.get("benchmark", {}).get("concurrency")
+    return {
+        "backend": backend,
+        "model":   model,
+        "concurrency":              concurrency,
+        "ttft_p50_ms":              _ns_to_ms(ttft.get("p50") or ttft.get("median")),
+        "ttft_p99_ms":              _ns_to_ms(ttft.get("p99")),
+        "request_throughput":       _num(rps.get("avg") if isinstance(rps, dict) else rps),
+        "output_token_throughput":  _num(tps.get("avg") if isinstance(tps, dict) else tps),
+        "error_rate":               _num(err) if not isinstance(err, dict) else _num(err.get("avg")),
+        "_path": str(jpath),
+    }
+
+
 @app.command()
 def main(
     gpu: str = typer.Option(..., help="GPU profile name; reads benchmarks/results/<gpu>/"),
@@ -1001,6 +1116,14 @@ def main(
         out.append("## 8. Environment")
         out.append("")
         out.extend(_env_block(rows))
+        out.append("")
+
+    # Section 9: AIPerf concurrency curves (PR #6). No-op when no aiperf/
+    # artifacts are present yet; emit a stub so the customer knows the
+    # section exists once they run `bench load-test`.
+    aiperf_block = _aiperf_concurrency_section(gpu_dir)
+    if aiperf_block:
+        out.extend(aiperf_block)
         out.append("")
 
     summary_path = gpu_dir / "summary.md"

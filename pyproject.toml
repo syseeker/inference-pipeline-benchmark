@@ -52,6 +52,11 @@ sglang  = [
 trtllm  = []
 modelopt= []                                  # nvidia-modelopt is installed from NVIDIA's index
 triton  = ["tritonclient[grpc]>=2.45"]
+# AIPerf — NVIDIA's client-side load generator. Speaks OpenAI Chat
+# Completions so it works against vLLM / SGLang / TRT-LLM endpoints
+# as-is; `bench load-test` wraps it for concurrency-curve measurement
+# (PR #6). Kept in its own extra so the base install stays slim.
+aiperf  = ["aiperf>=0.10"]
 # NitroGen diffusion-policy backend. `nitrogen` itself (the package + ng.pt
 # checkpoint) is installed from its own repo (pip install -e ../NitroGen) plus
 # `hf download nvidia/NitroGen ng.pt`; torch/diffusers/transformers come with

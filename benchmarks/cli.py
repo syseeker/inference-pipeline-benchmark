@@ -181,12 +181,15 @@ def probe(
 # --------------------------------------------------------------------------- #
 
 _BACKEND_EXTRAS = {
-    "vllm": ["vllm", "dev"],
-    "sglang": ["sglang", "dev"],
-    "trtllm": ["dev"],          # tensorrt-llm wheel installed separately (NVIDIA index)
+    # AIPerf bundled into the HTTP-backend extras so `bench load-test`
+    # (PR #6) Just Works against any venv `bench setup` produced.
+    "vllm":   ["vllm", "aiperf", "dev"],
+    "sglang": ["sglang", "aiperf", "dev"],
+    "trtllm": ["aiperf", "dev"],   # tensorrt-llm wheel installed separately (NVIDIA index)
+    "nim":    ["nim", "aiperf", "dev"],
+    # NitroGen is ZMQ + single-flight today — no AIPerf install needed.
     "nitrogen": ["nitrogen", "dataset", "dev"],
     "nitrogen-quant": ["nitrogen", "nitrogen-quant", "dataset", "dev"],
-    "nim": ["nim", "dev"],
 }
 
 
@@ -468,6 +471,156 @@ def summary(
         artifacts=[str(summary_path)] if summary_path.exists() else [],
         next_action=f"read {summary_path}",
         data={"gpu": gpu, "summary_path": str(summary_path)},
+        json_out=json_out,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# bench load-test (PR #6 — AIPerf concurrency sweeps for HTTP backends)       #
+# --------------------------------------------------------------------------- #
+
+
+def _aiperf_endpoint_type_for(backend: str) -> str:
+    """Map our backend names to AIPerf's --endpoint-type values.
+
+    HTTP backends all speak the OpenAI Chat Completions surface. NitroGen
+    speaks ZMQ and is single-flight by server design (see PR #6 SKILL
+    doc), so we refuse it here rather than silently fall back.
+    """
+    if backend in ("vllm", "sglang", "trtllm", "nim"):
+        return "chat"
+    raise ValueError(
+        f"backend {backend!r} has no AIPerf endpoint type. "
+        "NitroGen rounds are ZMQ + single-flight; for concurrency curves on "
+        "policy models see PR #8 (replicate-per-GPU). Today, NitroGen latency "
+        "at concurrency=1 comes from `bench sweep`."
+    )
+
+
+@app.command(
+    "load-test",
+    help="AIPerf concurrency sweep against a running HTTP backend (vLLM / SGLang / TRT-LLM).",
+)
+def load_test(
+    gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/ — used to resolve `base_url` for the named backend."),
+    backend: str = typer.Option(..., help="HTTP backend name from the GPU yaml (vllm | sglang | trtllm | nim)."),
+    model: str = typer.Option(..., help="Served model identifier — passed to AIPerf as `--model`."),
+    concurrency: str = typer.Option(
+        "1,4,16,32",
+        help="Comma-separated concurrency levels to sweep. Each becomes one AIPerf phase; results combine into a single concurrency curve.",
+    ),
+    warmup: int = typer.Option(10, help="Warmup requests per phase (AIPerf rejects warmup=0)."),
+    request_count: int = typer.Option(200, help="Measured requests per phase."),
+    duration: int = typer.Option(0, help="If > 0, use a wall-clock budget (seconds) instead of `--request-count`."),
+    artifact_dir: Path = typer.Option(None, help="Output dir for AIPerf artifacts. Default: benchmarks/results/<gpu>/aiperf/<backend>-<model>-<ts>/."),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Run AIPerf against an already-running HTTP server.
+
+    Does NOT launch the server — point at one started by `bench smoke`
+    or `bench sweep`. AIPerf writes profile_export_aiperf.{csv,json}
+    under `benchmarks/results/<gpu>/aiperf/...`; the summary generator
+    picks them up via the new "Concurrency profile" section.
+
+    NitroGen: refused at the input stage with a pointer to PR #8.
+    """
+    if backend.startswith("nitrogen"):
+        emit(
+            command="load-test",
+            status="error",
+            error={
+                "code": EXIT_UNSUPPORTED,
+                "remediation": (
+                    "NitroGen runs as a single-flight ZMQ server (REP socket). "
+                    "AIPerf concurrency sweeps need a multi-flight endpoint — "
+                    "see PR #8 (replicate-per-GPU). Today, NitroGen latency at "
+                    "concurrency=1 comes from `bench sweep`."
+                ),
+            },
+            json_out=json_out,
+            exit_code=EXIT_UNSUPPORTED,
+        )
+
+    try:
+        endpoint_type = _aiperf_endpoint_type_for(backend)
+    except ValueError as e:
+        emit(
+            command="load-test", status="error",
+            error={"code": EXIT_GENERIC, "remediation": str(e)},
+            json_out=json_out, exit_code=EXIT_GENERIC,
+        )
+
+    # Resolve base_url from the GPU yaml so agents don't memorize ports.
+    from benchmarks.scenario_config import load_gpu_config
+
+    try:
+        cfg = load_gpu_config(gpu)
+    except FileNotFoundError as e:
+        emit(
+            command="load-test", status="error",
+            error={"code": EXIT_GENERIC, "remediation": str(e)},
+            json_out=json_out, exit_code=EXIT_GENERIC,
+        )
+    bk = cfg.get("backends", {}).get(backend)
+    if not bk:
+        emit(
+            command="load-test", status="error",
+            error={"code": EXIT_GENERIC, "remediation": f"backend {backend!r} not in benchmarks/configs/{gpu}.yaml"},
+            json_out=json_out, exit_code=EXIT_GENERIC,
+        )
+    base_url = str(bk["base_url"]).rstrip("/")
+    # AIPerf's --url is the server root (http://host:port), not the
+    # endpoint path — strip /v1 if the yaml carries it.
+    if base_url.endswith("/v1"):
+        base_url = base_url[: -len("/v1")]
+
+    if artifact_dir is None:
+        import time
+
+        ts = time.strftime("%Y%m%dT%H%M%S")
+        artifact_dir = RESULTS_ROOT / gpu / "aiperf" / f"{backend}-{model.replace('/', '-')}-{ts}"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "aiperf", "profile",
+        "--url", base_url,
+        "--model", model,
+        "--endpoint-type", endpoint_type,
+        "--concurrency", concurrency,
+        "--warmup-request-count", str(warmup),
+        "--output-artifact-dir", str(artifact_dir),
+    ]
+    if duration > 0:
+        cmd += ["--benchmark-duration", str(duration)]
+    else:
+        cmd += ["--request-count", str(request_count)]
+
+    res = _run(cmd, capture=json_out)
+    if res.returncode != 0:
+        emit(
+            command="load-test", status="error",
+            error={
+                "code": EXIT_RUNTIME,
+                "remediation": (res.stderr or f"aiperf failed; see {artifact_dir}").strip()[:500],
+            },
+            artifacts=[str(artifact_dir)],
+            json_out=json_out, exit_code=EXIT_RUNTIME,
+        )
+
+    canonical = artifact_dir / "profile_export_aiperf.json"
+    emit(
+        command="load-test",
+        status="ok",
+        artifacts=[str(artifact_dir)],
+        next_action=(
+            f"AIPerf wrote {canonical.name}; re-run `bench summary --gpu {gpu}` "
+            "so the Concurrency profile section picks it up."
+        ),
+        data={
+            "gpu": gpu, "backend": backend, "model": model,
+            "concurrency_sweep": [int(c) for c in concurrency.split(",")],
+            "artifact_dir": str(artifact_dir),
+        },
         json_out=json_out,
     )
 

@@ -48,11 +48,12 @@ Then rewrite the Core findings section in place. Keep section 1
 
 ## What the metrics mean (one-liner each)
 
-- **e2e p50/p95/p99** — full `Pipeline.run()` wall time (vision → reasoner → decode → validate → execute). **p99 is what users feel** for real-time apps.
-- **TTFT** — time to first token. Dominates when prefill / graph capture is heavy (see TRT-LLM SM_120 cases).
+- **e2e p50/p95/p99** — full `Pipeline.run()` wall time (vision → reasoner → decode → validate → execute). **p99 is what users feel** for real-time apps. Concurrency=1.
+- **TTFT** *(section 2)* — time to first token, measured at concurrency=1 inside `bench sweep`. Dominates when prefill / graph capture is heavy.
 - **DRAM_ACTIVE** — memory-bandwidth utilisation (DCGM). Distinguishes bandwidth-bound (≥70%) vs launch-bound (<10%) vs compute-bound (SM ≥80%).
 - **J/req** — `power_avg × wall_time / n_completed`. Cost at scale; long-tail TTFT inflates it even at low `power_avg`.
-- **grammar_valid / exec_accept** — VLM-only. **For policy (nitrogen) rows these collapse to 100% by construction** and tell you nothing about policy quality. Grade those rows by the future action-MSE / button-agreement columns when [PR #5](https://example.invalid) lands the real accuracy pipeline.
+- **grammar_valid / exec_accept** — VLM-only. **For policy (nitrogen) rows these collapse to 100% by construction** and tell you nothing about policy quality. Grade those by the action-MSE / button-agreement columns from PR #5+.
+- **Section 9 — Concurrency profile (AIPerf)** *(PR #6)* — TTFT/req-throughput at concurrency `1/4/16/32` from `bench load-test`. **Different scope from section 2**: AIPerf measures the **reasoner HTTP call only**, not the full pipeline. Use it to read off "where does throughput cap" and "where does TTFT degrade". Section 2 stays the customer-experience number; section 9 is the engine-scaling number. HTTP backends only (vLLM/SGLang/TRT-LLM); NitroGen is single-flight by ZMQ design and gets a stub row until PR #8 (replicate-per-GPU).
 
 ## Decision tree for under-performers
 

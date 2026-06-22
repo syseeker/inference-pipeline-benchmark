@@ -105,6 +105,27 @@ single-round run on the default model.
 | `4` | missing dep / credential | If `bench setup` failed: try the `next_action` hint in its JSON (often "now install: …"). If HF model gated: `huggingface-cli login`. |
 | `1` | generic | Print the `error.remediation` text and stop. |
 
+## Optional step 6 — Concurrency curves (HTTP backends only)
+
+`bench sweep` measures at concurrency=1 only. For throughput-vs-latency
+curves at production-shaped load — TTFT degradation, throughput-knee —
+add a second pass with [AIPerf](https://github.com/ai-dynamo/aiperf):
+
+```bash
+# Server must still be running (e.g. from bench smoke or your own launch).
+bench load-test --gpu rtx_pro6000 --backend vllm \
+  --model Qwen/Qwen3-VL-32B-Instruct-FP8 \
+  --concurrency "1,4,16,32" \
+  --json
+bench summary --gpu rtx_pro6000 --json
+# Read the new "9. Concurrency profile" section in summary.md.
+```
+
+**NitroGen has no AIPerf path today** — its ZMQ server is single-flight
+by design. `bench load-test --backend nitrogen-*` refuses cleanly with
+the right exit code (2) and a pointer to PR #8 (replicate-per-GPU).
+NitroGen concurrency=1 numbers come from `bench sweep`.
+
 ## Reading the result
 
 After step 5, `bench summary` writes `benchmarks/results/<gpu>/summary.md`.
