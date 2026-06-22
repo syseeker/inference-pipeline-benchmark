@@ -6,7 +6,13 @@ instruction) → (low-level action sequence) example, captured straight
 from a running game so the visuals look like what the customer's end users
 will actually see.
 
-## On-disk shape
+> For the full story on the scenario shape — including the optional
+> `gold_action.json` sidecar policy backends use, presence-dispatch in
+> the grader, and how to register your own dataset as a scenario source
+> — read [docs/scenarios.md](../../../docs/scenarios.md). This README
+> covers only the human-authored VLM-style scenarios in this directory.
+
+## On-disk shape (VLM scenarios)
 
 ```
 tests/smoke/scenarios/<name>/
@@ -17,7 +23,10 @@ tests/smoke/scenarios/<name>/
 
 Pydantic models in [schema.py](schema.py); loader in [loader.py](loader.py).
 `ScenarioRequest` is the on-disk mirror of the production
-`PipelineRequest`.
+`PipelineRequest`. The `expected.json` ground truth is **optional** —
+policy scenarios under `tests/smoke/scenarios_nitrogen/` ship
+`gold_action.json` instead. See [docs/scenarios.md](../../../docs/scenarios.md)
+for the two-ground-truth model.
 
 ## The three scenarios
 

@@ -152,6 +152,9 @@ scripts/run_all_scenarios.sh --gpu rtx_pro6000 --sweep nitrogen-backends \
 The NitroGen scenarios are built from the `nvidia/NitroGen` dataset (action
 annotations + source-video frames) by
 [`scripts/build_nitrogen_scenarios.py`](../scripts/build_nitrogen_scenarios.py).
+For the field-by-field mapping (chunk → scenario) and the reasoning behind
+converting to a common shape — plus how to plug in your own dataset
+without forking — see [docs/scenarios.md](scenarios.md).
 
 ## Sources
 
