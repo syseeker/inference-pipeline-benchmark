@@ -1,0 +1,95 @@
+---
+description: Read benchmarks/results/<gpu>/summary.md + the per-result JSONs and rewrite the Core findings in the validated house style. Apply the "winner first, why + how-to-improve" rule. Cross-check docs/findings/knowledge.yaml for known-cause explanations of under-performers.
+alwaysApply: false
+globs: ["benchmarks/**", "scripts/**", "tests/smoke/scenarios*/**"]
+---
+
+# interpret-benchmark-summary
+
+## When to invoke
+
+- "what did the sweep show"
+- "rewrite the Core findings"
+- "why did `X` underperform `Y`"
+- "summarise the latest run"
+
+## The house style (non-negotiable)
+
+These rules came from review feedback that's been validated across
+multiple sweeps. Don't drift.
+
+1. **First bullet = the winner.** Format: model + backend + variant + the
+   one-line *why* (the structural reason, not "it was fastest").
+2. **≤ 10 bullets total.** Less is better.
+3. **Every under-performer bullet must include BOTH:**
+   - **Why:** the structural cause (kernel, capability, MoE arch, etc.)
+   - **How to improve:** the concrete action (flag, version bump, pin out)
+   Never just "X is slower than Y" — that's a number, not a finding.
+4. **Cite the knowledge entry** when one exists in `docs/findings/knowledge.yaml`
+   for the (gpu, framework, model) tuple. The summary generator already
+   wires this through — preserve it.
+
+## Recipe
+
+```bash
+# 1. Make sure summary.md reflects the latest JSONs
+bench summary --gpu rtx_pro6000 --json
+
+# 2. Read it
+cat benchmarks/results/rtx_pro6000/summary.md
+```
+
+Then rewrite the Core findings section in place. Keep section 1
+(Decision metrics) and below untouched — they're auto-generated.
+
+## What the metrics mean (one-liner each)
+
+- **e2e p50/p95/p99** — full `Pipeline.run()` wall time (vision → reasoner → decode → validate → execute). **p99 is what users feel** for real-time apps.
+- **TTFT** — time to first token. Dominates when prefill / graph capture is heavy (see TRT-LLM SM_120 cases).
+- **DRAM_ACTIVE** — memory-bandwidth utilisation (DCGM). Distinguishes bandwidth-bound (≥70%) vs launch-bound (<10%) vs compute-bound (SM ≥80%).
+- **J/req** — `power_avg × wall_time / n_completed`. Cost at scale; long-tail TTFT inflates it even at low `power_avg`.
+- **grammar_valid / exec_accept** — VLM-only. **For policy (nitrogen) rows these collapse to 100% by construction** and tell you nothing about policy quality. Grade those rows by the future action-MSE / button-agreement columns when [PR #5](https://example.invalid) lands the real accuracy pipeline.
+
+## Decision tree for under-performers
+
+For each backend that's not the winner, ask:
+
+1. **Is there a known finding for this (gpu, framework, model)?**
+   Check [docs/findings/](../../docs/findings/) and `knowledge.yaml`.
+   If yes, quote it.
+2. **Else is the gap kernel-availability?** Look for "missing fused
+   path", "DeepGEMM SM_90", "fused-MoE shmem" patterns in the server log.
+3. **Else is TTFT > 50% of e2e?** Then it's first-call overhead (graph
+   capture, JIT) — propose `--enforce-eager` or pin out.
+4. **Else is DRAM_ACTIVE high?** Then bandwidth-bound — propose
+   quantisation or larger batch.
+
+Only after exhausting 1–4 should you write "[TBD]" for the cause.
+
+## Today's PRO 6000 NitroGen result (example output)
+
+```markdown
+- **Best run: `nitrogen-500m-bf16` on `nitrogen-cudagraph` baseline** —
+  e2e p50 **106.2 ms**, 9.3 seq/s, 10.7 J/req. **Why:** the DiT denoise
+  loop is 16 tiny sequential kernels; CUDA-graph capture removes the
+  per-kernel launch overhead, which dominates at batch=1 (DRAM_ACTIVE 0.4%
+  → no compute/bandwidth pressure).
+- **eager and compile tie cudagraph within 2 ms.** **Why:** with autocast
+  (PR #1 path) and fp32 internal buffers, the launch-cost saving from
+  graph capture is single-digit ms in absolute terms because the model
+  is already so small. **How to extend:** raise denoise steps or batch
+  parallel sim instances — graph capture's advantage compounds with
+  iteration count and batch.
+- **fp8 / fp8-4step / nvfp4 rounds: NOT RUN.** **Why:**
+  `nitrogen_exec.py` stubs TRT/ONNX with a RuntimeError pending modelopt
+  quant + export. **How to improve:** see PR #5 — calibrate via
+  `mtq.quantize(model, mtq.FP8_DEFAULT_CFG, …)`, export to TRT plan,
+  swap the serve-loop forward.
+```
+
+## Pinned references
+
+- Metric defs: [docs/metrics.md](../../docs/metrics.md)
+- Known-cause library: [docs/findings/knowledge.yaml](../../docs/findings/knowledge.yaml)
+- Per-finding write-ups: [docs/findings/](../../docs/findings/)
+- Summary generator: [benchmarks/summary.py](../../benchmarks/summary.py)

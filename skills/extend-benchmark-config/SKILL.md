@@ -1,0 +1,160 @@
+---
+name: extend-benchmark-config
+description: |
+  Edit benchmarks/configs/<gpu>.yaml to add a new model, GPU profile,
+  or sweep. Respects the schema (models / backends / sweeps), the
+  unsupported_backends pin field, the family: key for backend_args
+  fan-out, and the prefer-latest-models rule.
+---
+
+# extend-benchmark-config
+
+## When to invoke
+
+- "add `<model>` to the `<GPU>` yaml"
+- "add a `<GPU>` profile"
+- "pin out `<backend>` on `<model>` because <reason>"
+- "create a new sweep `<name>`"
+
+This skill writes YAML. It does NOT run benchmarks — that's
+[benchmark-gpu-inference](../benchmark-gpu-inference/SKILL.md).
+
+## Schema cheat-sheet
+
+```yaml
+display_name: "RTX PRO 6000 Blackwell Server Edition"
+arch: blackwell                # hopper | blackwell | ada
+vram_gb: 96
+peak_bandwidth_tbps: 1.6
+driver: "unknown"              # filled by gpu_probe.sh
+
+models:
+  <stable-id>:
+    hf_id: "<vendor>/<repo>"   # vLLM/SGLang/TRT-LLM HF id
+    family: "<family>"         # qwen3-vl | nemotron | nitrogen | ...
+    role: "<role>"             # vlm-headline | policy-reference | ...
+    quantization: bf16 | fp8 | nvfp4
+    notes: "<one line>"
+    unsupported_backends:      # OPTIONAL — covers direct + sweep + bash paths
+      <backend>: "<one-line reason>"
+    backend_args:              # per-backend launch flags. `family:` key
+                               # on a backend lets one entry serve all
+                               # engines in that family (nitrogen-eager,
+                               # nitrogen-compile, …).
+      vllm:    ["--max-model-len=32768", "--no-enable-prefix-caching"]
+      sglang:  ["--context-length=32768"]
+      nitrogen: ["--precision=fp8", "--steps=16"]
+
+default_model: <stable-id>
+
+backends:
+  vllm:
+    base_url: "http://localhost:8000/v1"
+    port: 8000
+    extra_args: ["--gpu-memory-utilization=0.90"]
+    variants: { eager: ["--enforce-eager"], ... }
+  nitrogen-eager:              # ZMQ engine — each engine gets its own
+    transport: zmq             # port (PR #1: 5560..5564)
+    family: nitrogen
+    base_url: "tcp://localhost:5560"
+    port: 5560
+    extra_args: ["--exec=eager", "--seed=0"]
+
+sweeps:
+  <name>:
+    rounds:
+      - {model: <id>, backends: [<backend>, ...]}
+      - {model: <id>, variant: <variant>}  # optional
+```
+
+## House rules
+
+These are accumulated from feedback memory; honour them:
+
+1. **Prefer the latest model over backend coverage.** If you can't choose
+   between Qwen3-VL-32B-FP8 and Qwen3.5-32B-FP8, pick the newer one even
+   if a backend can't load it yet. Pin the broken backend out via
+   `unsupported_backends`. The user plans the bump; you don't downgrade.
+2. **`unsupported_backends` is the single source of truth** for the skip
+   logic (direct runs, sweeps, and the bash launcher all consult it via
+   `benchmarks.scenario_config --unsupported-reason`). Don't add ad-hoc
+   guards elsewhere.
+3. **One port per engine** for NitroGen `nitrogen-*` family — orphan
+   listeners survive shared-host crashes and block subsequent runs.
+   Today: 5560 (eager) / 5561 (compile) / 5562 (cudagraph) / 5563 (trt)
+   / 5564 (onnx). Reuse the spread for a new engine.
+4. **`family:` on a backend = `backend_args.<family>:` on the model.**
+   Lets one model entry cover N engine variants. See `nitrogen` models.
+
+## Recipe for common asks
+
+### "Add `<HF id>` to `<GPU>`"
+
+1. Open the GPU yaml. Find the right `models:` slot (group by family).
+2. Insert with the fields above. Use the largest precision-quant
+   variant that fits VRAM (see [docs/capacity.md](../../docs/capacity.md)).
+3. **Decide `unsupported_backends`** by checking the four known
+   incompatibility classes (PRO 6000 / Blackwell SM_120):
+   - Missing-arch in TRT-LLM 1.2.1's transformers registry
+   - DeepGEMM SM_90 hard-check on fused-MoE
+   - SGLang triton fused-MoE shmem on SM_120
+   - vLLM flashinfer-autotune cuBLASLt FP8 on SM_120
+4. Add an entry to `sweeps.full.rounds` if it should be in the full
+   matrix; otherwise leave it for one-off runs via `--model`.
+5. Update [docs/models.md](../../docs/models.md) with the rationale.
+
+### "Add a `<GPU>` profile"
+
+1. Start from the closest existing yaml (PRO 6000 if Blackwell, H200 if
+   Hopper, 5090 if consumer).
+2. Update `display_name / arch / vram_gb / peak_bandwidth_tbps`.
+3. Re-evaluate every `unsupported_backends` entry — the kernel
+   constraints are *per arch*, not universal.
+4. Adjust `max-model-len` per-model to fit the new VRAM budget. The
+   math: `weight_bytes + kv_per_token × seq_len × num_seqs ≤ vram × 0.85`.
+
+### "Pin out `<backend>` on `<model>`"
+
+```yaml
+models:
+  <id>:
+    unsupported_backends:
+      <backend>: "<one-line cause>"
+```
+
+Then write a finding under [docs/findings/](../../docs/findings/) with
+the full diagnosis if the user provided one — it gets picked up by the
+summary generator via [knowledge.yaml](../../docs/findings/knowledge.yaml).
+
+### "Add a sweep `<name>`"
+
+```yaml
+sweeps:
+  <name>:
+    rounds:
+      - {model: <id>, backends: [<b1>]}     # 1 round = 1 (model, backend) pair
+      - {model: <id>, backends: [<b2>]}
+```
+
+One round per intended cell — don't compress multiple backends into one
+round (the runner iterates `backends` inside a round serially against
+the same server, which only makes sense if you actually want that).
+
+## Verification
+
+After any YAML edit, run:
+
+```bash
+bench scenarios list --json   # ensures the scenarios load
+bench smoke --gpu <gpu> --backend <new-backend> --model <new-model> --json
+```
+
+If the yaml is malformed, `scenario_config` will error loudly — both
+`bench smoke` and `bench sweep` route through it.
+
+## Pinned references
+
+- Live examples: [benchmarks/configs/rtx_pro6000.yaml](../../benchmarks/configs/rtx_pro6000.yaml)
+- Per-finding write-ups: [docs/findings/](../../docs/findings/)
+- Per-GPU model rationale: [docs/models.md](../../docs/models.md)
+- Memory math: [docs/capacity.md](../../docs/capacity.md)

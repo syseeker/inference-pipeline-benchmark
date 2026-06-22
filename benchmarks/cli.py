@@ -269,7 +269,7 @@ def setup(
 
 @scenarios_app.command("build", help="Build scenarios from a registered source.")
 def scenarios_build(
-    source: str = typer.Option("nitrogen", help="Scenario source. Today: 'nitrogen'. Customer-added sources are discovered via the pipeline_bench.scenario_sources entry-point group (PR #4)."),
+    source: str = typer.Option("nitrogen", help="Source name from the pipeline_bench.scenario_sources entry-point group. Built-in: nitrogen. Customer sources are auto-discovered."),
     n: int = typer.Option(3, help="Number of scenarios to produce."),
     out: Path = typer.Option(REPO_ROOT / "tests" / "smoke" / "scenarios_nitrogen", help="Output directory."),
     actions_root: Path = typer.Option(
@@ -285,56 +285,44 @@ def scenarios_build(
     deadline_ms: int = typer.Option(1500),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    if source != "nitrogen":
+    from benchmarks.sources import discover, get
+
+    try:
+        builder = get(source)
+    except KeyError as e:
         emit(
             command="scenarios.build",
             status="error",
-            error={
-                "code": EXIT_GENERIC,
-                "remediation": f"unknown source {source!r}; only 'nitrogen' is built-in. Custom sources land via the entry-points hook in PR #4.",
-            },
+            error={"code": EXIT_GENERIC, "remediation": str(e)},
+            data={"registered_sources": sorted(discover())},
             json_out=json_out,
             exit_code=EXIT_GENERIC,
         )
 
-    actions_root = actions_root or Path(os.environ.get("NITROGEN_ACTIONS_ROOT") or "")
-    if not actions_root or not actions_root.exists():
+    try:
+        count = builder(
+            n=n,
+            out=out,
+            actions_root=actions_root,
+            synthetic_frames=synthetic_frames,
+            game_mapping=game_mapping,
+            cache_dir=cache_dir,
+            deadline_ms=deadline_ms,
+        )
+    except FileNotFoundError as e:
         emit(
             command="scenarios.build",
             status="error",
-            error={
-                "code": EXIT_MISSING_DEP,
-                "remediation": (
-                    "missing --actions-root (or $NITROGEN_ACTIONS_ROOT). Fetch with: "
-                    "hf download nvidia/NitroGen --repo-type dataset --include 'actions/SHARD_0000.tar.gz' "
-                    "--local-dir /your/path && (cd /your/path/actions && tar xzf SHARD_0000.tar.gz)"
-                ),
-            },
+            error={"code": EXIT_MISSING_DEP, "remediation": str(e)},
             json_out=json_out,
             exit_code=EXIT_MISSING_DEP,
         )
-
-    script = REPO_ROOT / "scripts" / "build_nitrogen_scenarios.py"
-    cmd = [
-        sys.executable, str(script),
-        "--actions-root", str(actions_root),
-        "--out", str(out),
-        "--n", str(n),
-        "--cache-dir", str(cache_dir),
-        "--deadline-ms", str(deadline_ms),
-    ]
-    if game_mapping:
-        cmd += ["--game-mapping", str(game_mapping)]
-    if synthetic_frames:
-        cmd += ["--synthetic-frames"]
-
-    res = _run(cmd, capture=json_out)
-    if res.returncode != 0:
+    except Exception as e:
         emit(
             command="scenarios.build",
             status="error",
-            error={"code": EXIT_GENERIC, "remediation": (res.stderr or "scenario builder failed").strip()[:400]},
-            artifacts=[str(out)],
+            error={"code": EXIT_GENERIC, "remediation": str(e)[:500]},
+            artifacts=[str(out)] if out.exists() else [],
             json_out=json_out,
             exit_code=EXIT_GENERIC,
         )
@@ -344,8 +332,24 @@ def scenarios_build(
         command="scenarios.build",
         status="ok",
         artifacts=[str(out)],
-        next_action=f"built {len(built)}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}",
-        data={"source": source, "out_dir": str(out), "count": len(built), "scenarios": built},
+        next_action=f"built {count}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}",
+        data={"source": source, "out_dir": str(out), "count": count, "scenarios": built},
+        json_out=json_out,
+    )
+
+
+@scenarios_app.command("sources", help="List registered scenario sources (built-in + customer entry-points).")
+def scenarios_sources(
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    from benchmarks.sources import discover
+
+    sources = sorted(discover())
+    emit(
+        command="scenarios.sources",
+        status="ok",
+        next_action=f"{len(sources)} source(s) registered",
+        data={"sources": sources},
         json_out=json_out,
     )
 

@@ -26,6 +26,12 @@ dependencies = [
 # status contract documented in benchmarks/cli.py.
 bench = "benchmarks.cli:app"
 
+[project.entry-points."pipeline_bench.scenario_sources"]
+# Built-in scenario sources are registered here too — no special-case
+# path. Customers add their own source by declaring the same group in
+# their own pyproject.toml (see skills/prepare-nitrogen-dataset/SKILL.md).
+nitrogen = "benchmarks.sources.nitrogen:build"
+
 [project.optional-dependencies]
 # Pipeline backend extras — install only what your machine supports.
 # Versions pinned exact to keep benchmark numbers reproducible. Bump

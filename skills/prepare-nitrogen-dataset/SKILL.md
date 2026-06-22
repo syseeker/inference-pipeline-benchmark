@@ -1,0 +1,124 @@
+---
+name: prepare-nitrogen-dataset
+description: |
+  Build benchmark scenarios from the nvidia/NitroGen dataset (or a
+  customer-registered source). Pulls the ng.pt checkpoint + the actions
+  parquet shards, decodes representative frames, and writes per-scenario
+  request.json + gold_action.json. Handles dead URLs, bot-blocking
+  cloud IPs (synthetic-frame fallback), and missing-mapping checkpoints.
+---
+
+# prepare-nitrogen-dataset
+
+This is the extractor. **It writes policy scenarios only** —
+`request.json + gold_action.json + screen.png`. It does NOT synthesise
+a VLM `expected.json`; that needs a human-authored instruction +
+intended action list, which lives in a separate workflow.
+
+## When to invoke
+
+- "pull N nitrogen scenarios"
+- "build benchmark scenarios from `nvidia/NitroGen`"
+- "I need test data for the policy sweep"
+- "fetch the dataset"
+
+If the customer has their own gameplay clips / a different dataset, see
+the **Extension** section — they register a Python entry-point and call
+the same `bench scenarios build --source <their-name>`.
+
+## Recipe
+
+```bash
+# 1. ng.pt checkpoint
+hf download nvidia/NitroGen ng.pt
+# (caches to ~/.cache/huggingface/hub/models--nvidia--NitroGen/.../ng.pt)
+
+# 2. One shard of the actions dataset (~1.7 GB compressed)
+hf download nvidia/NitroGen --repo-type dataset \
+  --include "actions/SHARD_0000.tar.gz" \
+  --local-dir /your/path
+(cd /your/path/actions && tar xzf SHARD_0000.tar.gz)
+
+# 3. Build N scenarios
+bench scenarios build \
+  --source nitrogen \
+  --n 3 \
+  --actions-root /your/path/actions \
+  --out tests/smoke/scenarios_nitrogen \
+  --synthetic-frames \
+  --json
+```
+
+`--synthetic-frames` skips the per-chunk yt-dlp fetch and writes a
+deterministic noise tile per scenario. Real frames are the default but
+require a host that can reach YouTube/Twitch without bot-blocking and
+has a JS runtime on PATH (`node` or `deno`) so yt-dlp can extract
+YouTube. On cloud IPs both conditions usually fail — use synthetic.
+
+## Output shape (per PR #1)
+
+```
+tests/smoke/scenarios_nitrogen/<N>_<game>_<chunk>/
+├── screen.png         (real frame OR synthetic noise per --synthetic-frames)
+├── request.json       (frame ref + game_id; instruction="" for NitroGen)
+└── gold_action.json   (REAL gamepad vector from actions_processed.parquet)
+```
+
+No `expected.json`. The runner's grader dispatches on file presence
+(`bench scenarios list --json` reports `has_expected` / `has_gold_action`
+per scenario).
+
+## Pre-flight checks the skill MUST run (don't skip)
+
+1. **HF auth** — `hf whoami` reachable. If gated repos refuse, prompt the
+   user for `huggingface-cli login`.
+2. **Actions root exists + has `SHARD_*/<vid>/<chunk>/metadata.json`**. If
+   the user gave a path that's the .tar.gz, untar it first.
+3. **ckpt has `tokenizer_cfg.game_mapping_cfg`?** If non-null, pass
+   `--game-mapping <path>`. If null (released `ng.pt` today), omit —
+   the model is unconditional and the script's identity fallback handles
+   it. Don't `--game-mapping ng.pt` reflexively; PR #1 fixed but it's
+   still a footgun.
+4. **JS runtime on PATH** — only if not `--synthetic-frames`. If neither
+   `node` nor `deno` on PATH, yt-dlp can't extract YouTube → switch to
+   `--synthetic-frames` and tell the user.
+
+## Failure recovery
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Built 0/N` and `[skip] yt-dlp failed: ... JavaScript runtime`  | No node/deno on the box | Install one OR pass `--synthetic-frames` |
+| `Built 0/N` and `[skip] ... Sign in to confirm you're not a bot`  | YouTube cloud-IP rate-limit | Pass `--synthetic-frames`. Real frames require cookies — out of scope for this skill |
+| `[skip] ... 'game_X' not found in game_mapping`  | Wrong mapping passed | Omit `--game-mapping` — released ng.pt is unconditional |
+| `[skip] No such file: actions_processed.parquet`  | Chunk dir exists but parquet missing — partial extraction | Re-untar the shard, OR over-sample more (`--n` higher) |
+
+## Extension (PR #4: customer-supplied sources)
+
+Customers add their own scenario source via a Python entry-point:
+
+```toml
+# in the customer's pyproject.toml
+[project.entry-points."pipeline_bench.scenario_sources"]
+my-gameplay = "my_pkg.scenarios:build"
+```
+
+The `build` function signature:
+
+```python
+def build(*, n: int, out: Path, **kwargs) -> int:
+    """Write N scenarios under `out/` using the same on-disk shape as
+    prepare-nitrogen-dataset (request.json + gold_action.json + screen.png,
+    OR request.json + expected.json if you have VLM labels)."""
+    ...
+```
+
+Then: `bench scenarios build --source my-gameplay --n 10`.
+
+Discovery is automatic — `bench scenarios build` lists registered sources
+in its `--help`. No fork of this repo needed.
+
+## Pinned references
+
+- Builder script: [scripts/build_nitrogen_scenarios.py](../../scripts/build_nitrogen_scenarios.py)
+- Scenario schema (loader): [tests/smoke/scenarios/schema.py](../../tests/smoke/scenarios/schema.py)
+- Dataset card: https://huggingface.co/datasets/nvidia/NitroGen
