@@ -37,6 +37,22 @@ If the user only wants raw scenario building, use [prepare-nitrogen-dataset](../
 If they only want to install a backend, use [setup-inference-backend](../setup-inference-backend/SKILL.md).
 If they only want to read existing results, use [interpret-benchmark-summary](../interpret-benchmark-summary/SKILL.md).
 
+## First-time install in your agent
+
+Cursor and Codex auto-discover the files at repo root (`.cursor/rules/` and
+`AGENTS.md`). Claude Code does NOT auto-load `skills/<name>/SKILL.md` from
+the repo root, so for Claude Code one extra step:
+
+```bash
+bench install-skill --agent claude --json     # project-scope (default)
+bench install-skill --agent claude --user --json   # ~/.claude/skills/, all repos
+bench install-skill --agent auto --json       # detect from env; install where needed
+```
+
+Default install is **symlinks**, so edits to `skills/<name>/SKILL.md` show
+up live. Pass `--copy` to detach. `bench install-skill` is idempotent and
+reports per-agent state in its JSON output.
+
 ## The five-step flow
 
 Every benchmark run goes through the same five `bench` commands. JSON

@@ -471,6 +471,190 @@ def summary(
     )
 
 
+# --------------------------------------------------------------------------- #
+# bench install-skill                                                         #
+# --------------------------------------------------------------------------- #
+
+# How each agent host discovers its skill/rule files. `dest_fn` returns the
+# install path; `source_root` is what we install from.
+_AGENT_TARGETS = {
+    "claude": {
+        # Claude Code reads <project>/.claude/skills/<name>/SKILL.md (project-
+        # local) or ~/.claude/skills/<name>/SKILL.md (--user). The repo-root
+        # `skills/` is the source layout — install copies/links each subdir.
+        "source": REPO_ROOT / "skills",
+        "needs_install": True,
+    },
+    "cursor": {
+        # .cursor/rules/<name>.mdc is the file Cursor loads. We render those
+        # at repo root from skills/ via scripts/render_agent_docs.py — they
+        # ARE the installed form. No copy needed for a project-local clone.
+        "source": REPO_ROOT / ".cursor" / "rules",
+        "needs_install": False,
+    },
+    "codex": {
+        # AGENTS.md at repo root is rendered from skills/. Codex auto-loads
+        # it from the project. No copy needed.
+        "source": REPO_ROOT / "AGENTS.md",
+        "needs_install": False,
+    },
+}
+
+
+def _detect_agents() -> list[str]:
+    """Best-effort detection of which agents are running this clone.
+
+    Heuristics:
+      claude  -> $CLAUDECODE or $CLAUDE_PROJECT_DIR
+      cursor  -> $CURSOR_PROJECT or a `.cursor/` dir already present
+      codex   -> $CODEX_PROJECT or $OPENAI_AGENTS_HOME
+
+    Empty -> caller asked auto and we couldn't tell; install all three.
+    """
+    found: list[str] = []
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_PROJECT_DIR"):
+        found.append("claude")
+    if os.environ.get("CURSOR_PROJECT") or (REPO_ROOT / ".cursor").is_dir():
+        found.append("cursor")
+    if os.environ.get("CODEX_PROJECT") or os.environ.get("OPENAI_AGENTS_HOME"):
+        found.append("codex")
+    return found
+
+
+def _install_claude(*, user_scope: bool, copy: bool, dry_run: bool) -> tuple[list[str], list[str]]:
+    """Install skills/<name>/ into the agent's expected location.
+
+    Returns (installed_paths, skipped_reasons).
+    """
+    src_root: Path = _AGENT_TARGETS["claude"]["source"]  # type: ignore[assignment]
+    if not src_root.is_dir():
+        return [], [f"source dir missing: {src_root}"]
+
+    if user_scope:
+        dest_root = Path.home() / ".claude" / "skills"
+    else:
+        dest_root = REPO_ROOT / ".claude" / "skills"
+
+    installed: list[str] = []
+    skipped: list[str] = []
+    for skill_dir in sorted(src_root.iterdir()):
+        if not (skill_dir / "SKILL.md").exists():
+            continue
+        dest = dest_root / skill_dir.name
+        if dest.exists() or dest.is_symlink():
+            skipped.append(f"{dest} exists (pass --force to replace)")
+            continue
+        if dry_run:
+            installed.append(str(dest))
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if copy:
+            import shutil
+
+            shutil.copytree(skill_dir, dest)
+        else:
+            # Relative symlink for project-scope; absolute for user-scope so
+            # the link doesn't break if the user moves their home.
+            target = skill_dir if user_scope else Path(os.path.relpath(skill_dir, dest.parent))
+            dest.symlink_to(target, target_is_directory=True)
+        installed.append(str(dest))
+    return installed, skipped
+
+
+@app.command("install-skill", help="Install the bundled skills into your agent's expected location.")
+def install_skill(
+    agent: str = typer.Option(
+        "auto",
+        help="One of: claude | cursor | codex | all | auto. `auto` detects from env + repo state.",
+    ),
+    user: bool = typer.Option(
+        False, "--user", help="Install at ~/.<agent>/ instead of <repo>/.<agent>/ (claude only)."
+    ),
+    copy: bool = typer.Option(
+        False, "--copy", help="Copy files instead of symlinking. Detaches the install from this clone."
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace existing install."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would change; do not write."),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Render-then-install for asymmetric agent hosts.
+
+    Cursor and Codex auto-discover files already at repo root (`.cursor/rules/`,
+    `AGENTS.md`) — for those, this command is a no-op that just confirms the
+    files exist. Claude Code does NOT auto-load `skills/<name>/SKILL.md` from
+    the repo root, so for `claude` we install (symlink by default) into
+    `.claude/skills/<name>/` (project) or `~/.claude/skills/<name>/` (--user).
+    """
+    if agent == "auto":
+        detected = _detect_agents()
+        agents = detected or ["claude", "cursor", "codex"]
+    elif agent == "all":
+        agents = ["claude", "cursor", "codex"]
+    elif agent in _AGENT_TARGETS:
+        agents = [agent]
+    else:
+        emit(
+            command="install-skill",
+            status="error",
+            error={"code": EXIT_GENERIC, "remediation": f"unknown agent {agent!r}; expected: claude | cursor | codex | all | auto"},
+            json_out=json_out,
+            exit_code=EXIT_GENERIC,
+        )
+
+    results: dict[str, dict[str, Any]] = {}
+    all_artifacts: list[str] = []
+    for a in agents:
+        target = _AGENT_TARGETS[a]
+        if not target["needs_install"]:
+            source: Path = target["source"]  # type: ignore[assignment]
+            ok = source.exists()
+            results[a] = {
+                "status": "ok" if ok else "missing",
+                "scope": "project (auto-loaded)",
+                "source": str(source),
+                "note": f"{a} reads {source.name} directly — no install needed"
+                if ok
+                else f"missing: {source}. Run `python scripts/render_agent_docs.py` first.",
+            }
+            if ok:
+                all_artifacts.append(str(source))
+            continue
+
+        if force and not dry_run:
+            # Remove existing installs only for the agents we're acting on.
+            scope_root = (
+                Path.home() / ".claude" / "skills"
+                if user
+                else REPO_ROOT / ".claude" / "skills"
+            )
+            if scope_root.exists():
+                import shutil
+
+                shutil.rmtree(scope_root)
+
+        installed, skipped = _install_claude(user_scope=user, copy=copy, dry_run=dry_run)
+        results[a] = {
+            "status": "ok",
+            "scope": "user (~/.claude)" if user else "project (.claude)",
+            "method": "copy" if copy else "symlink",
+            "installed": installed,
+            "skipped": skipped,
+        }
+        all_artifacts.extend(installed)
+
+    emit(
+        command="install-skill",
+        status="ok",
+        artifacts=all_artifacts,
+        next_action=(
+            "skill files in place. For claude: open a new Claude Code session in this repo; "
+            "it'll discover `.claude/skills/`. For cursor/codex: nothing to do — already auto-loaded."
+        ),
+        data={"agents": results, "dry_run": dry_run},
+        json_out=json_out,
+    )
+
+
 @app.command(help="Run one scenario end-to-end against a backend (single round).")
 def smoke(
     gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
