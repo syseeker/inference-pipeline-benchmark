@@ -37,6 +37,23 @@ If the user only wants raw scenario building, use [prepare-nitrogen-dataset](../
 If they only want to install a backend, use [setup-inference-backend](../setup-inference-backend/SKILL.md).
 If they only want to read existing results, use [interpret-benchmark-summary](../interpret-benchmark-summary/SKILL.md).
 
+## NitroGen FP8 / NVFP4 — pre-calibrated artifacts
+
+For the `nitrogen-tensorrt` and `nitrogen-onnx` sweep rounds (which need
+FP8 or NVFP4 weights), customers do **not** recalibrate. The harness
+downloads pre-built artifacts from `syseeker-at-nv/nitrogen-quant` on first
+use — same UX as `hf download nvidia/NitroGen ng.pt`. Cached afterwards.
+
+Force local recalibration only if your production frame distribution
+differs meaningfully from the bundled calib set (mixed-genre game screens):
+
+```bash
+NITROGEN_FORCE_RECALIBRATE=1 bench sweep --gpu rtx_pro6000 ...
+```
+
+See [docs/scenarios.md](../../docs/scenarios.md) and
+[benchmarks/nitrogen_artifacts.py](../../benchmarks/nitrogen_artifacts.py).
+
 ## First-time install in your agent
 
 Cursor and Codex auto-discover the files at repo root (`.cursor/rules/` and
@@ -520,6 +537,7 @@ to recreate.
 | `trtllm` | `.venv-trtllm` | `dev` | `pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com` (NVIDIA wheel, not on PyPI) |
 | `nitrogen` | `.venv-nitrogen` | `nitrogen,dataset,dev` | `pip install -e ../NitroGen` then `hf download nvidia/NitroGen ng.pt` |
 | `nim` | `.venv-nim` | `nim,dev` | `export NIM_API_KEY=...` |
+| `nitrogen-quant` | `.venv-nitrogen` | `nitrogen,nitrogen-quant,dataset,dev` | Same NitroGen prep AS `nitrogen` (`pip install -e ../NitroGen` + `hf download nvidia/NitroGen ng.pt`). Required only when the sweep includes FP8/NVFP4 rounds. Customers do NOT recalibrate — pre-built artifacts download automatically from `syseeker-at-nv/nitrogen-quant` on first FP8/NVFP4 round. |
 
 `bench setup` emits the follow-up step in `data.next_action` of its
 JSON output. Surface it to the user; don't silently skip.

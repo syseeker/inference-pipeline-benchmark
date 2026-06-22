@@ -1,0 +1,58 @@
+artifacts:
+  fp8-steps16:
+    onnx: ng_dit.onnx
+    onnx_sha256: 4abdacf434e92e98ada060fd96077a440ce1bef27a23121f78ca7073f86bcafe
+    onnx_bytes: 488458774
+    meta:
+      precision: fp8
+      steps: 16
+      opset: 20
+      input_shapes:
+        hidden_states:
+        - 1
+        - 18
+        - 1024
+        encoder_hidden_states:
+        - 1
+        - 256
+        - 1024
+        timestep:
+        - 1
+  fp8-steps4:
+    onnx: ng_dit.onnx
+    onnx_sha256: 19b20ce9380ee26cc6c66732769f893043ca617b2622b36cfec7fd58e1865ef9
+    onnx_bytes: 488458774
+    meta:
+      precision: fp8
+      steps: 4
+      opset: 20
+      input_shapes:
+        hidden_states:
+        - 1
+        - 18
+        - 1024
+        encoder_hidden_states:
+        - 1
+        - 256
+        - 1024
+        timestep:
+        - 1
+  nvfp4-steps16:
+    onnx: ng_dit.onnx
+    onnx_sha256: da641f3dbdc936c1759f2a7d8a8a2fe85820cabd15071d6b9c65b1e8795501c7
+    onnx_bytes: 488345256
+    meta:
+      precision: nvfp4
+      steps: 16
+      opset: 20
+      input_shapes:
+        hidden_states:
+        - 1
+        - 18
+        - 1024
+        encoder_hidden_states:
+        - 1
+        - 256
+        - 1024
+        timestep:
+        - 1

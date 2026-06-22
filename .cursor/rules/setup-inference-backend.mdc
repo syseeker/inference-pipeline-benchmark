@@ -31,6 +31,7 @@ to recreate.
 | `trtllm` | `.venv-trtllm` | `dev` | `pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com` (NVIDIA wheel, not on PyPI) |
 | `nitrogen` | `.venv-nitrogen` | `nitrogen,dataset,dev` | `pip install -e ../NitroGen` then `hf download nvidia/NitroGen ng.pt` |
 | `nim` | `.venv-nim` | `nim,dev` | `export NIM_API_KEY=...` |
+| `nitrogen-quant` | `.venv-nitrogen` | `nitrogen,nitrogen-quant,dataset,dev` | Same NitroGen prep AS `nitrogen` (`pip install -e ../NitroGen` + `hf download nvidia/NitroGen ng.pt`). Required only when the sweep includes FP8/NVFP4 rounds. Customers do NOT recalibrate — pre-built artifacts download automatically from `syseeker-at-nv/nitrogen-quant` on first FP8/NVFP4 round. |
 
 `bench setup` emits the follow-up step in `data.next_action` of its
 JSON output. Surface it to the user; don't silently skip.

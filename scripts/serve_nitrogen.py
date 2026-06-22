@@ -96,6 +96,7 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
         # can produce the ONNX), and refuse to serve from it cleanly.
         from pathlib import Path
 
+        from benchmarks.nitrogen_artifacts import ensure_artifact
         from benchmarks.nitrogen_export import (
             cache_paths,
             export_dit_to_onnx,
@@ -106,14 +107,27 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
         )
 
         paths = cache_paths(plan.precision.value, plan.steps)
-        if not paths["onnx"].exists():
-            print(f"[ng-quant] calibrating + exporting {plan.label()} -> {paths['onnx']}")
+        onnx_ready = False
+
+        # Preferred path: download the pre-calibrated artifact from HF. The
+        # calibration is a one-time deterministic operation (frozen ckpt +
+        # frozen calib set + frozen modelopt version) so every customer
+        # pulling the same bytes is the right UX. Falls back to local
+        # calibration only if no manifest entry or NITROGEN_FORCE_RECALIBRATE=1.
+        try:
+            onnx_path = ensure_artifact(plan.precision.value, plan.steps)
+            assert onnx_path.exists(), onnx_path
+            onnx_ready = True
+            print(f"[ng-quant] using pre-built artifact: {onnx_path}")
+        except FileNotFoundError as e:
+            print(f"[ng-quant] no artifact for {plan.label()}: {e}")
+            print(f"[ng-quant] falling back to local calibration + export")
             scen_roots = [
-                Path("tests/smoke/scenarios"),            # real VLM frames
-                Path("tests/smoke/scenarios_nitrogen"),   # policy frames (often synthetic)
+                Path("tests/smoke/scenarios"),
+                Path("tests/smoke/scenarios_nitrogen"),
             ]
             calib = load_calib_images_from_scenarios(*scen_roots)
-            print(f"[ng-quant] calibrating on {len(calib)} frames from {[str(r) for r in scen_roots]}")
+            print(f"[ng-quant] calibrating on {len(calib)} frames")
 
             def _drive(_model, frame):
                 _ = session.predict(frame)
@@ -123,7 +137,11 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
                 calib_images=calib, predict_fn=_drive,
             )
             export_dit_to_onnx(session.model, precision=plan.precision.value, steps=plan.steps)
+            onnx_ready = paths["onnx"].exists()
             print(f"[ng-quant] export complete: {paths['onnx']}")
+
+        if not onnx_ready:
+            raise SystemExit(f"[ng-quant] artifact not produced for {plan.label()}; bailing")
 
         raise SystemExit(
             f"--exec={plan.exec_backend.value} --precision={plan.precision.value} "
