@@ -208,6 +208,15 @@ models:
     ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "nvfp4"
     notes: "NVFP4 — Blackwell-only datatype (PRO 6000 / 5090; not H200 SM_90)."
+    # NVFP4's ONNX op is shipped as a TRT plugin that's not in the default
+    # registry of `tensorrt==10.16.*` (the wheel our [nitrogen-quant] extra
+    # pulls). OnnxParser raises "Plugin not found" during compile. Either
+    # bump tensorrt to a release that ships the FP4 plugin, or wait for
+    # modelopt to ship the matching plugin .so alongside its exports.
+    # FP8 paths work on the same TRT version — only NVFP4 is gated here.
+    unsupported_backends:
+      nitrogen-tensorrt: "NVFP4 plugin not in tensorrt==10.16 default registry; needs newer TRT or modelopt-bundled plugin"
+      nitrogen-onnx:     "same — ORT routes NVFP4 graph through TRT-EP which hits the same plugin"
     backend_args:
       nitrogen: ["--precision=nvfp4", "--steps=16"]
 

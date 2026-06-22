@@ -311,22 +311,198 @@ class OrtDitWrapper:
         return torch.from_numpy(out).to(hidden_states.device, dtype=hidden_states.dtype)
 
 
-class TrtDitWrapper(OrtDitWrapper):
-    """ORT session pinned to TensorrtExecutionProvider only — forces TRT-EP
-    compilation under the hood.
+def _gpu_id_short() -> str:
+    """Short device tag for cache keying — TRT plans are GPU-specific.
 
-    Distinction from OrtDitWrapper: the parent class lets ORT walk its EP
-    preference order (TRT → CUDA → CPU). This subclass refuses anything
-    but TRT-EP, so a TRT compile failure surfaces as a load error instead
-    of silently falling back to CUDA. Same forward signature.
+    A plan compiled on PRO 6000 (SM_120) is not loadable on H200 (SM_90),
+    so we key the on-disk cache by GPU name to keep parallel installs
+    from clobbering each other on shared-storage boxes.
+    """
+    import torch
+    try:
+        return torch.cuda.get_device_name(0).replace(" ", "_")
+    except Exception:
+        return "unknown-gpu"
 
-    Direct TensorRT plan binding (via `trt.Runtime` + `execute_async_v3`)
-    has a lower per-call overhead than ORT-with-TRT-EP, but requires
-    template-ised binding management that's out of scope for PR #5. The
-    `compile_onnx_to_trt` standalone path stays in this module for users
-    who want to drop in a pre-compiled `.plan`; it's just not on the
-    serve-loop default path.
+
+def _build_trt_plan_from_onnx(onnx_path: Path, *, precision: str, plan_path: Path) -> Path:
+    """Compile an `ng_dit.onnx` (with QDQ nodes) to a `.plan` for this GPU.
+
+    Direct TRT API — no `trtexec` subprocess (which isn't bundled in the
+    pip `tensorrt` wheel). Reads the ONNX bytes, runs the OnnxParser,
+    sets the precision flag (FP8 or NVFP4 from BuilderFlag), serializes
+    to the plan path. Idempotent: caller checks plan existence first.
+    """
+    import tensorrt as trt
+
+    logger = trt.Logger(trt.Logger.WARNING)
+    # NVFP4's ONNX op is shipped as a TRT plugin (not a built-in op); the
+    # plugin registry has to be initialised before OnnxParser sees the
+    # graph, otherwise parsing fails with "Plugin not found". Harmless
+    # no-op for FP8.
+    trt.init_libnvinfer_plugins(logger, "")
+    builder = trt.Builder(logger)
+    # STRONGLY_TYPED keeps the parser's declared precision sticky —
+    # important for QDQ'd graphs where TRT could otherwise promote to bf16.
+    network = builder.create_network(
+        1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED)
+    )
+    parser = trt.OnnxParser(network, logger)
+
+    onnx_bytes = onnx_path.read_bytes()
+    if not parser.parse(onnx_bytes, str(onnx_path)):
+        errs = [parser.get_error(i).desc() for i in range(parser.num_errors)]
+        raise RuntimeError(f"OnnxParser failed for {onnx_path}:\n  " + "\n  ".join(errs))
+
+    cfg = builder.create_builder_config()
+    # 8 GB workspace is plenty for the 466 MB DiT without starving the box.
+    cfg.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 8 << 30)
+    # NOTE: With STRONGLY_TYPED networks (set above), TRT refuses
+    # BuilderFlag.FP8 / FP4 / BF16 — precision is declared per-tensor in
+    # the QDQ'd ONNX itself. The parser's trt:TRT_FP8QuantizeLinear ops
+    # are how FP8 gets dispatched. Validate the requested precision is
+    # one we support so a typo in the YAML fails loud.
+    if precision not in ("fp8", "nvfp4"):
+        raise ValueError(f"_build_trt_plan_from_onnx: unsupported precision {precision!r}")
+
+    # The exported ONNX has batch as a dynamic axis (so the artifact stays
+    # reusable across batch sizes). TRT requires an optimization profile
+    # for dynamic shapes; we pin batch=1 because that's the only shape the
+    # serve loop ever invokes (PR #1 left multi-batch as a TODO).
+    profile = builder.create_optimization_profile()
+    for i in range(network.num_inputs):
+        t = network.get_input(i)
+        shape = list(t.shape)
+        # Replace -1 (dynamic) with 1; static dims stay as-is.
+        concrete = tuple(1 if d == -1 else d for d in shape)
+        profile.set_shape(t.name, min=concrete, opt=concrete, max=concrete)
+    cfg.add_optimization_profile(profile)
+
+    serialized = builder.build_serialized_network(network, cfg)
+    if serialized is None:
+        raise RuntimeError(f"build_serialized_network returned None for {onnx_path}")
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_bytes(bytes(serialized))
+    return plan_path
+
+
+def _trt_dtype_to_torch(dt):  # type: ignore[no-untyped-def]
+    """Map TRT 10's DataType enum to torch dtypes for buffer allocation."""
+    import tensorrt as trt
+    import torch
+    return {
+        trt.DataType.FLOAT:  torch.float32,
+        trt.DataType.HALF:   torch.float16,
+        trt.DataType.BF16:   torch.bfloat16,
+        trt.DataType.INT32:  torch.int32,
+        trt.DataType.INT64:  torch.int64,
+        # FP8 / NVFP4 inputs are wrapped in bf16 at the API boundary —
+        # the Q/DQ nodes inside the engine handle the precision drop.
+    }.get(dt, torch.float32)
+
+
+class TrtDitWrapper(__import__("torch").nn.Module):
+    """`session.model.model` replacement that runs the DiT step on a
+    pre-compiled TensorRT plan.
+
+    Inherits from `nn.Module` so we can drop it into NitroGen's PyTorch
+    container via `session.model.model = TrtDitWrapper(...)` —
+    `nn.Module.__setattr__` enforces children-must-be-Module.
+
+    Owns:
+      - one ICudaEngine compiled from the calibrated ONNX once at startup
+      - one IExecutionContext reused across the request's denoise calls
+      - a pre-allocated CUDA buffer per engine I/O tensor (alloc once in
+        __init__, set_tensor_address once, just memcpy on each call)
+
+    Construction: takes the ONNX path the calibration step produced; if
+    a per-GPU `.plan` is already cached next to it, deserialize that.
+    Otherwise compile + cache. The customer pays the 30–60 s build cost
+    once per (precision, GPU) tuple.
+
+    Call surface matches `DiT.forward`'s inference path exactly so we
+    can `session.model.model = TrtDitWrapper(...)` and the upstream
+    caller in NitroGen.get_action keeps working unchanged.
     """
 
-    def __init__(self, onnx_path: Path) -> None:
-        super().__init__(onnx_path, provider_preference=["TensorrtExecutionProvider"])
+    def __init__(self, onnx_path: Path, *, precision: str) -> None:
+        import tensorrt as trt
+        import torch
+
+        super().__init__()  # nn.Module bookkeeping — required before
+                            # any other attribute assignment, otherwise
+                            # __setattr__ raises on _parameters / _buffers.
+
+        if not torch.cuda.is_available():  # pragma: no cover - GPU only
+            raise RuntimeError("TrtDitWrapper requires CUDA")
+
+        plan_path = onnx_path.parent / f"ng_dit.{_gpu_id_short()}.plan"
+        if not plan_path.exists():
+            print(f"[ng-trt] compiling {onnx_path.name} -> {plan_path.name} (one-time)...")
+            _build_trt_plan_from_onnx(onnx_path, precision=precision, plan_path=plan_path)
+            print(f"[ng-trt] compiled: {plan_path}  ({plan_path.stat().st_size:,} B)")
+        else:
+            print(f"[ng-trt] reusing cached plan: {plan_path}")
+
+        logger = trt.Logger(trt.Logger.WARNING)
+        self._runtime = trt.Runtime(logger)
+        with open(plan_path, "rb") as f:
+            self._engine = self._runtime.deserialize_cuda_engine(f.read())
+        self._context = self._engine.create_execution_context()
+        self._device = torch.device("cuda")
+        self._stream = torch.cuda.Stream()
+
+        # Discover the engine's I/O tensors + pre-allocate static buffers.
+        # The export pinned batch=1; we keep that invariant.
+        self._inputs: dict[str, "torch.Tensor"] = {}
+        self._outputs: dict[str, "torch.Tensor"] = {}
+        for i in range(self._engine.num_io_tensors):
+            name = self._engine.get_tensor_name(i)
+            shape = tuple(self._engine.get_tensor_shape(name))
+            dtype = _trt_dtype_to_torch(self._engine.get_tensor_dtype(name))
+            mode = self._engine.get_tensor_mode(name)
+            # Replace any -1 (dynamic) dim with 1 — we promised batch=1.
+            shape = tuple(1 if s == -1 else s for s in shape)
+            buf = torch.empty(shape, dtype=dtype, device=self._device)
+            if mode == trt.TensorIOMode.INPUT:
+                self._inputs[name] = buf
+            else:
+                self._outputs[name] = buf
+            self._context.set_tensor_address(name, buf.data_ptr())
+
+    def _copy_in(self, **named_tensors) -> None:  # type: ignore[no-untyped-def]
+        """Memcpy each named input into its pre-bound CUDA buffer."""
+        for name, src in named_tensors.items():
+            if src is None:
+                continue
+            dst = self._inputs.get(name)
+            if dst is None:
+                raise KeyError(f"TrtDitWrapper has no input named {name!r}; "
+                               f"known: {list(self._inputs)}")
+            dst.copy_(src.to(device=self._device, dtype=dst.dtype, non_blocking=True))
+
+    def forward(
+        self,
+        hidden_states,                       # (B, T, D)
+        encoder_hidden_states,               # (B, S, D)
+        timestep,                            # (B,) long
+        encoder_attention_mask=None,         # ignored — engine traced with None
+        return_all_hidden_states=False,      # ignored — engine traced with False
+    ):  # type: ignore[no-untyped-def]
+        """Override `nn.Module.forward` so `__call__(...)` from
+        NitroGen.get_action routes through us. Keep the kwargs that
+        NitroGen.get_action passes (encoder_attention_mask,
+        return_all_hidden_states) as accept-and-ignore — they were
+        baked into the engine trace at export time."""
+        self._copy_in(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=timestep,
+        )
+        if not self._context.execute_async_v3(self._stream.cuda_stream):
+            raise RuntimeError("TrtDitWrapper.execute_async_v3 returned False")
+        self._stream.synchronize()
+        out = self._outputs["pred"]
+        # Caller (NitroGen's get_action) expects float-dtype output —
+        # action_decoder downstream is fp32. Match the input dtype.
+        return out.to(dtype=hidden_states.dtype)

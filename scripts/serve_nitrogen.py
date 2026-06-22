@@ -82,22 +82,18 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
         plan.precision in (Precision.FP8, Precision.NVFP4)
         and plan.exec_backend in (ExecBackend.ONNXRUNTIME, ExecBackend.TENSORRT)
     ):
-        # Calibration + ONNX export are working (modelopt 0.44 path). The
-        # remaining piece is the runtime serving:
-        #   - ORT-TRT-EP can't load modelopt's `trt:TRT_FP8QuantizeLinear`
-        #     ops — they're a TRT extension that needs native TRT runtime,
-        #     not ORT's schema validator.
-        #   - `trtexec` ships only with the full TensorRT SDK, not the pip
-        #     wheel, so we can't pre-compile a `.plan` from a pip-only venv.
-        #   - The right path is direct `tensorrt.Builder` + `OnnxParser` +
-        #     `execute_async_v3` binding management — tracked as PR #5.1.
-        #
-        # For PR #5 we ship the calibration + export scaffolding (so users
-        # can produce the ONNX), and refuse to serve from it cleanly.
+        # FP8 / NVFP4 serving via direct TensorRT runtime (PR #5.1):
+        #   1. Resolve the calibrated ONNX — download from HF via
+        #      ensure_artifact (PR #5.0.5), or fall back to local
+        #      calibration + export via PR #5's path.
+        #   2. Compile-or-load a per-GPU TRT plan from that ONNX.
+        #   3. Swap session.model.model for TrtDitWrapper so the upstream
+        #      NitroGen.get_action denoise loop transparently runs on TRT.
         from pathlib import Path
 
         from benchmarks.nitrogen_artifacts import ensure_artifact
         from benchmarks.nitrogen_export import (
+            TrtDitWrapper,
             cache_paths,
             export_dit_to_onnx,
         )
@@ -107,17 +103,10 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
         )
 
         paths = cache_paths(plan.precision.value, plan.steps)
-        onnx_ready = False
+        onnx_path = None
 
-        # Preferred path: download the pre-calibrated artifact from HF. The
-        # calibration is a one-time deterministic operation (frozen ckpt +
-        # frozen calib set + frozen modelopt version) so every customer
-        # pulling the same bytes is the right UX. Falls back to local
-        # calibration only if no manifest entry or NITROGEN_FORCE_RECALIBRATE=1.
         try:
             onnx_path = ensure_artifact(plan.precision.value, plan.steps)
-            assert onnx_path.exists(), onnx_path
-            onnx_ready = True
             print(f"[ng-quant] using pre-built artifact: {onnx_path}")
         except FileNotFoundError as e:
             print(f"[ng-quant] no artifact for {plan.label()}: {e}")
@@ -137,19 +126,17 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
                 calib_images=calib, predict_fn=_drive,
             )
             export_dit_to_onnx(session.model, precision=plan.precision.value, steps=plan.steps)
-            onnx_ready = paths["onnx"].exists()
-            print(f"[ng-quant] export complete: {paths['onnx']}")
+            onnx_path = paths["onnx"]
 
-        if not onnx_ready:
-            raise SystemExit(f"[ng-quant] artifact not produced for {plan.label()}; bailing")
+        if onnx_path is None or not onnx_path.exists():
+            raise SystemExit(f"[ng-quant] no usable ONNX for {plan.label()}; bailing")
 
-        raise SystemExit(
-            f"--exec={plan.exec_backend.value} --precision={plan.precision.value} "
-            f"requires the native TensorRT runtime swap, which lands in PR #5.1.\n"
-            f"The calibrated ONNX is ready at {paths['onnx']} — drop in a custom\n"
-            f"`TrtDitWrapper` that uses `tensorrt.Builder` + `execute_async_v3`\n"
-            f"to consume it. See benchmarks/nitrogen_export.py for the stub."
-        )
+        # Compile-or-load the per-GPU TRT plan and swap session.model.model.
+        # Vision encoder + action decoder + denoise-loop control stay in
+        # PyTorch; only the DiT step (the inner per-iteration forward) runs
+        # on TRT, which is where the FP8/NVFP4 win materialises.
+        session.model.model = TrtDitWrapper(onnx_path, precision=plan.precision.value)
+        print(f"[ng-quant] TRT runtime swapped in for {plan.label()}")
     else:
         session.model = apply_optimization(session.model, plan)
 
