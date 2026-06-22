@@ -141,6 +141,7 @@ Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios
 | [docs/gpu-strategy.md](docs/gpu-strategy.md) | When to do tensor parallelism vs replicas; PCIe-vs-NVLink considerations |
 | [docs/architecture.md](docs/architecture.md) | Pipeline shape (today: VLM-only; v1+: split CV ↔ VLM ↔ decoder ↔ validator) |
 | [docs/nitrogen.md](docs/nitrogen.md) | NitroGen diffusion-policy backend: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend optimization study |
+| [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: what this measures for you, player-vs-world-model choice, the bandwidth reality, and per-genre accuracy workflow |
 | [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
 
 ---
