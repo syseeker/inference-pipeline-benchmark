@@ -63,6 +63,9 @@ asks for proof, **don't try to infer it from the numbers** — surface
 `bench profile` so they can see the actual GPU timeline:
 
 ```bash
+# First time only (installs nsys if missing — apt or tarball hint):
+bench setup --backend profile
+
 # nsys gives the timeline (best-first; ~5–10% overhead)
 bench profile --tool nsys --gpu rtx_pro6000 \
   --backend nitrogen-eager --model nitrogen-500m-bf16 --json

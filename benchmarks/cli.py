@@ -193,17 +193,26 @@ _BACKEND_EXTRAS = {
 }
 
 
-@app.command(help="Idempotent per-backend venv + dependency install.")
+@app.command(help="Idempotent per-backend venv + dependency install. The special backend 'profile' installs the Nsight Systems CLI for `bench profile`.")
 def setup(
-    backend: str = typer.Option(..., help=f"One of: {', '.join(_BACKEND_EXTRAS)}"),
+    backend: str = typer.Option(..., help=f"One of: {', '.join(list(_BACKEND_EXTRAS) + ['profile'])}"),
     force: bool = typer.Option(False, help="Recreate the venv even if present."),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
+    # 'profile' isn't a venv backend — it's a system-tooling installer
+    # for `bench profile` (PR #7). Bundling nsys into every backend's
+    # extras would tax customers who never escalate to profiling, so we
+    # gate it behind explicit `bench setup --backend profile`. The
+    # `bench profile` missing-nsys path tells the customer exactly this.
+    if backend == "profile":
+        _setup_profiler(force=force, json_out=json_out)
+        return  # _setup_profiler always emits + exits
+
     if backend not in _BACKEND_EXTRAS:
         emit(
             command="setup",
             status="error",
-            error={"code": EXIT_GENERIC, "remediation": f"unknown backend {backend!r}; expected one of {sorted(_BACKEND_EXTRAS)}"},
+            error={"code": EXIT_GENERIC, "remediation": f"unknown backend {backend!r}; expected one of {sorted(list(_BACKEND_EXTRAS) + ['profile'])}"},
             json_out=json_out,
             exit_code=EXIT_GENERIC,
         )
@@ -626,6 +635,177 @@ def load_test(
 
 
 # --------------------------------------------------------------------------- #
+# bench setup --backend profile (PR #7.1)                                     #
+# --------------------------------------------------------------------------- #
+
+
+def _setup_profiler(*, force: bool, json_out: bool) -> None:
+    """Install nsight-systems-cli so `bench profile --tool nsys` works.
+
+    Strategy:
+      1. If `nsys` is already on PATH → skipped (cached).
+      2. Else try `sudo apt-get install -y nsight-systems-cli` — works on
+         the standard Ubuntu image we test against; needs sudo. If sudo
+         is unavailable / blocked we surface the exact tarball-download
+         alternative.
+      3. ncu (Nsight Compute) ships with the CUDA Toolkit; we don't
+         install it here — but we report whether it's available so the
+         customer knows the kernel-deep-dive path is ready too.
+    """
+    import shutil
+
+    nsys_path = shutil.which("nsys")
+    ncu_path = shutil.which("ncu")
+
+    if nsys_path and not force:
+        emit(
+            command="setup",
+            status="skipped",
+            artifacts=[nsys_path] + ([ncu_path] if ncu_path else []),
+            next_action=(
+                f"nsys already at {nsys_path}; pass --force to reinstall. "
+                f"Run: bench profile --tool nsys --gpu <gpu> --backend <bk> --model <m>"
+            ),
+            data={"nsys": nsys_path, "ncu": ncu_path},
+            json_out=json_out,
+        )
+
+    # Try the apt path. If `sudo` isn't on PATH or returns non-zero, fall
+    # back to the tarball-download hint — we don't try to silently mutate
+    # /opt without permission.
+    if shutil.which("sudo") and shutil.which("apt-get") and shutil.which("apt-cache"):
+        # NVIDIA's CUDA apt repo ships versioned packages like
+        # `nsight-systems-2026.1.3`, not the generic `nsight-systems-cli`
+        # most docs reference. Discover the latest available so the
+        # customer doesn't have to know the exact version string.
+        pkg_name = _latest_nsight_systems_apt_pkg()
+        if not pkg_name:
+            emit(
+                command="setup",
+                status="error",
+                error={
+                    "code": EXIT_MISSING_DEP,
+                    "remediation": (
+                        "apt-cache returned no `nsight-systems-*` packages — the NVIDIA CUDA "
+                        "apt repo may not be configured. Add it:\n"
+                        "  curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \\\n"
+                        "    -o /tmp/cuda-keyring.deb && sudo dpkg -i /tmp/cuda-keyring.deb && sudo apt-get update\n"
+                        "Then re-run: bench setup --backend profile"
+                    ),
+                },
+                data={"nsys": None, "ncu": ncu_path},
+                json_out=json_out,
+                exit_code=EXIT_MISSING_DEP,
+            )
+        cmd = ["sudo", "apt-get", "install", "-y", pkg_name]
+        print(f">> {' '.join(cmd)}")
+        res = _run(cmd, capture=json_out)
+        # NVIDIA's deb package installs to /opt/nvidia/nsight-systems/<ver>/
+        # with root-only perms (no `other` read+exec). Re-open it for the
+        # non-root user that will run `bench profile`. We do this after
+        # every apt path, idempotent — no-op if the dir doesn't exist.
+        if res.returncode == 0:
+            chmod_cmd = ["sudo", "chmod", "-R", "o+rX", "/opt/nvidia/nsight-systems"]
+            print(f">> {' '.join(chmod_cmd)}  (open install dir for non-root use)")
+            _run(chmod_cmd, capture=json_out)
+            # Also drop a /usr/local/bin/nsys symlink so non-login shells
+            # find it without an explicit PATH munge.
+            link_target = subprocess.run(  # noqa: S603
+                ["bash", "-lc", "ls -1d /opt/nvidia/nsight-systems/*/bin/nsys 2>/dev/null | sort -V | tail -1"],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip()
+            if link_target:
+                _run(["sudo", "ln", "-sf", link_target, "/usr/local/bin/nsys"], capture=json_out)
+        if res.returncode == 0 and shutil.which("nsys"):
+            nsys_path = shutil.which("nsys")
+            emit(
+                command="setup",
+                status="ok",
+                artifacts=[nsys_path] + ([ncu_path] if ncu_path else []),
+                next_action=(
+                    f"nsys installed at {nsys_path}. "
+                    f"Run: bench profile --tool nsys --gpu <gpu> --backend <bk> --model <m>"
+                ),
+                data={"nsys": nsys_path, "ncu": ncu_path, "via": "apt"},
+                json_out=json_out,
+            )
+        # apt failed (no sudo, no network, missing repo). Surface the
+        # remediation rather than fail silently. Common reasons: sudo
+        # prompted for a password we couldn't supply, or the
+        # nsight-systems-cli package isn't in the configured apt sources.
+        manual_hint = _profiler_manual_install_hint()
+        emit(
+            command="setup",
+            status="error",
+            error={
+                "code": EXIT_MISSING_DEP,
+                "remediation": (
+                    "Tried `sudo apt-get install nsight-systems-cli` and it failed. "
+                    f"apt output (last lines): {(res.stderr or res.stdout or '').strip()[-400:]}\n\n"
+                    f"Manual install:\n{manual_hint}"
+                ),
+            },
+            data={"nsys": None, "ncu": ncu_path},
+            json_out=json_out,
+            exit_code=EXIT_MISSING_DEP,
+        )
+
+    # No sudo / no apt → tarball-only path. Print the URL + extract steps.
+    emit(
+        command="setup",
+        status="error",
+        error={
+            "code": EXIT_MISSING_DEP,
+            "remediation": (
+                "Cannot run apt-get (sudo not available / apt not on PATH). "
+                f"Manual install required:\n{_profiler_manual_install_hint()}"
+            ),
+        },
+        data={"nsys": None, "ncu": ncu_path},
+        json_out=json_out,
+        exit_code=EXIT_MISSING_DEP,
+    )
+
+
+def _latest_nsight_systems_apt_pkg() -> str | None:
+    """Find the newest `nsight-systems-<version>` package in apt-cache.
+
+    NVIDIA's CUDA repo ships versioned packages (e.g. 2025.1.3, 2025.3.2,
+    2026.1.3) rather than the generic `nsight-systems-cli`. We pick the
+    lexicographically-greatest version — version strings sort right
+    here because they're date-based (YYYY.X.Y).
+    """
+    import re
+
+    res = subprocess.run(  # noqa: S603
+        ["apt-cache", "search", "-n", "^nsight-systems-20"],
+        capture_output=True, text=True, check=False,
+    )
+    if res.returncode != 0:
+        return None
+    pkgs: list[str] = []
+    for line in res.stdout.splitlines():
+        m = re.match(r"^(nsight-systems-\d+\.\d+\.\d+)\s", line)
+        if m:
+            pkgs.append(m.group(1))
+    return max(pkgs) if pkgs else None
+
+
+def _profiler_manual_install_hint() -> str:
+    """One-stop install instructions for nsight-systems-cli, no sudo needed."""
+    return (
+        "  1. Sign in to https://developer.nvidia.com/nsight-systems/get-started\n"
+        "  2. Download the linux-x86_64 .tar.gz for your CUDA version\n"
+        "  3. Extract to /opt/nvidia/nsight-systems/:\n"
+        "       tar -xf nsight-systems-*.tar.gz -C /opt/nvidia/\n"
+        "  4. Add to PATH (in ~/.bashrc):\n"
+        "       export PATH=/opt/nvidia/nsight-systems/<version>/bin:$PATH\n"
+        "  5. Verify: nsys --version\n"
+        "  6. Re-run: bench setup --backend profile"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # bench profile (PR #7 — Nsight Systems / Compute opt-in profiling)           #
 # --------------------------------------------------------------------------- #
 #
@@ -657,15 +837,16 @@ def _profile_install_hint(tool: str) -> str:
     """Customer-facing install instructions when nsys/ncu is missing."""
     if tool == "nsys":
         return (
-            "nsys (Nsight Systems) not on PATH. Install:\n"
-            "  apt-get install nsight-systems-<cuda_ver>\n"
-            "OR download the tarball from\n"
-            "  https://developer.nvidia.com/nsight-systems/get-started\n"
-            "and add `<dir>/bin` to PATH."
+            "nsys (Nsight Systems) not on PATH. Run the one-stop installer:\n"
+            "    bench setup --backend profile\n"
+            "(tries `sudo apt-get install nsight-systems-cli`, falls back to a "
+            "manual tarball-install hint when apt isn't available)."
         )
     return (
         "ncu (Nsight Compute) not on PATH — usually ships with the CUDA Toolkit\n"
-        "under /usr/local/cuda-*/bin/. Ensure that directory is on your PATH."
+        "under /usr/local/cuda-*/bin/. Add that directory to PATH, or run:\n"
+        "    bench setup --backend profile\n"
+        "(also probes for ncu and reports per-tool availability)."
     )
 
 
