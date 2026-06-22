@@ -45,7 +45,14 @@ triton  = ["tritonclient[grpc]>=2.45"]
 # `hf download nvidia/NitroGen ng.pt`; torch/diffusers/transformers come with
 # it. We list the client-side deps the reasoner needs here. TensorRT / ONNX /
 # modelopt (FP8/NVFP4 export) install from NVIDIA's index on the GPU box.
-nitrogen= ["pyzmq>=25", "torch", "transformers", "diffusers", "einops"]
+nitrogen= [
+    "pyzmq>=25", "torch", "torchvision",
+    # transformers >=5 dropped the `SiglipModel.vision_model` wrapper, breaking
+    # NitroGen's `model.vision_model` access in flow_matching_transformer/
+    # nitrogen.py. Pin <5 until MineDojo/NitroGen lands a compat shim.
+    "transformers>=4.40,<5",
+    "diffusers", "einops",
+]
 # Dataset → scenario converter (scripts/build_nitrogen_scenarios.py): reads the
 # action parquet, fetches source videos, decodes frames.
 dataset = ["polars>=1.0", "av>=12.0", "yt-dlp>=2024.0"]

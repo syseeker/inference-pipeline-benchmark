@@ -47,6 +47,8 @@ class _GoldReasoner:
 @pytest.mark.parametrize("scenario_name", list_scenarios())
 def test_scenario_round_trip(scenario_name: str) -> None:
     sc: LoadedScenario = load_scenario(scenario_name)
+    if sc.expected is None:
+        pytest.skip("policy scenario (no expected.json) — VLM round-trip not applicable")
     pipe = Pipeline(reasoner=_GoldReasoner(sc.expected))
 
     resp = pipe.run(sc.pipeline_request())

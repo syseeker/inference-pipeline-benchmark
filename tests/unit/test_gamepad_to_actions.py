@@ -125,7 +125,7 @@ def test_resolve_game_id_identity_and_normalized_lookup():
 
 def test_build_scenario_payloads_shape_and_gold_sidecar():
     pad = Gamepad(j_left=(1.0, 0.0), buttons={"south": 1.0})
-    request, expected, gold = conv.build_scenario_payloads(
+    request, gold = conv.build_scenario_payloads(
         name="00_celeste_chunk_0000",
         description="desc",
         game_id="7",
@@ -136,25 +136,23 @@ def test_build_scenario_payloads_shape_and_gold_sidecar():
     assert request["game_id"] == "7"
     assert request["instruction"] == ""
     assert request["image_path"] == "screen.png"
-    # expected ActionSequence is the lossy view...
-    types = [c["type"] for c in expected["actions"]["commands"]]
-    assert "move" in types and "keypress" in types
-    # ...and the gold sidecar preserves the faithful action for accuracy.
+    # The gold sidecar preserves the faithful gamepad action. The extractor no
+    # longer emits a lossy expected.json — VLM grading needs a human-authored
+    # instruction + expected list, layered on later.
     assert gold["j_left"] == [1.0, 0.0]
     assert gold["buttons"]["south"] == 1.0
     assert gold["provenance"]["frame_index"] == 11
 
 
 def test_payloads_validate_against_on_disk_schema():
-    """The emitted JSON must round-trip through the real scenario pydantic models."""
-    from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest
+    """The emitted JSON must round-trip through the real ScenarioRequest pydantic model."""
+    from tests.smoke.scenarios.schema import ScenarioRequest
 
     pad = Gamepad(buttons={"start": 1.0})
-    request, expected, _ = conv.build_scenario_payloads(
+    request, _gold = conv.build_scenario_payloads(
         name="00_g_chunk_0000", description="d", game_id="1",
         pad=pad, deadline_ms=1500, provenance={},
     )
     sr = ScenarioRequest.model_validate(request)
     assert sr.game_id == "1"
-    se = ScenarioExpected.model_validate(expected)
-    assert se.validation.safe is True
+    assert sr.instruction == ""

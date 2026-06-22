@@ -27,10 +27,14 @@ class LoadedScenario:
     name: str
     dir: Path
     spec: ScenarioRequest      # on-disk request spec (image referenced by path)
-    expected: ScenarioExpected
     image_bytes: bytes
-    # Faithful gamepad ground truth for policy backends (NitroGen), loaded from
-    # the optional `gold_action.json` sidecar. None for text-VLM scenarios.
+    # Both ground-truth files are OPTIONAL — the grader dispatches on presence:
+    #   - `expected.json`     → VLM grading: parsed ActionSequence vs gold
+    #   - `gold_action.json`  → policy grading: gamepad vs gold via accuracy.py
+    # A scenario may carry zero, one, or both. The NitroGen extractor emits
+    # only gold_action; human-authored VLM scenarios emit only expected;
+    # dual-graded scenarios (same frame compared across families) carry both.
+    expected: ScenarioExpected | None = None
     gold_action: dict[str, Any] | None = None
 
     def pipeline_request(self) -> PipelineRequest:
@@ -52,8 +56,13 @@ def load_scenario(name: str, scenarios_dir: Path | None = None) -> LoadedScenari
     if not sc_dir.is_dir():
         raise FileNotFoundError(f"scenario not found: {sc_dir}")
     spec = ScenarioRequest.model_validate_json((sc_dir / "request.json").read_text())
-    expected = ScenarioExpected.model_validate_json((sc_dir / "expected.json").read_text())
     image_bytes = (sc_dir / spec.image_path).read_bytes()
+    expected_path = sc_dir / "expected.json"
+    expected = (
+        ScenarioExpected.model_validate_json(expected_path.read_text())
+        if expected_path.exists()
+        else None
+    )
     gold_path = sc_dir / "gold_action.json"
     gold_action = json.loads(gold_path.read_text()) if gold_path.exists() else None
     return LoadedScenario(

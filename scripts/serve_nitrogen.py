@@ -57,6 +57,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving only
     import pickle
 
+    import torch
     import zmq
     from nitrogen.inference_session import InferenceSession
 
@@ -72,6 +73,18 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
     session.selected_game = args.game
     session.model = apply_optimization(session.model, plan)
 
+    # Mixed-precision compute via autocast, not a model.to(dtype=...) cast —
+    # the cast would desync NitroGen's float32 action buffers with the
+    # embedding tensor in `prepare_input_embs.masked_scatter`. bf16/fp16
+    # autocast leaves the buffers at fp32 and only the supported ops run in
+    # the lower precision. fp8/nvfp4 fall through to the real quant tooling
+    # in apply_optimization (TRT/ONNX export); they don't autocast here.
+    autocast_dtype: torch.dtype | None = None
+    if plan.torch_dtype_name == "bfloat16":
+        autocast_dtype = torch.bfloat16
+    elif plan.torch_dtype_name == "float16":
+        autocast_dtype = torch.float16
+
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.bind(f"tcp://*:{args.port}")
@@ -85,7 +98,11 @@ def serve(args: argparse.Namespace) -> int:  # pragma: no cover - GPU/serving on
                 # Per-request game/seed override (sent by NitrogenReasoner).
                 if request.get("game_id") is not None:
                     session.selected_game = request["game_id"]
-                result = session.predict(request["image"])
+                if autocast_dtype is not None and torch.cuda.is_available():
+                    with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+                        result = session.predict(request["image"])
+                else:
+                    result = session.predict(request["image"])
                 response = {"status": "ok", "pred": result}
             elif rtype == "reset":
                 session.reset()

@@ -258,35 +258,37 @@ backends:
   # runs Qwen3-VL). You run NitroGen on exactly ONE of these per run, not a combo.
   # `family: nitrogen` lets the model's `backend_args.nitrogen` (precision/steps)
   # apply to all of them. `--exec` selects the engine; `--seed` pins denoising.
+  # One distinct port per engine so a stale orphan from one round (e.g. a
+  # zombie kernel LISTEN socket after a crash) can't block the next round.
   nitrogen-eager:
     transport: zmq
     family: nitrogen
-    base_url: "tcp://localhost:5555"
-    port: 5555
+    base_url: "tcp://localhost:5560"
+    port: 5560
     extra_args: ["--exec=eager", "--seed=0"]
   nitrogen-compile:
     transport: zmq
     family: nitrogen
-    base_url: "tcp://localhost:5555"
-    port: 5555
+    base_url: "tcp://localhost:5561"
+    port: 5561
     extra_args: ["--exec=compile", "--seed=0"]
   nitrogen-cudagraph:
     transport: zmq
     family: nitrogen
-    base_url: "tcp://localhost:5555"
-    port: 5555
+    base_url: "tcp://localhost:5562"
+    port: 5562
     extra_args: ["--exec=cudagraph", "--seed=0"]
   nitrogen-tensorrt:
     transport: zmq
     family: nitrogen
-    base_url: "tcp://localhost:5555"
-    port: 5555
+    base_url: "tcp://localhost:5563"
+    port: 5563
     extra_args: ["--exec=tensorrt", "--seed=0"]
   nitrogen-onnx:
     transport: zmq
     family: nitrogen
-    base_url: "tcp://localhost:5555"
-    port: 5555
+    base_url: "tcp://localhost:5564"
+    port: 5564
     extra_args: ["--exec=onnxruntime", "--seed=0"]
 
   trtllm:

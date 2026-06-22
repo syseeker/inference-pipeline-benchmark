@@ -184,8 +184,14 @@ def apply_optimization(model, plan: ExecPlan):
     """
     import torch  # lazy — GPU/serving env only
 
-    dtype = getattr(torch, plan.torch_dtype_name)
-    model = model.to(dtype=dtype)
+    _ = getattr(torch, plan.torch_dtype_name)  # validate the dtype name early
+    # We deliberately do NOT `model.to(dtype=...)` here. NitroGen builds
+    # internal action buffers at the loaded model dtype (float32) inside
+    # `prepare_input_embs` and then `masked_scatter`s them against an
+    # embedding tensor — a blanket cast desynchronises those dtypes.
+    # Mixed-precision compute is applied by wrapping the predict call in
+    # `torch.autocast(device, dtype=plan.torch_dtype_name)` in the serve
+    # loop (see scripts/serve_nitrogen.py); the model itself stays at fp32.
 
     if plan.exec_backend is ExecBackend.EAGER:
         return model

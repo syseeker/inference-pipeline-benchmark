@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 # Pure-core imports only (always available once the package is installed).
-from vlm_pipeline.adapters import Gamepad, gamepad_to_action_sequence
+from vlm_pipeline.adapters import Gamepad
 
 DEFAULT_FRAME_SIZE = 256
 
@@ -77,23 +77,47 @@ class ChunkMeta:
 
 
 def parse_metadata(meta: dict[str, Any]) -> ChunkMeta:
-    """Extract the fields we use from a chunk metadata.json (tolerant to layout)."""
+    """Extract the fields we use from a chunk metadata.json (tolerant to layout).
 
-    res = meta.get("resolution") or {}
-    width = int(meta.get("width", res.get("width", 0)) or 0)
-    height = int(meta.get("height", res.get("height", 0)) or 0)
+    Real schema (nvidia/NitroGen): video info nested under `original_video` with
+    `resolution: [H, W]`, `url`, `start_frame`, `end_frame`. Top-level `game` and
+    optional `bbox_game_area`. We accept the flat layout too for robustness.
+    """
 
-    frames = meta.get("frame_indices") or meta.get("frames") or []
+    ov = meta.get("original_video") or {}
+    url = str(meta.get("url") or ov.get("url") or "")
+
+    res = meta.get("resolution") or ov.get("resolution") or {}
+    if isinstance(res, (list, tuple)) and len(res) >= 2:
+        # Dataset stores [H, W]; ChunkMeta tracks (width, height).
+        height, width = int(res[0]), int(res[1])
+    elif isinstance(res, dict):
+        width = int(meta.get("width", res.get("width", 0)) or 0)
+        height = int(meta.get("height", res.get("height", 0)) or 0)
+    else:
+        width = int(meta.get("width", 0) or 0)
+        height = int(meta.get("height", 0) or 0)
+
+    frames = meta.get("frame_indices") or meta.get("frames")
+    if frames is None and ov:
+        start = ov.get("start_frame")
+        end = ov.get("end_frame")
+        if start is not None and end is not None:
+            frames = {"start": int(start), "end": int(end) + 1}
+    frames = frames or []
     if isinstance(frames, dict):  # {"start": a, "end": b}
         start, end = int(frames.get("start", 0)), int(frames.get("end", 0))
         frames = list(range(start, end)) if end > start else [start]
     frame_indices = [int(f) for f in frames]
 
-    bbox = meta.get("game_area_bbox") or meta.get("game_bbox")
+    bbox = meta.get("game_area_bbox") or meta.get("game_bbox") or meta.get("bbox_game_area")
+    if isinstance(bbox, dict):
+        # Some chunks ship bbox_game_area as {x, y, w, h}.
+        bbox = [bbox.get("x", 0), bbox.get("y", 0), bbox.get("w", 0), bbox.get("h", 0)]
     game_area_bbox = tuple(int(v) for v in bbox) if bbox else None  # type: ignore[assignment]
 
     return ChunkMeta(
-        url=str(meta.get("url", "")),
+        url=url,
         game=str(meta.get("game", "unknown")),
         width=width,
         height=height,
@@ -132,17 +156,18 @@ def build_scenario_payloads(
     pad: Gamepad,
     deadline_ms: int,
     provenance: dict[str, Any],
-    move_scale: int = 512,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Build the (request, expected, gold) JSON payloads for one scenario.
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the (request, gold) JSON payloads for one policy scenario.
 
-    Pure: takes a Gamepad, returns dicts. No filesystem, no image. The image is
-    written separately by `write_scenario`.
+    Pure: takes a Gamepad, returns dicts. No filesystem, no image.
+
+    Note: we deliberately do NOT synthesise an `expected.json` ActionSequence
+    here. A NitroGen-dataset scenario carries only the gamepad ground truth;
+    text-VLM grading needs a human-authored instruction + expected command
+    list, which lives in a separately authored sibling file (see the
+    `author-vlm-grading` workflow in BENCHMARK_GUIDE.md). The runner's
+    grader dispatches on which ground-truth files are present.
     """
-
-    seq = gamepad_to_action_sequence(
-        pad, move_scale=move_scale, rationale="NitroGen gold gamepad action (lossy view)."
-    )
 
     request = {
         "name": name,
@@ -153,19 +178,6 @@ def build_scenario_payloads(
         "deadline_ms": deadline_ms,
         "game_id": game_id,
     }
-    expected = {
-        "actions": seq.model_dump(mode="json"),
-        "validation": {
-            "schema_valid": True,
-            "safe": True,
-            "rejected_command_indices": [],
-            "notes": [],
-        },
-        "notes": (
-            "Lossy projection of a NitroGen gamepad action; gold_action.json holds "
-            "the faithful action used for the accuracy-vs-gold metric."
-        ),
-    }
     gold = {
         "game_id": game_id,
         "buttons": pad.buttons,
@@ -173,23 +185,21 @@ def build_scenario_payloads(
         "j_right": list(pad.j_right),
         "provenance": provenance,
     }
-    return request, expected, gold
+    return request, gold
 
 
 def write_scenario(
     out_dir: Path,
     *,
     request: dict[str, Any],
-    expected: dict[str, Any],
     gold: dict[str, Any],
     image: Any,  # PIL.Image.Image
 ) -> None:
-    """Write screen.png + the three JSON files for one scenario."""
+    """Write screen.png + request.json + gold_action.json for one policy scenario."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
     image.save(out_dir / "screen.png")
     (out_dir / "request.json").write_text(json.dumps(request, indent=2))
-    (out_dir / "expected.json").write_text(json.dumps(expected, indent=2))
     (out_dir / "gold_action.json").write_text(json.dumps(gold, indent=2))
 
 
@@ -245,10 +255,41 @@ def fetch_and_decode_frame(
     return img.convert("RGB").resize((frame_size, frame_size), Image.BICUBIC)
 
 
+_FAILED_URLS: set[str] = set()
+
+
+def _synthetic_frame(frame_size: int, *, seed: int) -> Any:
+    """Deterministic placeholder frame for offline / dead-URL benchmark runs.
+
+    Returns a `frame_size x frame_size` RGB PIL image with a per-seed noise tile so
+    the vision encoder still sees varying inputs across scenarios. NitroGen will
+    happily process it — the resulting gamepad prediction won't match real
+    gameplay (that's what the real frame is for), but latency, throughput, GPU
+    util and the bit-level FP8-vs-BF16 accuracy delta are still measurable.
+    """
+
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(seed)
+    arr = rng.integers(0, 256, size=(frame_size, frame_size, 3), dtype=np.uint8)
+    return Image.fromarray(arr, mode="RGB")
+
+
 def _ensure_video(url: str, cache_dir: Path) -> Path:
-    """Download `url` into cache_dir via yt-dlp if not already present."""
+    """Download `url` into cache_dir via yt-dlp if not already present.
+
+    Per-URL failure cache: once a URL fails we raise on subsequent calls
+    without invoking yt-dlp — videos have ~1200 chunks each, no point
+    retrying a dead URL 1200 times.
+    """
 
     import subprocess
+
+    if not url:
+        raise RuntimeError("empty url")
+    if url in _FAILED_URLS:
+        raise RuntimeError(f"url previously failed: {url}")
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Deterministic cache key from the URL.
@@ -256,7 +297,7 @@ def _ensure_video(url: str, cache_dir: Path) -> Path:
 
     key = hashlib.sha1(url.encode()).hexdigest()[:16]
     out_tmpl = str(cache_dir / f"{key}.%(ext)s")
-    existing = list(cache_dir.glob(f"{key}.*"))
+    existing = [p for p in cache_dir.glob(f"{key}.*") if p.suffix not in {".part", ".ytdl"}]
     if existing:
         return existing[0]
 
@@ -266,9 +307,11 @@ def _ensure_video(url: str, cache_dir: Path) -> Path:
         text=True,
     )
     if res.returncode != 0:
+        _FAILED_URLS.add(url)
         raise RuntimeError(f"yt-dlp failed for {url}: {res.stderr.strip()[:300]}")
-    found = list(cache_dir.glob(f"{key}.*"))
+    found = [p for p in cache_dir.glob(f"{key}.*") if p.suffix not in {".part", ".ytdl"}]
     if not found:
+        _FAILED_URLS.add(url)
         raise RuntimeError(f"yt-dlp produced no file for {url}")
     return found[0]
 
@@ -289,20 +332,29 @@ def build(args: argparse.Namespace) -> int:
 
     built = 0
     attempted = 0
+    seen_video_ids: set[str] = set()
     for chunk_dir in iter_chunks(actions_root):
         if built >= args.n:
             break
+        # Pick one chunk per source video so N scenarios = N different videos.
+        # chunk_dir layout: SHARD_xxxx/<video_id>/<video_id>_chunk_yyyy
+        video_id = chunk_dir.parent.name
+        if video_id in seen_video_ids:
+            continue
         attempted += 1
         try:
             meta = parse_metadata(json.loads((chunk_dir / "metadata.json").read_text()))
             game_id = resolve_game_id(meta.game, game_mapping)
             frame_index = meta.sample_frame_index
-            image = fetch_and_decode_frame(
-                meta, frame_index, cache_dir=cache_dir, frame_size=args.frame_size
-            )
+            if args.synthetic_frames:
+                image = _synthetic_frame(args.frame_size, seed=attempted)
+            else:
+                image = fetch_and_decode_frame(
+                    meta, frame_index, cache_dir=cache_dir, frame_size=args.frame_size
+                )
             pad = load_chunk_action(chunk_dir, frame_index)
             name = f"{built:02d}_{_slug(meta.game)}_{chunk_dir.name}"
-            request, expected, gold = build_scenario_payloads(
+            request, gold = build_scenario_payloads(
                 name=name,
                 description=f"NitroGen dataset frame from '{meta.game}' ({chunk_dir.name}).",
                 game_id=game_id,
@@ -315,12 +367,13 @@ def build(args: argparse.Namespace) -> int:
                     "game": meta.game,
                 },
             )
-            write_scenario(
-                out_root / name, request=request, expected=expected, gold=gold, image=image
-            )
+            write_scenario(out_root / name, request=request, gold=gold, image=image)
             built += 1
+            seen_video_ids.add(video_id)
             print(f"[ok] {name}  (attempt {attempted})")
         except Exception as exc:  # skip dead URLs / decode errors, try the next chunk
+            # Mark the whole video bad so we don't try its 1199 other chunks.
+            seen_video_ids.add(video_id)
             print(f"[skip] {chunk_dir.name}: {exc}", file=sys.stderr)
             continue
 
@@ -335,10 +388,15 @@ def _load_game_mapping(path: Path) -> dict[str, Any]:
         import torch  # lazy
 
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        gm = ckpt.get("ckpt_config", {})
-        # Best-effort: real shape lives in tokenizer_cfg.game_mapping_cfg; the
-        # caller may instead pass an already-extracted json.
-        return gm if isinstance(gm, dict) else {}
+        cfg = ckpt.get("ckpt_config", {}) or {}
+        tok_cfg = cfg.get("tokenizer_cfg", {}) or {}
+        gm_cfg = tok_cfg.get("game_mapping_cfg")
+        # The released ng.pt sets game_mapping_cfg=None → unconditional model.
+        # Return {} so resolve_game_id falls through to identity (game_id=label).
+        if not isinstance(gm_cfg, dict):
+            return {}
+        gm = gm_cfg.get("mapping") or gm_cfg.get("game_mapping") or {}
+        return {str(k): str(v) for k, v in gm.items()} if isinstance(gm, dict) else {}
     if path.suffix == ".json":
         return json.loads(path.read_text())
     if path.suffix == ".parquet":
@@ -372,6 +430,15 @@ def main() -> int:
     p.add_argument("--deadline-ms", type=int, default=1500, help="Scenario deadline_ms.")
     p.add_argument(
         "--game-mapping", default=None, help="Checkpoint .pt / .json / .parquet game mapping."
+    )
+    p.add_argument(
+        "--synthetic-frames",
+        action="store_true",
+        help=(
+            "Skip yt-dlp / video fetch and write a placeholder frame. Use on offline "
+            "boxes or when source URLs are dead. Gold gamepad actions still come from "
+            "the real parquet, so latency/throughput/accuracy-vs-gold remain measurable."
+        ),
     )
     return build(p.parse_args())
 

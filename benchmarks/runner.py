@@ -321,7 +321,11 @@ def _run_round(
                     "variant": round_.variant,
                     "run_label": label,
                     "instruction": sc.spec.instruction,
-                    "actions_gold": sc.expected.actions.model_dump(),
+                    # Only present for VLM scenarios (those that ship expected.json).
+                    # Policy scenarios grade via the gold_action.json sidecar.
+                    "actions_gold": (
+                        sc.expected.actions.model_dump() if sc.expected is not None else None
+                    ),
                     "model_meta": {
                         "framework": resp.model_meta.framework if resp.model_meta else None,
                         "model_id": resp.model_meta.model_id if resp.model_meta else None,
