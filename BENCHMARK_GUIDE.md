@@ -8,6 +8,37 @@ For the metric definitions see [docs/metrics.md](docs/metrics.md).
 For setup see [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md).
 For the server-alive check before benchmarking see [SMOKE_TESTS.md](SMOKE_TESTS.md).
 
+## CLI wrapper — `bench`
+
+In practice, you (and your agents) drive everything through the `bench`
+console script. It wraps the scripts in this guide with a stable JSON
+status contract:
+
+| Command | What it wraps | When |
+|---|---|---|
+| `bench probe` | `scripts/gpu_probe.sh` | GPU + driver + per-backend versions; agent should run before everything else |
+| `bench setup --backend X` | per-backend venv + pip extras | idempotent install. `X` ∈ `vllm`/`sglang`/`trtllm`/`nim`/`nitrogen`/`nitrogen-quant`/`profile` |
+| `bench scenarios build --source nitrogen` | `scripts/build_nitrogen_scenarios.py` | dataset → scenarios; respects the `pipeline_bench.scenario_sources` entry-point group for customer-supplied sources |
+| `bench smoke --gpu G --backend B --model M` | `scripts/run_all_scenarios.sh` (single round) | confirm `(backend, model)` works before paying for a sweep |
+| `bench sweep --gpu G --sweep S` | `scripts/run_all_scenarios.sh` (multi-round) | the full benchmarking pass; produces summary.md |
+| `bench summary --gpu G` | `python -m benchmarks.summary` | regenerates summary.md from existing result JSONs |
+| `bench load-test --gpu G --backend B --model M --concurrency …` | [AIPerf](https://github.com/ai-dynamo/aiperf) `profile` | **HTTP backends only** (vLLM/SGLang/TRT-LLM/NIM); produces the concurrency curve in summary.md §9 |
+| `bench profile --tool nsys --gpu G --backend B --model M` | `nsys profile` (or `ncu`) around one round | escalation: prove a hypothesis with a real timeline. Outputs `.nsys-rep` + auto `.summary.md` (from `nsys stats`) |
+| `bench install-skill --agent auto` | symlink-or-copy `skills/<name>/` into the agent's load path | Claude Code, Cursor, Codex; one-time per workstation |
+
+Exit codes the agent can branch on: `0` ok | `1` generic | `2` unsupported combo (per yaml `unsupported_backends:`) | `3` runtime fail | `4` missing dep. Every command supports `--json` so structured tooling has one thing to parse.
+
+Each command in this guide that calls `scripts/run_all_scenarios.sh` directly is still correct — `bench *` is a wrapper, not a replacement. Both paths produce identical artifacts.
+
+## What `bench load-test` and `bench profile` add (the new measurement axes)
+
+The base `bench sweep` measures e2e latency at concurrency=1 — that's the customer-experience number. Two follow-up tools each open a different axis:
+
+- **`bench load-test`** — wraps [AIPerf](https://github.com/ai-dynamo/aiperf) (NVIDIA's client-side load generator). Comma-separated `--concurrency` becomes a sweep: 1 / 4 / 16 / 32 / … . Reports TTFT/ITL/RPS/TPS per level. Populates summary.md **§9 — Concurrency profile**. Answers *"how many parallel sims per GPU"* and *"where does TTFT degrade under load."* HTTP backends only (NitroGen ZMQ is single-flight by design).
+- **`bench profile`** — wraps [Nsight Systems](https://developer.nvidia.com/nsight-systems) (default, `--tool nsys`) or [Nsight Compute](https://developer.nvidia.com/nsight-compute) (`--tool ncu`). Wraps one round under the profiler and writes the binary report. The `nsys` path also auto-emits a `<run>.summary.md` from `nsys stats` (top NVTX regions + GPU activity) so agents can quote from it without opening the GUI. **Escalation only** — overhead is real (~5–10% for nsys, 10×+ for ncu).
+
+First-time nsys install: `bench setup --backend profile` — `apt-get` discovery of the latest `nsight-systems-YYYY.X.Y` package, post-install `chmod -R o+rX` of NVIDIA's root-only `/opt/nvidia/nsight-systems/`, and a `/usr/local/bin/nsys` symlink so plain `bench profile` finds it. Falls back to a tarball-download hint if apt isn't available.
+
 ## What the harness does
 
 ```

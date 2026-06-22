@@ -13,10 +13,52 @@ command.
 
 ---
 
-## How to run a benchmark — five steps
+## Driving it from an agent (recommended)
 
-If you're a new user reading this for the first time, follow these in
-order. Each step links to the doc with the full detail.
+One CLI, one JSON status contract, one prompt per step:
+
+```bash
+pip install -e .                                # installs the `bench` console script
+bench install-skill --agent auto --json         # wires Claude Code / Codex / Cursor skills
+bench probe --json                              # GPU + driver + per-backend versions
+bench setup --backend nitrogen-quant --json     # idempotent per-backend venv install
+bench scenarios build --source nitrogen --n 3 --synthetic-frames --json
+bench smoke --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
+bench sweep --gpu rtx_pro6000 --sweep nitrogen-backends --json
+bench summary --gpu rtx_pro6000 --json
+bench load-test --gpu rtx_pro6000 --backend vllm --model … --concurrency "1,4,16,32" --json
+bench profile --tool nsys --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
+```
+
+Customer-facing walkthrough with **natural-language prompts** (no flag memorisation):
+**→ [NITROGEN_QUICKSTART.md](NITROGEN_QUICKSTART.md)** ←
+
+Don't yet know why we built this? Start with
+**→ [docs/why-this-matters.md](docs/why-this-matters.md)** — an
+engineer-friendly tour of the four budgets your model has to fit
+inside (latency, throughput, energy, precision) and how the harness
+exposes each one.
+
+## What this harness orchestrates
+
+Under the hood we wrap three NVIDIA tools so customers don't need to learn them:
+
+| Tool | What | When |
+|---|---|---|
+| [**modelopt**](https://github.com/NVIDIA/TensorRT-Model-Optimizer) | FP8 / NVFP4 PTQ calibration + ONNX export | We run it once on a known-good box; ship the calibrated artifact via [`syseeker-at-nv/nitrogen-quant`](https://huggingface.co/syseeker-at-nv/nitrogen-quant). Customers `hf download`. |
+| [**AIPerf**](https://github.com/ai-dynamo/aiperf) | Client-side load generator (OpenAI-compatible) | `bench load-test` wraps it; produces summary.md §9 (concurrency curves for HTTP backends). |
+| [**Nsight Systems**](https://developer.nvidia.com/nsight-systems) | GPU timeline profiler | `bench profile --tool nsys` wraps it; escalation tool when summary.md flags a row that needs explanation (auto-installer in `bench setup --backend profile`). |
+
+You can still call each tool directly if you need to — these are
+wrappers, not abstractions over.
+
+---
+
+## How to run a benchmark — five steps (low-level)
+
+If you'd rather drive the scripts directly (no `bench` CLI), here are
+the underlying entry points. Each step links to the doc with the full
+detail.
 
 ### 1. Pick a GPU profile and a model
 
@@ -143,6 +185,10 @@ Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios
 | [docs/nitrogen.md](docs/nitrogen.md) | NitroGen diffusion-policy backend: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend optimization study |
 | [docs/scenarios.md](docs/scenarios.md) | Scenario shape (request + screen + optional `expected` / `gold_action`), the NitroGen-chunk → scenario mapping, why we convert, and how to add your own dataset source |
 | [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: what this measures for you, player-vs-world-model choice, the bandwidth reality, and per-genre accuracy workflow |
+| [docs/why-this-matters.md](docs/why-this-matters.md) | **Andrew-Ng-style intro** for engineers new to inference benchmarking. The four budgets (latency / throughput / energy / precision), why backend choice isn't free, two real questions answered. |
+| [NITROGEN_QUICKSTART.md](NITROGEN_QUICKSTART.md) | **Agent-prompt walkthrough** to take the NitroGen sweep end-to-end. Each step shows the prompt + what the agent does + what to expect on disk. The retest doc. |
+| [skills/](skills/) | Five Claude Code / Codex / Cursor skills — `benchmark-gpu-inference`, `prepare-nitrogen-dataset`, `setup-inference-backend`, `interpret-benchmark-summary`, `extend-benchmark-config`. Install via `bench install-skill`. |
+| [docs/findings/](docs/findings/) | Per-(gpu, framework, model) postmortems referenced by the summary generator (Core findings auto-link). |
 | [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
 
 ---

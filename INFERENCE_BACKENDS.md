@@ -1,6 +1,25 @@
 # Inference backend setup
 
-Three operational modes — pick by what you actually want to measure.
+## One-shot via `bench setup`
+
+For a recent install (PRs #2/#5.0.5/#7.1), there's a wrapper that does
+the venv + extras + license/auth checks in one command per backend:
+
+| Backend | Command | What you also need (the wrapper tells you in `next_action`) |
+|---|---|---|
+| `vllm`   | `bench setup --backend vllm --json` | nothing — pip pulls everything |
+| `sglang` | `bench setup --backend sglang --json` | nothing |
+| `trtllm` | `bench setup --backend trtllm --json` | `pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com` (NVIDIA index — not on PyPI) |
+| `nim`    | `bench setup --backend nim --json` | `export NIM_API_KEY=nvapi-…` |
+| `nitrogen` | `bench setup --backend nitrogen --json` | clone `MineDojo/NitroGen` + `pip install -e ../NitroGen` + `hf download nvidia/NitroGen ng.pt` |
+| `nitrogen-quant` | `bench setup --backend nitrogen-quant --json` | same NitroGen prep AS above. Adds [`nvidia-modelopt`](https://github.com/NVIDIA/TensorRT-Model-Optimizer) + `onnxruntime-gpu` + `tensorrt`. **Pre-built FP8/NVFP4 ONNX artifacts download from [`syseeker-at-nv/nitrogen-quant`](https://huggingface.co/syseeker-at-nv/nitrogen-quant) on first sweep — customers don't recalibrate.** |
+| `profile` | `bench setup --backend profile --json` | nothing — auto-`apt-get install` of the latest `nsight-systems-YYYY.X.Y`, post-install chmod + `/usr/local/bin/nsys` symlink. Falls back to a tarball-install hint when apt isn't available. |
+
+All of these are idempotent (skip when the venv/tool already exists, pass `--force` to rebuild). All emit JSON status, exit-code 0/2/3/4 (see [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) §CLI wrapper).
+
+The per-backend recipes below describe **what `bench setup` does under the hood**. Read them when you're debugging or doing custom work; for the standard flow `bench setup --backend <name>` is the only command you need.
+
+## Three operational modes — pick by what you actually want to measure
 
 | Mode | What it answers | GPU? | Model location | Where in this doc |
 | --- | --- | --- | --- | --- |

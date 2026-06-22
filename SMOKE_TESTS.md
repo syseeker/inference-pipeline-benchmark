@@ -8,6 +8,22 @@ screens — not just gold stubs covered by the offline smoke tests.
 > Prerequisite: backends installed per
 > [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) Mode B.
 
+## One-shot via `bench smoke`
+
+For a recent install (PR #2), you can smoke a single round through the
+`bench` wrapper instead of running the two-shell ritual below:
+
+```bash
+bench smoke --gpu rtx_pro6000 --backend vllm --model qwen3-vl-8b-fp8 --json
+# Starts the server, runs 3 scenarios, captures the result aggregate, stops the server.
+```
+
+`bench smoke` is the single-round shortcut of `bench sweep` — same
+launch path, same outputs, same cleanup. Exit-code contract per
+[BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md). The two-shell flow below
+remains useful when you're debugging server-launch issues and want to
+see live stdout from both halves.
+
 ## What the tests assert
 
 For each (backend × scenario):
