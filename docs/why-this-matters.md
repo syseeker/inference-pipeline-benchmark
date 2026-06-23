@@ -1,7 +1,7 @@
 # Why this project matters — for game-AI teams
 
 A friendly tour for the bug-simulation / gameplay-simulation folks who
-asked: "I see your README, but **why** is all this machinery here?"
+asked: "I see your README, run the commands suggested, smooth~~, but **why** is all this machinery here?"
 
 You write the model. We measure whether it can ship. That's the whole
 thing. The five sections below walk you through the five budgets your
