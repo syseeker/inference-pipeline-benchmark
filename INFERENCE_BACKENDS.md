@@ -127,7 +127,7 @@ bash scripts/gpu_probe.sh
 
 ---
 
-### B.1 — vLLM (the customer's existing baseline)
+### B.1 — vLLM (your most likely starting point)
 
 #### Install
 

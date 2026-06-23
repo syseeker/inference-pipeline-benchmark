@@ -60,8 +60,9 @@ Configs live in `benchmarks/configs/{rtx5090,rtx_pro6000,h200}.yaml`.
 - 2× RTX PRO 6000 — same shape, with the server-class PCIe topology.
 - 2× / 4× H200 — NVLink-class scaling reference.
 
-If the single-GPU runs already meet the latency budget, the recommendation
-to the customer is *do not buy two GPUs*.
+If your single-GPU runs already meet the latency budget, the answer is
+*don't buy two GPUs*. Spend the headroom on a bigger model or longer
+context instead.
 
 ## Probes
 

@@ -8,7 +8,7 @@ winner.
 
 ### vLLM — baseline
 
-- Already familiar to the customer.
+- The most likely stack you've already deployed.
 - Strong story: PagedAttention, continuous batching, prefix caching, CUDA
   graphs, multiple quant formats, streaming, structured outputs, and
   multimodal models including Qwen3-VL / Nemotron-Omni / LLaVA / Pixtral.
@@ -118,6 +118,6 @@ version on the host.
 ## Out of scope (for now)
 
 - llama.cpp / GGUF runtimes — useful as a CPU/edge fallback comparison
-  but not in the NVIDIA POC ask.
-- TGI — not on the customer's roadmap.
-- Custom kernels — we lean on the frameworks before writing kernels.
+  but out of scope for an NVIDIA-GPU benchmark.
+- TGI — out of scope unless you bring a specific need.
+- Custom kernels — out of scope. Lean on the frameworks above first.

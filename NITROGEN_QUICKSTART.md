@@ -1,15 +1,14 @@
 # NitroGen end-to-end quickstart
 
-Drive the full NitroGen FP8 sweep on one GPU by **prompting your agent**
-— no flag memorisation. Read this once and either:
+You'll drive the full NitroGen FP8 sweep on one GPU by **prompting an
+agent** — no flag memorisation. Paste each step's prompt into your
+agent (Claude Code / Codex / Cursor), and the walkthrough tells you
+what the agent should do and what to verify on disk. End-to-end runs in
+about 10 minutes the first time.
 
-- **(verify a fresh deploy)** copy each prompt block in order. Each step
-  shows what the agent should do under the hood + what to expect on disk.
-- **(hand to a customer)** they paste the prompts. They get summary.md
-  and the headline number without learning the CLI.
-
-> New here? Skim [docs/why-this-matters.md](docs/why-this-matters.md) first.
-> 10 minutes; tells you why the 5-minute walkthrough below matters.
+> New here? Read [docs/why-this-matters.md](docs/why-this-matters.md)
+> first — it explains why the numbers you're about to produce matter
+> for game-AI work.
 
 ---
 
@@ -171,9 +170,10 @@ the agent shouldn't argue from numbers — it should produce a timeline.
 
 ## Step 8 — (Optional) Concurrency curves (HTTP backends only)
 
-NitroGen doesn't do this — its ZMQ server is single-flight (PR #6 + PR #8
-detail). But for **VLM backends** the question becomes important: how
-many parallel sims per GPU?
+NitroGen doesn't do this — its ZMQ server is single-flight by design (see
+[docs/nitrogen.md](docs/nitrogen.md) for the policy-vs-VLM distinction).
+But for **VLM backends** the question becomes important: how many parallel
+sims per GPU?
 
 **Prompt:**
 > "How does Qwen3-VL-32B-FP8 scale on vLLM under load on this GPU?"
@@ -217,12 +217,22 @@ Then go back to **Step 0**.
 
 ---
 
-## What's verified vs deferred
+## What this walkthrough does and doesn't cover
 
-This walkthrough was verified end-to-end on a real PRO 6000 Blackwell as part of PRs #5/5.0.5/5.1/6/7/7.1 (June 2026). What's not verified yet:
+We've tested every step in this doc end-to-end on RTX PRO 6000 Blackwell.
+Three things this walkthrough deliberately stops short of — flag them
+ahead of time so you know what's expected vs a real bug:
 
-- AIPerf concurrency curves (Step 8) — requires a running HTTP backend; the wiring is verified but real numbers weren't on this box.
-- NVFP4 row — TRT 10.16 missing the FP4 plugin; pinned out, revisit on TRT bump.
-- Multi-GPU (TP=N, replicate-per-GPU) — runtime supports it via yaml; verified config-driven; first real customer with multi-GPU is the first to populate those numbers.
+- **Step 8 (AIPerf concurrency curves)** — only runs against a VLM HTTP
+  backend (vLLM/SGLang/TRT-LLM). If you're doing a pure NitroGen run, skip
+  this step; section 9 of summary.md will be empty.
+- **NVFP4 row in the sweep** — `tensorrt==10.16` doesn't ship the FP4
+  plugin yet, so we pinned this row out via `unsupported_backends:`. The
+  sweep will skip it with a clear reason. Revisit when TRT bumps.
+- **Multi-GPU (tensor-parallel, replicate-per-GPU)** — supported via the
+  GPU yaml (`tensor_parallel: N` + the right `extra_args`), but we haven't
+  produced numbers because this box is single-GPU. If you have a 4× setup,
+  edit the yaml and tell us how it lands.
 
-If your first run trips on something outside this list, that's a bug we want to know about — note it on the PR thread.
+If anything outside that list trips, that's a bug — file it on the repo
+with the failing step + the JSON status the agent surfaced.

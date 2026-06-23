@@ -32,7 +32,7 @@ Each command in this guide that calls `scripts/run_all_scenarios.sh` directly is
 
 ## What `bench load-test` and `bench profile` add (the new measurement axes)
 
-The base `bench sweep` measures e2e latency at concurrency=1 — that's the customer-experience number. Two follow-up tools each open a different axis:
+The base `bench sweep` measures e2e latency at concurrency=1 — that's your end-users' experience. Two follow-up tools each open a different axis:
 
 - **`bench load-test`** — wraps [AIPerf](https://github.com/ai-dynamo/aiperf) (NVIDIA's client-side load generator). Comma-separated `--concurrency` becomes a sweep: 1 / 4 / 16 / 32 / … . Reports TTFT/ITL/RPS/TPS per level. Populates summary.md **§9 — Concurrency profile**. Answers *"how many parallel sims per GPU"* and *"where does TTFT degrade under load."* HTTP backends only (NitroGen ZMQ is single-flight by design).
 - **`bench profile`** — wraps [Nsight Systems](https://developer.nvidia.com/nsight-systems) (default, `--tool nsys`) or [Nsight Compute](https://developer.nvidia.com/nsight-compute) (`--tool ncu`). Wraps one round under the profiler and writes the binary report. The `nsys` path also auto-emits a `<run>.summary.md` from `nsys stats` (top NVTX regions + GPU activity) so agents can quote from it without opening the GUI. **Escalation only** — overhead is real (~5–10% for nsys, 10×+ for ncu).

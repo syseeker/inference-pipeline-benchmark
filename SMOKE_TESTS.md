@@ -10,8 +10,8 @@ screens — not just gold stubs covered by the offline smoke tests.
 
 ## One-shot via `bench smoke`
 
-For a recent install (PR #2), you can smoke a single round through the
-`bench` wrapper instead of running the two-shell ritual below:
+You can smoke a single round through the `bench` wrapper instead of
+running the two-shell ritual below:
 
 ```bash
 bench smoke --gpu rtx_pro6000 --backend vllm --model qwen3-vl-8b-fp8 --json

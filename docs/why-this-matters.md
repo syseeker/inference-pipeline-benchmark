@@ -108,10 +108,10 @@ Done wrong, your policy starts misclicking on edge cases that BF16
 handled. The harness exposes **accuracy-vs-gold** per scenario, so you
 *see* the regression instead of finding it in production.
 
-For NitroGen specifically (PRs #5 + #5.1 — see [docs/nitrogen.md](nitrogen.md)),
-we found FP8 gives **45% lower latency at 2× throughput, half the
-energy per request** vs the BF16 baseline. Same gameplay quality.
-That number is real, measured this week on a PRO 6000:
+For NitroGen specifically (see [docs/nitrogen.md](nitrogen.md)), FP8
+gives **45% lower latency at 2× throughput, half the energy per
+request** vs the BF16 baseline. Same gameplay quality. Measured on
+a real RTX PRO 6000 Blackwell:
 
 | Precision | p50 e2e | seq/s | J/req |
 |---|---|---|---|
@@ -134,11 +134,11 @@ NVIDIA one." Reality:
   archs (Qwen3.6, Gemma 4 today: not yet loadable).
 - **NitroGen ZMQ** — single-flight policy server, not OpenAI-shaped.
 
-On a single Blackwell PRO 6000 we found vLLM is 1.6–1.8× faster than
-SGLang on dense models and **18× faster than TRT-LLM** on Qwen3-VL-30B
+On a single Blackwell PRO 6000, vLLM comes out 1.6–1.8× faster than
+SGLang on dense models and **18× faster than TRT-LLM** on Qwen3-VL-30B,
 because TRT-LLM 1.2.1's fused-MoE FP8 kernel doesn't yet target
-SM_120 (Blackwell pro/workstation). You couldn't predict that from
-docs. We measure it.
+SM_120 (Blackwell pro/workstation). You can't predict that from docs.
+You measure it.
 
 So **engine choice is a sweep, not a vibe.** This harness runs the same
 scenarios through all three and prints the table.
@@ -188,14 +188,14 @@ The answer is **a number with units**, not "should be fast enough."
 
 > "Is the FP8 policy fast enough to feel like a real opponent?"
 
-What we did (this week):
+Your workflow:
 1. `bench sweep --gpu rtx_pro6000 --sweep nitrogen-backends`
-2. summary.md says: **nitrogen-onnx + FP8 → 59 ms p50** (vs **107 ms** for the BF16 baseline — so 45% faster, but still 59 ms in absolute terms).
+2. summary.md tells you: **nitrogen-onnx + FP8 → 59 ms p50** (vs **107 ms** for the BF16 baseline — so 45% faster, but still 59 ms in absolute terms).
 3. Translate to a polling rate: 1000 ms ÷ 59 ms ≈ **17 AI decisions per second**. That's the rate at which the policy can respond to fresh frames.
 4. Match against your game's needs:
-   - **Twitch shooter / fighting game (60 fps target, every frame matters)**: 17 Hz is too slow — the AI lags the player by ~4 frames at 60 fps. Not shippable. Either the model gets smaller, NVFP4 cuts another ~10–15% (Blackwell-only, see [docs/findings/](findings/) when it lands), batch-mode multi-instance amortises the launch cost (PR #6 will tell you), or you accept a 30 fps game target.
+   - **Twitch shooter / fighting game (60 fps target, every frame matters)**: 17 Hz is too slow — the AI lags the player by ~4 frames at 60 fps. Not shippable. Either the model gets smaller, NVFP4 cuts another ~10–15% (Blackwell-only — track [docs/findings/](findings/) for when that lands), batch-mode multi-instance amortises the launch cost (`bench load-test` will tell you), or you accept a 30 fps game target.
    - **Strategy / RPG / sim (LoL-class — 10–30 Hz AI update is normal)**: 17 Hz is **fine, ship it**. The 45% headroom you gained over BF16 is exactly the safety margin you wanted.
-5. Why the FP8 win is smaller in absolute ms than the headline percentage suggests: the workload is launch-bound (`DRAM_ACTIVE` ~0.4%), so per-step kernel-launch overhead dominates. PR #6's concurrency sweep + PR #5.2's NVFP4 (when TRT ships the plugin) are the next levers.
+5. Why the FP8 win is smaller in absolute ms than the headline percentage suggests: the workload is launch-bound (`DRAM_ACTIVE` ~0.4%), so per-step kernel-launch overhead dominates. AIPerf concurrency sweeps + NVFP4 (once your TRT version ships the plugin) are the next levers — both are one `bench` command away when you need them.
 
 Concrete decisions, with numbers, from one sweep. **The benchmark didn't make the decision for you — it gave you the units to make it in.**
 

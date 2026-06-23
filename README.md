@@ -50,7 +50,7 @@ bench profile --tool nsys --gpu rtx_pro6000 --backend nitrogen-eager --model nit
 User walkthrough with **natural-language prompts** via agent(recommended, no flag memorisation):
 **→ [NITROGEN_QUICKSTART.md](NITROGEN_QUICKSTART.md)** ←
 
-Don't yet know why we built this? Start with
+Don't yet know why this project exists? Start with
 **→ [docs/why-this-matters.md](docs/why-this-matters.md)** — an
 engineer-friendly tour of the four budgets your model has to fit
 inside (latency, throughput, energy, precision) and how the harness
@@ -299,7 +299,7 @@ for the full list and per-field definitions.
 
 | Framework | Role |
 | --- | --- |
-| vLLM | Baseline (already familiar to the customer) |
+| vLLM | Baseline — most-deployed open serving stack, the one you've most likely already used |
 | SGLang | Low-latency challenger; RadixAttention + structured output |
 | TensorRT-LLM | PyTorch backend via `trtllm-serve` (HTTP, OpenAI-shape — mirrors vLLM/SGLang) |
 | ModelOpt | FP8 / NVFP4 / W8A8 quant + calibration (placeholder; not wired yet) |
