@@ -32,18 +32,64 @@ for the on-disk shape that lets one harness drive both.
 
 ## Driving it from CLI and an agent
 
-One CLI, one JSON status contract, one prompt per step:
+There are **two layers of Python environment** — don't mix them up:
+
+| Environment | Purpose | Lives at |
+|---|---|---|
+| CLI venv | Runs `bench` commands. Install once. | `~/venv` (or any venv you own) |
+| Backend venvs | One per backend family; created by `bench setup`. The sweep activates these automatically. | `.venv-nitrogen`, `.venv-vllm`, etc. inside the repo |
+
+All nitrogen execution engines (eager / compile / cudagraph / tensorrt / onnx) and quantization tools share **one venv: `.venv-nitrogen`**. There is no separate `nitrogen-quant` venv.
+
+### Step 1 — install the `bench` CLI (once per machine)
 
 ```bash
+# If your system Python is not writable (e.g. /opt/python-venv), create a venv you own:
+python3 -m venv ~/venv && source ~/venv/bin/activate
 pip install -e .                                # installs the `bench` console script
-bench install-skill --agent auto --json         # wires Claude Code / Codex / Cursor skills
+```
+
+### Step 2 — set up the nitrogen venv (once per repo)
+
+```bash
+bench setup --backend nitrogen --json           # creates .venv-nitrogen inside the repo
+
+# NitroGen package (policy model runtime) must be installed into .venv-nitrogen separately:
+git clone https://github.com/MineDojo/NitroGen ../NitroGen
+source .venv-nitrogen/bin/activate
+pip install -e ../NitroGen
+# TRT + modelopt wheels live on NVIDIA's index (needed for tensorrt/onnx exec engines):
+pip install nvidia-modelopt onnxruntime-gpu --extra-index-url https://pypi.nvidia.com
+deactivate
+
+# Download the checkpoint (hf lives in ~/venv — re-activate it after deactivating above):
+source ~/venv/bin/activate
+hf download nvidia/NitroGen ng.pt
+```
+
+### Step 3 — build scenarios and run the sweep
+
+```bash
 bench probe --json                              # GPU + driver + per-backend versions
-bench setup --backend nitrogen-quant --json     # idempotent per-backend venv install
+
+# First time only: download the NitroGen dataset and extract one shard
+hf download nvidia/NitroGen --repo-type dataset
+tar -xzf ~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions/SHARD_0000.tar.gz \
+    -C ~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions/
+export NITROGEN_ACTIONS_ROOT=~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions
+
 bench scenarios build --source nitrogen --n 3 --synthetic-frames --json
 bench smoke --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
 bench sweep --gpu rtx_pro6000 --sweep nitrogen-backends --json
 bench summary --gpu rtx_pro6000 --json
-bench load-test --gpu rtx_pro6000 --backend vllm --model … --concurrency "1,4,16,32" --json
+```
+
+Other commands (once backends are running):
+
+```bash
+# Nitrogen backends — launches N replicas, one client thread per replica
+bench load-test --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --concurrency "1,4,16,32" --json
+
 bench profile --tool nsys --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
 ```
 
@@ -120,7 +166,8 @@ pip install -e ".[dev]" && deactivate
 # NitroGen policy venv (covers nitrogen-eager / -compile / -cudagraph
 # / -tensorrt / -onnx — five engines, one venv).
 python3 -m venv .venv-nitrogen && source .venv-nitrogen/bin/activate
-pip install -e ".[nitrogen,nitrogen-quant,dataset,dev]"
+pip install -e ".[nitrogen,dataset,dev]"
+pip install nvidia-modelopt onnxruntime-gpu --extra-index-url https://pypi.nvidia.com
 pip install -e ../NitroGen                    # clone https://github.com/MineDojo/NitroGen first
 hf download nvidia/NitroGen ng.pt             # checkpoint
 deactivate

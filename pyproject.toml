@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.7",
     "typer>=0.12",
+    "pyzmq>=25",
 ]
 
 [project.scripts]
@@ -57,11 +58,11 @@ triton  = ["tritonclient[grpc]>=2.45"]
 # as-is; `bench load-test` wraps it for concurrency-curve measurement
 # (PR #6). Kept in its own extra so the base install stays slim.
 aiperf  = ["aiperf>=0.10"]
-# NitroGen diffusion-policy backend. `nitrogen` itself (the package + ng.pt
-# checkpoint) is installed from its own repo (pip install -e ../NitroGen) plus
-# `hf download nvidia/NitroGen ng.pt`; torch/diffusers/transformers come with
-# it. We list the client-side deps the reasoner needs here. TensorRT / ONNX /
-# modelopt (FP8/NVFP4 export) install from NVIDIA's index on the GPU box.
+# NitroGen diffusion-policy backend — all execution engines (eager / compile /
+# cudagraph / tensorrt / onnx) + quantization tools in one venv (.venv-nitrogen).
+# `nitrogen` itself is installed from its own repo: pip install -e ../NitroGen.
+# nvidia-modelopt and onnxruntime-gpu live on NVIDIA's wheel index:
+#   pip install nvidia-modelopt onnxruntime-gpu --extra-index-url https://pypi.nvidia.com
 nitrogen= [
     "pyzmq>=25", "torch", "torchvision",
     # transformers >=5 dropped the `SiglipModel.vision_model` wrapper, breaking
@@ -69,13 +70,7 @@ nitrogen= [
     # nitrogen.py. Pin <5 until MineDojo/NitroGen lands a compat shim.
     "transformers>=4.40,<5",
     "diffusers", "einops",
-]
-# FP8 / NVFP4 quantization + ONNX-Runtime serving for the
-# nitrogen-tensorrt / nitrogen-onnx exec backends. Kept in its own extra
-# so the base nitrogen install stays slim — `bench setup` installs this
-# only when a sweep that needs FP8/NVFP4 is queued. nvidia-modelopt lives
-# on the NVIDIA index; pass --extra-index-url=https://pypi.nvidia.com.
-nitrogen-quant = [
+    "huggingface_hub>=0.23",
     "nvidia-modelopt>=0.44",
     "onnxruntime-gpu>=1.18",
 ]

@@ -187,9 +187,9 @@ _BACKEND_EXTRAS = {
     "sglang": ["sglang", "aiperf", "dev"],
     "trtllm": ["aiperf", "dev"],   # tensorrt-llm wheel installed separately (NVIDIA index)
     "nim":    ["nim", "aiperf", "dev"],
-    # NitroGen is ZMQ + single-flight today — no AIPerf install needed.
+    # All nitrogen execution engines (eager/compile/cudagraph/tensorrt/onnx)
+    # + quantization tools share one venv (.venv-nitrogen).
     "nitrogen": ["nitrogen", "dataset", "dev"],
-    "nitrogen-quant": ["nitrogen", "nitrogen-quant", "dataset", "dev"],
 }
 
 
@@ -508,47 +508,82 @@ def _aiperf_endpoint_type_for(backend: str) -> str:
 
 @app.command(
     "load-test",
-    help="AIPerf concurrency sweep against a running HTTP backend (vLLM / SGLang / TRT-LLM).",
+    help="Concurrency sweep: AIPerf for HTTP backends (vLLM/SGLang/TRT-LLM); replica load test for nitrogen backends.",
 )
 def load_test(
-    gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/ — used to resolve `base_url` for the named backend."),
-    backend: str = typer.Option(..., help="HTTP backend name from the GPU yaml (vllm | sglang | trtllm | nim)."),
-    model: str = typer.Option(..., help="Served model identifier — passed to AIPerf as `--model`."),
+    gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
+    backend: str = typer.Option(..., help="Backend name from the GPU yaml (vllm | sglang | trtllm | nim | nitrogen-eager | …)."),
+    model: str = typer.Option(..., help="Model identifier (for HTTP: passed to AIPerf; for nitrogen: label in results)."),
     concurrency: str = typer.Option(
         "1,4,16,32",
-        help="Comma-separated concurrency levels to sweep. Each becomes one AIPerf phase; results combine into a single concurrency curve.",
+        help="Comma-separated concurrency levels. For HTTP backends: parallel requests to one server. For nitrogen: number of replicas launched.",
     ),
-    warmup: int = typer.Option(10, help="Warmup requests per phase (AIPerf rejects warmup=0)."),
-    request_count: int = typer.Option(200, help="Measured requests per phase."),
-    duration: int = typer.Option(0, help="If > 0, use a wall-clock budget (seconds) instead of `--request-count`."),
-    artifact_dir: Path = typer.Option(None, help="Output dir for AIPerf artifacts. Default: benchmarks/results/<gpu>/aiperf/<backend>-<model>-<ts>/."),
+    warmup: int = typer.Option(10, help="Warmup requests per phase (discarded)."),
+    request_count: int = typer.Option(200, help="Measured requests per replica per phase."),
+    duration: int = typer.Option(0, help="If > 0, use a wall-clock budget (seconds) instead of --request-count (HTTP backends only)."),
+    scenarios_dir: Path = typer.Option(None, help="Scenarios for nitrogen load test. Defaults to tests/smoke/scenarios_nitrogen/."),
+    nitrogen_ckpt_path: Path = typer.Option(None, help="Path to ng.pt. Defaults to $NITROGEN_CKPT_PATH or hf_hub_download."),
+    artifact_dir: Path = typer.Option(None, help="Output dir. Default: benchmarks/results/<gpu>/aiperf/<backend>-<model>-<ts>/."),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Run AIPerf against an already-running HTTP server.
+    """Concurrency sweep for any backend.
 
-    Does NOT launch the server — point at one started by `bench smoke`
-    or `bench sweep`. AIPerf writes profile_export_aiperf.{csv,json}
-    under `benchmarks/results/<gpu>/aiperf/...`; the summary generator
-    picks them up via the new "Concurrency profile" section.
-
-    NitroGen: refused at the input stage with a pointer to PR #8.
+    HTTP backends (vllm/sglang/trtllm): wraps AIPerf — server must already be
+    running. Nitrogen backends: launches N replicas on consecutive ports
+    (5600+), distributes requests across them, then tears them down. No
+    pre-running server needed for nitrogen.
     """
     if backend.startswith("nitrogen"):
+        import time as _time
+
+        ts = _time.strftime("%Y%m%dT%H%M%S")
+        out = artifact_dir or (RESULTS_ROOT / gpu / "aiperf" / f"{backend}-{model}-{ts}")
+        out.mkdir(parents=True, exist_ok=True)
+
+        ckpt = str(nitrogen_ckpt_path or os.environ.get("NITROGEN_CKPT_PATH") or "")
+        if not ckpt:
+            try:
+                from huggingface_hub import try_to_load_from_cache, hf_hub_download
+                # Check local cache first — no network call.
+                cached = try_to_load_from_cache("nvidia/NitroGen", "ng.pt")
+                ckpt = cached if cached and cached != "no_such_revision" else hf_hub_download("nvidia/NitroGen", "ng.pt")
+            except Exception as e:
+                emit(
+                    command="load-test", status="error",
+                    error={"code": EXIT_GENERIC, "remediation": f"cannot resolve checkpoint: {e}. Pass --nitrogen-ckpt-path or set $NITROGEN_CKPT_PATH."},
+                    json_out=json_out, exit_code=EXIT_GENERIC,
+                )
+
+        exec_mode = backend.removeprefix("nitrogen-")  # eager, compile, cudagraph, tensorrt, onnxruntime
+        sc_dir = str(scenarios_dir or (REPO_ROOT / "tests" / "smoke" / "scenarios_nitrogen"))
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "nitrogen_load_test.py"),
+            "--ckpt", ckpt,
+            "--exec", exec_mode,
+            "--replicas", concurrency,
+            "--requests", str(request_count),
+            "--warmup", str(warmup),
+            "--scenarios-dir", sc_dir,
+            "--out", str(out),
+            "--backend", backend,
+            "--model", model,
+        ]
+        res = _run(cmd, capture=json_out)
+        if res.returncode != 0:
+            emit(
+                command="load-test", status="error",
+                error={"code": EXIT_RUNTIME, "remediation": (res.stderr or f"nitrogen load test failed; see {out}").strip()[:500]},
+                artifacts=[str(out)], json_out=json_out, exit_code=EXIT_RUNTIME,
+            )
         emit(
-            command="load-test",
-            status="error",
-            error={
-                "code": EXIT_UNSUPPORTED,
-                "remediation": (
-                    "NitroGen runs as a single-flight ZMQ server (REP socket). "
-                    "AIPerf concurrency sweeps need a multi-flight endpoint — "
-                    "see PR #8 (replicate-per-GPU). Today, NitroGen latency at "
-                    "concurrency=1 comes from `bench sweep`."
-                ),
-            },
+            command="load-test", status="ok",
+            artifacts=[str(out)],
+            next_action=f"results in {out}/profile_export_aiperf.json; re-run bench summary --gpu {gpu}",
+            data={"gpu": gpu, "backend": backend, "model": model, "concurrency_sweep": [int(c) for c in concurrency.split(",")]},
             json_out=json_out,
-            exit_code=EXIT_UNSUPPORTED,
         )
+        return
 
     try:
         endpoint_type = _aiperf_endpoint_type_for(backend)

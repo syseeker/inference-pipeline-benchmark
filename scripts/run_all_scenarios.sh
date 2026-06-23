@@ -44,6 +44,7 @@
 set -euo pipefail
 
 BACKENDS="vllm sglang trtllm"
+BACKENDS_EXPLICIT=0
 GPU="rtx_pro6000"
 SCENARIOS_DIR=""
 MODEL=""
@@ -53,7 +54,7 @@ READY_TIMEOUT_S="${READY_TIMEOUT_S:-600}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --backends) BACKENDS="$2"; shift 2 ;;
+    --backends) BACKENDS="$2"; BACKENDS_EXPLICIT=1; shift 2 ;;
     --gpu) GPU="$2"; shift 2 ;;
     --scenarios-dir) SCENARIOS_DIR="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
@@ -305,11 +306,18 @@ start_server() {
       if [[ -n "${NITROGEN_CKPT_PATH:-}" ]]; then
         ckpt_path="$NITROGEN_CKPT_PATH"
       else
-        ckpt_path=$(hf download "${ckpt%%:*}" "${ckpt##*:}")
+        # Resolve from local HF cache first (no network); fall back to download.
+        ckpt_path=$(python - <<EOF
+from huggingface_hub import try_to_load_from_cache, hf_hub_download
+repo, filename = "${ckpt%%:*}", "${ckpt##*:}"
+cached = try_to_load_from_cache(repo, filename)
+print(cached if cached and cached != "no_such_revision" else hf_hub_download(repo, filename))
+EOF
+)
       fi
       echo ">> serve_nitrogen.py $ckpt_path --port $port ${launch[*]:-}"
       python scripts/serve_nitrogen.py "$ckpt_path" --port "$port" "${launch[@]}" \
-        < /dev/null >> "$LOG_DIR/nitrogen.log" 2>&1 &
+        < /dev/null >> "$LOG_DIR/${backend}.log" 2>&1 &
       SERVER_PID=$!
       WAIT_URL="tcp://localhost:${port}"
       return 0
@@ -391,7 +399,18 @@ run_round() {
 
   echo ">> ${backend} server pid=${SERVER_PID} (log: $LOG_DIR/${backend}.log)"
   if ! wait_for_ready "$WAIT_URL" "$backend" "$round_timeout"; then
-    diagnose_log "$backend" "$LOG_DIR/${backend}.log" "$port"
+    local log_file="$LOG_DIR/${backend}.log"
+    # Missing optional dep (e.g. tensorrt, onnxruntime-gpu not installed in this
+    # venv) → treat as a skipped round, not a sweep failure.
+    if [[ -f "$log_file" ]] && grep -q "ModuleNotFoundError: No module named" "$log_file"; then
+      local missing
+      missing=$(grep -o "No module named '[^']*'" "$log_file" | head -1)
+      echo ">> skipping ${backend}/${model:-<default>}: $missing not in .venv-nitrogen; re-run bench setup --backend nitrogen" >&2
+      cleanup
+      deactivate
+      return 0
+    fi
+    diagnose_log "$backend" "$log_file" "$port"
     cleanup
     deactivate
     return 1
@@ -401,7 +420,13 @@ run_round() {
   local args=(--backend "$backend" --gpu "$GPU")
   [[ -n "$model" ]]                       && args+=(--model "$model")
   [[ -n "$variant" && "$variant" != "baseline" ]] && args+=(--variant "$variant")
-  [[ -n "$SCENARIOS_DIR" ]]               && args+=(--scenarios-dir "$SCENARIOS_DIR")
+  # Nitrogen backends use scenarios_nitrogen/ by default; VLM backends use scenarios/.
+  # An explicit --scenarios-dir always wins.
+  local effective_scenarios_dir="$SCENARIOS_DIR"
+  if [[ -z "$effective_scenarios_dir" && "$backend" == nitrogen-* ]]; then
+    effective_scenarios_dir="tests/smoke/scenarios_nitrogen"
+  fi
+  [[ -n "$effective_scenarios_dir" ]]     && args+=(--scenarios-dir "$effective_scenarios_dir")
   python -m benchmarks.runner "${args[@]}"
   local rc=$?
   set -e
@@ -437,11 +462,14 @@ if [[ -n "$SWEEP" ]]; then
     backend=$(printf '%s' "$round_json" | python -c 'import json,sys;d=json.load(sys.stdin);print(d["backend"])')
     model=$(printf '%s'   "$round_json" | python -c 'import json,sys;d=json.load(sys.stdin);print(d["model_id"])')
     variant=$(printf '%s' "$round_json" | python -c 'import json,sys;d=json.load(sys.stdin);print(d.get("variant") or "")')
-    # Honour --backends filter even inside a sweep.
-    case " $BACKENDS " in
-      *" $backend "*) ;;
-      *) echo ">> skipping sweep round (backend $backend not in --backends)"; continue ;;
-    esac
+    # Honour --backends filter only when it was explicitly passed; the default
+    # VLM list ("vllm sglang trtllm") must not silently filter out nitrogen-* rounds.
+    if (( BACKENDS_EXPLICIT )); then
+      case " $BACKENDS " in
+        *" $backend "*) ;;
+        *) echo ">> skipping sweep round (backend $backend not in --backends)"; continue ;;
+      esac
+    fi
     if ! run_round "$backend" "$model" "$variant"; then
       failed+=("${backend}/${model}/${variant:-baseline}")
       echo "!! halting at first failure (sweep round: ${backend}/${model}/${variant:-baseline})" >&2
