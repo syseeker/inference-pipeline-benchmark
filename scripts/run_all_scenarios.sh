@@ -74,6 +74,18 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Resolve a venv python that has the benchmarks package (needed for
+# scenario_config, summary, etc.). Try venvs in precedence order; fall
+# back to the system python only as a last resort.
+BENCH_PYTHON=""
+for _venv in .venv-nitrogen .venv-vllm .venv-sglang .venv-trtllm; do
+  if [[ -f "$_venv/bin/python" ]] && "$_venv/bin/python" -c "import benchmarks" 2>/dev/null; then
+    BENCH_PYTHON="$_venv/bin/python"
+    break
+  fi
+done
+: "${BENCH_PYTHON:=python}"
+
 LOG_DIR="benchmarks/results/${GPU}/server-logs"
 mkdir -p "$LOG_DIR"
 
@@ -204,7 +216,7 @@ cfg_field() {
   local args=(--gpu "$GPU" --backend "$backend" --field "$field")
   [[ -n "$model" ]] && args+=(--model "$model")
   [[ -n "$variant" && "$variant" != "baseline" ]] && args+=(--variant "$variant")
-  python -m benchmarks.scenario_config "${args[@]}"
+  $BENCH_PYTHON -m benchmarks.scenario_config "${args[@]}"
 }
 
 cfg_launch_args() {
@@ -216,7 +228,7 @@ cfg_launch_args() {
   [[ -n "$variant" && "$variant" != "baseline" ]] && args+=(--variant "$variant")
   while IFS= read -r line; do
     [[ -n "$line" ]] && _out+=("$line")
-  done < <(python -m benchmarks.scenario_config "${args[@]}")
+  done < <($BENCH_PYTHON -m benchmarks.scenario_config "${args[@]}")
 }
 
 # rc 0 if `backends.<backend>.variants.<variant>` exists. "baseline" is
@@ -226,7 +238,7 @@ cfg_has_variant() {
   if [[ -z "$variant" || "$variant" == "baseline" ]]; then
     return 0
   fi
-  python -m benchmarks.scenario_config \
+  $BENCH_PYTHON -m benchmarks.scenario_config \
     --gpu "$GPU" --backend "$backend" --has-variant "$variant"
 }
 
@@ -337,7 +349,7 @@ cfg_unsupported_reason() {
   local backend="$1" model="${2:-}"
   local args=(--gpu "$GPU" --backend "$backend" --unsupported-reason)
   [[ -n "$model" ]] && args+=(--model "$model")
-  python -m benchmarks.scenario_config "${args[@]}" 2>/dev/null || true
+  $BENCH_PYTHON -m benchmarks.scenario_config "${args[@]}" 2>/dev/null || true
 }
 
 # Run one (backend, model, variant) round end-to-end.
@@ -427,7 +439,7 @@ run_round() {
     effective_scenarios_dir="tests/smoke/scenarios_nitrogen"
   fi
   [[ -n "$effective_scenarios_dir" ]]     && args+=(--scenarios-dir "$effective_scenarios_dir")
-  python -m benchmarks.runner "${args[@]}"
+  $BENCH_PYTHON -m benchmarks.runner "${args[@]}"
   local rc=$?
   set -e
 
@@ -455,7 +467,7 @@ if [[ -n "$SWEEP" ]]; then
   # inherit that fd and silently drain it — so only the first 1-3 rounds
   # ran before the loop saw EOF. mapfile dodges the inheritance entirely.
   declare -a SWEEP_ROUNDS
-  mapfile -t SWEEP_ROUNDS < <(python -m benchmarks.scenario_config --gpu "$GPU" --emit-rounds "$SWEEP")
+  mapfile -t SWEEP_ROUNDS < <($BENCH_PYTHON -m benchmarks.scenario_config --gpu "$GPU" --emit-rounds "$SWEEP")
   echo ">> sweep '$SWEEP' resolved to ${#SWEEP_ROUNDS[@]} round(s)"
   for round_json in "${SWEEP_ROUNDS[@]}"; do
     [[ -z "$round_json" ]] && continue
@@ -497,7 +509,7 @@ for v in vllm sglang trtllm nitrogen; do
   if [[ -d ".venv-${v}" ]]; then
     # shellcheck source=/dev/null
     source ".venv-${v}/bin/activate"
-    python -m benchmarks.summary --gpu "$GPU"
+    $BENCH_PYTHON -m benchmarks.summary --gpu "$GPU"
     deactivate
     break
   fi

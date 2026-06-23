@@ -88,7 +88,7 @@ Other commands (once backends are running):
 
 ```bash
 # Nitrogen backends — launches N replicas, one client thread per replica
-bench load-test --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --concurrency "1,4,16,32" --json
+bench load-test --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --concurrency "1,2,4,8,16,32" --json
 
 bench profile --tool nsys --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
 ```

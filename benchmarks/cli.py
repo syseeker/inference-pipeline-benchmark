@@ -236,14 +236,20 @@ def setup(
 
         shutil.rmtree(venv)
 
-    # Create venv and install harness extras. The trtllm wheel comes from
-    # NVIDIA's index, not regular PyPI — caller is responsible for that
-    # second pip install per INFERENCE_BACKENDS.md. The nitrogen package
-    # comes from `pip install -e ../NitroGen`, also a separate step.
+    # Create venv and install harness extras.
+    # nitrogen/trtllm need wheels from NVIDIA's index (tensorrt, onnxruntime-gpu,
+    # nvidia-modelopt, tensorrt-llm). Pass the index for those backends so all
+    # deps resolve in one step. trtllm-serve still needs a separate install for
+    # the tensorrt-llm wheel itself (too large to pin in pyproject.toml extras).
+    _NVIDIA_INDEX = "https://pypi.nvidia.com"
+    _NEEDS_NVIDIA_INDEX = {"nitrogen", "trtllm"}
+    pip_install = [str(venv / "bin" / "pip"), "install", "-e", extra_spec]
+    if backend in _NEEDS_NVIDIA_INDEX:
+        pip_install += ["--extra-index-url", _NVIDIA_INDEX]
     steps = [
         ["python3", "-m", "venv", str(venv)],
         [str(venv / "bin" / "pip"), "install", "--upgrade", "pip"],
-        [str(venv / "bin" / "pip"), "install", "-e", extra_spec],
+        pip_install,
     ]
     for cmd in steps:
         res = _run(cmd, capture=json_out)
@@ -262,7 +268,7 @@ def setup(
 
     next_hint = {
         "trtllm": "now install: source .venv-trtllm/bin/activate && pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com",
-        "nitrogen": "now install NitroGen: pip install -e ../NitroGen (and hf download nvidia/NitroGen ng.pt)",
+        "nitrogen": "now install NitroGen: pip install -e ../NitroGen (and hf download nvidia/NitroGen ng.pt); tensorrt + onnxruntime-gpu were installed from the NVIDIA index automatically",
     }.get(backend, f"venv ready at {venv}")
 
     emit(

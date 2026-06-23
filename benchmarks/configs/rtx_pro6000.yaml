@@ -184,6 +184,11 @@ models:
     ckpt: "nvidia/NitroGen:ng.pt"          # `hf download nvidia/NitroGen ng.pt` on the instance
     quantization: "bf16"
     notes: "BF16 reference; accuracy-vs-gold baseline for the quant delta."
+    # bf16 uses PyTorch autocast — no calibrated ONNX artifact needed.
+    # TRT/ONNX exec paths require a quantized (fp8/nvfp4) ONNX; bf16 has none.
+    unsupported_backends:
+      nitrogen-tensorrt: "bf16 has no calibrated ONNX artifact; use nitrogen-eager/compile/cudagraph"
+      nitrogen-onnx:     "same — bf16 has no calibrated ONNX artifact"
     backend_args:
       nitrogen: ["--precision=bf16", "--steps=16"]
   nitrogen-500m-fp8:
@@ -191,7 +196,15 @@ models:
     role: "policy-quant"
     ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
-    notes: "FP8 quant of the DiT + vision tower; same 16 denoise steps."
+    notes: "FP8 quant of the DiT via TRT/ONNX artifact (syseeker-at-nv/nitrogen-quant). Requires nitrogen-tensorrt or nitrogen-onnx — eager/compile/cudagraph exec paths run PyTorch autocast only and do not apply FP8 weight quantization."
+    # eager/compile/cudagraph map Precision.FP8 → bfloat16 autocast internally
+    # (see nitrogen_exec.py _DTYPE_NAMES). That is NOT fp8; it silently runs
+    # bf16 with a wrong label. Block those combos so only the real quant
+    # paths (TRT/ONNX artifact from syseeker-at-nv/nitrogen-quant) are used.
+    unsupported_backends:
+      nitrogen-eager:     "eager exec ignores fp8 precision — runs bf16 autocast; use nitrogen-500m-bf16 for eager"
+      nitrogen-compile:   "same — torch.compile does not apply FP8 weight quant"
+      nitrogen-cudagraph: "same — cudagraph exec does not apply FP8 weight quant"
     backend_args:
       nitrogen: ["--precision=fp8", "--steps=16"]
   nitrogen-500m-fp8-4step:
@@ -199,7 +212,11 @@ models:
     role: "policy-quant-fast"
     ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "fp8"
-    notes: "FP8 + reduced denoise steps (4) — latency floor; check accuracy cost."
+    notes: "FP8 + reduced denoise steps (4) — latency floor; check accuracy cost. Requires nitrogen-tensorrt or nitrogen-onnx."
+    unsupported_backends:
+      nitrogen-eager:     "eager exec ignores fp8 precision — runs bf16 autocast; use nitrogen-500m-bf16 for eager"
+      nitrogen-compile:   "same — torch.compile does not apply FP8 weight quant"
+      nitrogen-cudagraph: "same — cudagraph exec does not apply FP8 weight quant"
     backend_args:
       nitrogen: ["--precision=fp8", "--steps=4"]
   nitrogen-500m-nvfp4:
@@ -207,7 +224,7 @@ models:
     role: "policy-quant-blackwell"
     ckpt: "nvidia/NitroGen:ng.pt"
     quantization: "nvfp4"
-    notes: "NVFP4 — Blackwell-only datatype (PRO 6000 / 5090; not H200 SM_90)."
+    notes: "NVFP4 — Blackwell-only datatype (PRO 6000 / 5090; not H200 SM_90). Requires nitrogen-tensorrt or nitrogen-onnx."
     # NVFP4's ONNX op is shipped as a TRT plugin that's not in the default
     # registry of `tensorrt==10.16.*` (the wheel our [nitrogen-quant] extra
     # pulls). OnnxParser raises "Plugin not found" during compile. Either
@@ -215,8 +232,11 @@ models:
     # modelopt to ship the matching plugin .so alongside its exports.
     # FP8 paths work on the same TRT version — only NVFP4 is gated here.
     unsupported_backends:
-      nitrogen-tensorrt: "NVFP4 plugin not in tensorrt==10.16 default registry; needs newer TRT or modelopt-bundled plugin"
-      nitrogen-onnx:     "same — ORT routes NVFP4 graph through TRT-EP which hits the same plugin"
+      nitrogen-eager:     "eager exec ignores nvfp4 precision — runs bf16 autocast; use nitrogen-500m-bf16 for eager"
+      nitrogen-compile:   "same — torch.compile does not apply NVFP4 weight quant"
+      nitrogen-cudagraph: "same — cudagraph exec does not apply NVFP4 weight quant"
+      nitrogen-tensorrt:  "NVFP4 plugin not in tensorrt==10.16 default registry; needs newer TRT or modelopt-bundled plugin"
+      nitrogen-onnx:      "same — ORT routes NVFP4 graph through TRT-EP which hits the same plugin"
     backend_args:
       nitrogen: ["--precision=nvfp4", "--steps=16"]
 

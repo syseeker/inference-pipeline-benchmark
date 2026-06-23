@@ -27,6 +27,20 @@ If the user only wants raw scenario building, use [prepare-nitrogen-dataset](../
 If they only want to install a backend, use [setup-inference-backend](../setup-inference-backend/SKILL.md).
 If they only want to read existing results, use [interpret-benchmark-summary](../interpret-benchmark-summary/SKILL.md).
 
+## NitroGen exec × precision — valid combinations ONLY
+
+**eager / compile / cudagraph → bf16 only.**
+**tensorrt / onnxruntime → fp8 or nvfp4 only.**
+
+`nitrogen_exec.py` maps `Precision.FP8 → "bfloat16"` for the autocast dtype.
+Running `nitrogen-eager` with an fp8 model silently runs bf16 — no weight
+quantization happens. This is blocked via `unsupported_backends` in the GPU
+YAML, and the runner will exit with code 2.
+
+If asked to smoke or run `nitrogen-eager` at fp8, refuse and offer:
+- `nitrogen-eager` + `nitrogen-500m-bf16` — tests the PyTorch eager path
+- `nitrogen-tensorrt` + `nitrogen-500m-fp8` — tests real FP8 (downloads artifact)
+
 ## NitroGen FP8 / NVFP4 — pre-calibrated artifacts
 
 For the `nitrogen-tensorrt` and `nitrogen-onnx` sweep rounds (which need

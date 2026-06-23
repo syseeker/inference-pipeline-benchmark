@@ -52,10 +52,10 @@ That's all the setup outside the agent itself.
 ## Step 2 — Install the NitroGen-FP8 backend
 
 **Prompt:**
-> "Set up the nitrogen-quant backend so I can run FP8 rounds."
+> "Set up the nitrogen backend so I can run FP8 rounds."
 
 **What the agent does:**
-1. `bench setup --backend nitrogen-quant --json` → creates `.venv-nitrogen` with `[nitrogen,nitrogen-quant,dataset,dev]` extras (pulls torch + transformers<5 pin + modelopt + onnxruntime-gpu + tensorrt).
+1. `bench setup --backend nitrogen --json` → creates `.venv-nitrogen` with `[nitrogen,dataset,dev]` extras (pulls torch + transformers<5 pin + modelopt + onnxruntime-gpu + tensorrt).
 2. Surfaces the manual follow-ups it can't automate: `pip install -e ../NitroGen` (clone https://github.com/MineDojo/NitroGen first) + `hf download nvidia/NitroGen ng.pt`.
 
 **What to expect:**
@@ -93,7 +93,7 @@ That's all the setup outside the agent itself.
 
 **What to expect:**
 - `ok` status.
-- p50 latency around **107 ms** on PRO 6000 BF16.
+- p50 latency around **69 ms** on PRO 6000 BF16 (example; your numbers will vary by GPU).
 - One aggregate result JSON written under `benchmarks/results/<gpu>/`.
 - Server log: `benchmarks/results/<gpu>/server-logs/nitrogen-eager.log`.
 
@@ -114,18 +114,18 @@ If this fails, **stop and fix the env** — the sweep won't recover.
    - `nitrogen-tensorrt + nvfp4` row skipped: pinned out via `unsupported_backends` (TRT 10.16 missing FP4 plugin).
 3. Six rows populated; `bench summary --gpu rtx_pro6000 --json` regenerates `summary.md`.
 
-**What to expect — the headline:**
+**What to expect — the headline (example numbers from RTX PRO 6000; yours will vary by GPU):**
 
 | Engine | Precision | p50 | seq/s | J/req |
 |---|---|---|---|---|
-| nitrogen-eager | bf16 | 107 ms | 9.4 | 11.2 |
-| nitrogen-compile | bf16 | 108 ms | 9.4 | 11.1 |
-| nitrogen-cudagraph | bf16 | 106 ms | 9.4 | 10.7 |
-| nitrogen-onnx | **fp8** | **59 ms** | **16.4** | **5.7** ← **winner** |
-| nitrogen-tensorrt | fp8 | 60 ms | 16.4 | 5.7 |
-| nitrogen-tensorrt | fp8-4step | 61 ms | 16.4 | 5.8 |
+| nitrogen-eager | bf16 | ~69 ms | ~9.3 | ~10.4 |
+| nitrogen-compile | bf16 | ~69 ms | ~9.3 | ~10.3 |
+| nitrogen-cudagraph | bf16 | ~70 ms | ~9.3 | ~10.6 |
+| nitrogen-tensorrt | **fp8** | **~43 ms** | **~20.4** | **~4.3** ← **co-winner** |
+| nitrogen-onnx | **fp8** | **~43 ms** | **~20.3** | **~4.4** ← **co-winner** |
+| nitrogen-tensorrt | fp8-4step | ~44 ms | ~20.3 | ~4.7 |
 
-Winner: `nitrogen-500m-fp8` on `nitrogen-onnx`. **45% lower latency at 2× throughput vs the bf16 baseline.** Energy halves.
+Expected pattern: FP8 backends (tensorrt and onnx) outperform BF16 — lower latency, higher throughput, better energy. BF16 execution engines cluster within noise of each other at batch=1. Exact values depend on GPU architecture and thermal state.
 
 ---
 
@@ -140,9 +140,9 @@ Winner: `nitrogen-500m-fp8` on `nitrogen-onnx`. **45% lower latency at 2× throu
 3. Applies the house style ([interpret-benchmark-summary skill](skills/interpret-benchmark-summary/SKILL.md)): winner first; under-performers get both "why" and "how to improve."
 
 **What to expect in the answer:**
-- Winner = FP8 because: weight bytes ↓50%, GEMM kernel selection shifts to FP8 paths on Blackwell.
-- BF16 engines cluster within 1 ms because: workload is **launch-bound** (`DRAM_ACTIVE` ~0.4%, far below the 70% bandwidth-bound threshold), so CUDA-graph capture's per-launch-overhead saving is marginal at batch=1.
-- FP8 4-step vs 16-step: nearly identical at batch=1 (61 vs 60 ms) because per-step launch cost dominates over iteration count.
+- Winner = FP8 because: weight bytes ↓50%, GEMM kernel selection shifts to FP8 paths on Blackwell. TensorRT and ONNX (via TRT Execution Provider) run the same compiled kernel path and land at identical latency.
+- BF16 engines cluster within ~1 ms of each other because: CUDA-graph capture's per-launch saving is marginal at batch=1 for this model size. `torch.compile` provides no additional benefit at batch=1.
+- FP8 4-step vs 16-step: nearly identical at batch=1 (~44 vs ~43 ms on PRO 6000, example only) — reducing denoising steps from 16 to 4 does not materially cut e2e latency because the compute inside the DiT loop is not the bottleneck at concurrency=1. Pipeline overhead (vision encoder, ZMQ, action decoder) dominates.
 - NVFP4 row absent: TRT 10.16 lacks the FP4 plugin; revisit on TRT bump.
 
 That's the level of explanation you'd want in a deployment review.

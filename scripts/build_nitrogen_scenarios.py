@@ -321,6 +321,29 @@ def _ensure_video(url: str, cache_dir: Path) -> Path:
 # --------------------------------------------------------------------------- #
 
 
+def _existing_video_ids(out_root: Path) -> set[str]:
+    """Scan already-built scenario dirs and recover the source video IDs.
+
+    Scenario dirs are named ``{idx}_{game_slug}_{video_id}_chunk_{n}``.
+    Everything after the second underscore-delimited token up to ``_chunk_``
+    is the video_id (which may itself contain underscores).
+    """
+    ids: set[str] = set()
+    for d in out_root.iterdir() if out_root.exists() else []:
+        if not d.is_dir():
+            continue
+        # Strip leading index and game slug, then extract video_id before _chunk_
+        parts = d.name.split("_", 2)
+        if len(parts) < 3:
+            continue
+        tail = parts[2]  # e.g. "--7oldF2S-8_chunk_0030"
+        chunk_marker = "_chunk_"
+        pos = tail.rfind(chunk_marker)
+        if pos != -1:
+            ids.add(tail[:pos])
+    return ids
+
+
 def build(args: argparse.Namespace) -> int:
     actions_root = Path(args.actions_root)
     out_root = Path(args.out)
@@ -332,7 +355,8 @@ def build(args: argparse.Namespace) -> int:
 
     built = 0
     attempted = 0
-    seen_video_ids: set[str] = set()
+    seen_video_ids: set[str] = _existing_video_ids(out_root)
+    start_idx: int = args.start_idx
     for chunk_dir in iter_chunks(actions_root):
         if built >= args.n:
             break
@@ -353,7 +377,7 @@ def build(args: argparse.Namespace) -> int:
                     meta, frame_index, cache_dir=cache_dir, frame_size=args.frame_size
                 )
             pad = load_chunk_action(chunk_dir, frame_index)
-            name = f"{built:02d}_{_slug(meta.game)}_{chunk_dir.name}"
+            name = f"{start_idx + built:02d}_{_slug(meta.game)}_{chunk_dir.name}"
             request, gold = build_scenario_payloads(
                 name=name,
                 description=f"NitroGen dataset frame from '{meta.game}' ({chunk_dir.name}).",
@@ -430,6 +454,10 @@ def main() -> int:
     p.add_argument("--deadline-ms", type=int, default=1500, help="Scenario deadline_ms.")
     p.add_argument(
         "--game-mapping", default=None, help="Checkpoint .pt / .json / .parquet game mapping."
+    )
+    p.add_argument(
+        "--start-idx", type=int, default=0,
+        help="Starting index for scenario names (use 3 to append after 00–02).",
     )
     p.add_argument(
         "--synthetic-frames",
