@@ -404,9 +404,16 @@ d = json.load(sys.stdin)
 ids = [m['id'] for m in d.get('data', [])]
 sys.exit(0 if any('${hf_id}' in i or i in '${hf_id}' for i in ids) else 1)
 " 2>/dev/null; then
-      echo ">> port ${port} already serving ${hf_id} — reusing existing server"
+      # Record the existing server's PID so cleanup() kills it at end of
+      # this round, freeing VRAM for the next round (different model/backend).
+      local existing_pid
+      existing_pid=$(ss -ltnp 2>/dev/null \
+        | grep -E ":${port}\b" \
+        | grep -oP 'pid=\K[0-9]+' \
+        | head -1 || true)
+      echo ">> port ${port} already serving ${hf_id} — reusing (pid=${existing_pid:-unknown})"
       reuse_server=1
-      SERVER_PID=""   # don't kill it on cleanup
+      SERVER_PID="${existing_pid:-}"
       WAIT_URL="$models_url"
     else
       # Port is occupied by the wrong model or an unresponsive process.
