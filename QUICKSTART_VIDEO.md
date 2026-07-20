@@ -174,11 +174,23 @@ Nemotron-Omni runs vLLM-only in all sweeps (SGLang blocked on this GPU — see r
 
 ## Step 6: Load-test the winner (AIPerf concurrency curves)
 
-After the frame sweep identifies your latency/quality winner, measure how it
-holds up under concurrent requests:
+`bench load-test` requires the server to already be running — it does NOT start
+one itself. Start vLLM in terminal 1, wait for it to be ready, then run AIPerf
+in terminal 2.
 
+**Terminal 1** — start the server:
 ```bash
-# Backend must already be running (from Step 4)
+source .venv-vllm/bin/activate
+vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
+    --max-model-len 32768 \
+    --no-enable-prefix-caching \
+    --gpu-memory-utilization 0.90
+# wait for: INFO: Application startup complete
+```
+
+**Terminal 2** — run the concurrency sweep:
+```bash
+source .venv-vllm/bin/activate && pip install -e . --quiet
 bench load-test \
     --gpu rtx_pro6000 \
     --backend vllm \
@@ -186,16 +198,22 @@ bench load-test \
     --concurrency "1,4,8,16"
 ```
 
-Results land in `benchmarks/results/rtx_pro6000/aiperf/`.
+Results land in `benchmarks/results/rtx_pro6000/aiperf/`. Kill the server in
+terminal 1 when done (Ctrl+C) to free VRAM before the next step.
 
 ---
 
 ## Step 7: Profile the bottleneck (Nsight Systems)
 
-If p95 latency is unexpectedly high, escalate to Nsight:
+If p95 latency is unexpectedly high, escalate to Nsight. Unlike load-test,
+`bench profile` manages the server lifecycle itself — do NOT start vLLM manually
+first or you'll get a port conflict.
 
 ```bash
-bench setup --backend profile    # one-time: installs nsys
+# One-time: install nsys
+bench setup --backend profile
+
+# Profile one round against your video scenarios
 bench profile --tool nsys \
     --gpu rtx_pro6000 \
     --backend vllm \
@@ -203,9 +221,12 @@ bench profile --tool nsys \
     --scenarios-dir tests/smoke/scenarios_video/
 ```
 
-Open the `.nsys-rep` in Nsight Systems UI. The NVTX markers identify whether
-latency is in the vision encoder (frame tokenization), the prefill (first token),
-or the decode (per-token generation).
+This starts vLLM, runs all 3 video scenarios under Nsight, stops vLLM, and
+writes a `.nsys-rep` + `.summary.md` under `benchmarks/results/rtx_pro6000/profiles/`.
+
+Open the `.nsys-rep` in the Nsight Systems desktop UI. The NVTX markers identify
+whether latency is in the vision encoder (frame tokenization), the prefill (first
+token), or the decode (per-token generation).
 
 ---
 
