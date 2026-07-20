@@ -89,10 +89,24 @@ Repeat for `02_customer_scene_2/` and `03_customer_scene_3/`.
 
 ---
 
-## Step 3: Validate your scenarios are ready
+## Step 3: Activate a venv and validate your scenarios are ready
+
+`bench` is a Python entry point — it must be run from a venv where the package
+is installed. Activate whichever backend venv you set up (or create a minimal one):
 
 ```bash
 cd ~/qwenvl-inference-pipeline-benchmark
+
+# Option A — use an existing backend venv (vllm is the most common)
+source .venv-vllm/bin/activate
+
+# Option B — create a lightweight base venv (no backend, just the CLI)
+python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+```
+
+Then validate your scenarios:
+
+```bash
 bench scenarios build --source video-text --out tests/smoke/scenarios_video/
 ```
 
