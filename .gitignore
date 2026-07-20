@@ -68,12 +68,3 @@ Thumbs.db
 # on the instance with scripts/build_nitrogen_scenarios.py — don't commit pixels)
 tests/smoke/scenarios_nitrogen/
 .cache/nitrogen_videos/
-
-# Video-text: customer video files are large binaries — don't commit them.
-# Upload them directly to the instance into the scenario folders.
-# See QUICKSTART_VIDEO.md "Step 1: Upload your videos".
-tests/smoke/scenarios_video/**/*.mp4
-tests/smoke/scenarios_video/**/*.mov
-tests/smoke/scenarios_video/**/*.mkv
-tests/smoke/scenarios_video/**/*.avi
-tests/smoke/scenarios_video/**/*.webm
