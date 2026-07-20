@@ -351,7 +351,11 @@ def scenarios_build(
         command="scenarios.build",
         status="ok",
         artifacts=[str(out)],
-        next_action=f"built {count}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}",
+        next_action=(
+            f"built {count}/{n} scenarios; run: bench smoke --backend vllm --model qwen3-vl-32b-fp8 --scenarios-dir {out}"
+            if source == "video-text" else
+            f"built {count}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}"
+        ),
         data={"source": source, "out_dir": str(out), "count": count, "scenarios": built},
         json_out=json_out,
     )
