@@ -1,0 +1,239 @@
+# QUICKSTART — Video+Text Inference Benchmark
+
+**Use case**: given a short video clip and a text question, benchmark how fast each VLM can answer it across serving backends, and find the optimal frame count / backend / model combination for your latency budget.
+
+**GPU**: RTX PRO 6000 Blackwell (96 GB). The steps below work verbatim on RTX 5090 (swap `rtx_pro6000` → `rtx5090`) and H200 (swap → `h200`).
+
+---
+
+## Models in this sweep
+
+| Model | Architecture | Backends | Notes |
+|---|---|---|---|
+| `qwen3-vl-32b-fp8` | Native 3D-RoPE video tower | vLLM, SGLang | Primary target; best temporal reasoning |
+| `qwen3-vl-30b-a3b-fp8` | MoE, native video tower | vLLM, SGLang | Bandwidth stress-test |
+| `gemma-4-31b-it-fp8` | Frame-extraction (SigLIP) | vLLM, SGLang | Cross-vendor comparison |
+| `nemotron-omni-fp8` | Dedicated video encoder | vLLM only | SGLang blocked on SM_120 fused-MoE |
+
+---
+
+## Step 1: Upload your videos
+
+Your 3 customer videos belong here — one per scenario folder:
+
+```
+tests/smoke/scenarios_video/
+  01_customer_scene_1/
+    video.mp4          ← upload YOUR video here (any name, update video_path below)
+    request.json       ← fill in description + prompt
+    expected.json      ← fill in key_phrases
+  02_customer_scene_2/
+    video.mp4
+    request.json
+    expected.json
+  03_customer_scene_3/
+    video.mp4
+    request.json
+    expected.json
+```
+
+**How to upload** (from your local machine):
+
+```bash
+# scp (replace <host> with the instance IP or hostname)
+scp /local/path/to/scene1.mp4 <host>:~/qwenvl-inference-pipeline-benchmark/tests/smoke/scenarios_video/01_customer_scene_1/video.mp4
+scp /local/path/to/scene2.mp4 <host>:~/qwenvl-inference-pipeline-benchmark/tests/smoke/scenarios_video/02_customer_scene_2/video.mp4
+scp /local/path/to/scene3.mp4 <host>:~/qwenvl-inference-pipeline-benchmark/tests/smoke/scenarios_video/03_customer_scene_3/video.mp4
+
+# Or rsync if you want a progress bar
+rsync -avP /local/path/to/scene1.mp4 <host>:~/qwenvl-inference-pipeline-benchmark/tests/smoke/scenarios_video/01_customer_scene_1/video.mp4
+```
+
+> Videos are git-ignored (too large to commit). They stay local to the instance.
+
+---
+
+## Step 2: Fill in request.json and expected.json
+
+Open each scenario folder and edit the two files. Example for scene 1:
+
+**`tests/smoke/scenarios_video/01_customer_scene_1/request.json`**
+```json
+{
+  "name": "01_customer_scene_1",
+  "description": "Warehouse floor footage — forklift crossing a pedestrian zone.",
+  "video_path": "video.mp4",
+  "prompt": "What safety risks are visible in this video? Be specific about the objects and their positions.",
+  "deadline_ms": 30000
+}
+```
+
+Fields:
+- `video_path` — filename of the video in this folder (default `video.mp4`; change if your file has a different name)
+- `prompt` — your text question or instruction for the model (one per scenario)
+- `deadline_ms` — per-request timeout in ms; 30000 (30 s) is safe for video inference
+
+**`tests/smoke/scenarios_video/01_customer_scene_1/expected.json`**
+```json
+{
+  "key_phrases": ["forklift", "pedestrian", "collision", "safety zone", "proximity"],
+  "min_coverage": 0.6
+}
+```
+
+Fields:
+- `key_phrases` — list of words or short phrases you expect to appear in a correct response
+- `min_coverage` — fraction of key_phrases that must appear; 0.6 = pass if ≥ 60% present
+
+Repeat for `02_customer_scene_2/` and `03_customer_scene_3/`.
+
+---
+
+## Step 3: Validate your scenarios are ready
+
+```bash
+cd ~/qwenvl-inference-pipeline-benchmark
+bench scenarios build --source video-text --out tests/smoke/scenarios_video/
+```
+
+Expected output:
+```
+[ok] scenarios.build: built 3/3 scenarios
+```
+
+If you see a `Video files missing` error, go back to Step 1 and upload the .mp4 files.
+
+---
+
+## Step 4: Start a backend and run a smoke test
+
+Pick one backend to validate the pipeline end-to-end before running the full sweep.
+
+```bash
+# Terminal 1 — start vLLM with the default model (Qwen3-VL-32B-FP8)
+source .venv-vllm/bin/activate
+vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
+    --max-model-len 32768 \
+    --no-enable-prefix-caching \
+    --gpu-memory-utilization 0.90
+
+# Terminal 2 — smoke test (single scenario, single backend)
+bench smoke --gpu rtx_pro6000 --backend vllm --model qwen3-vl-32b-fp8 \
+    --scenarios-dir tests/smoke/scenarios_video/
+```
+
+A passing smoke test writes a result JSON under `benchmarks/results/rtx_pro6000/`.
+
+---
+
+## Step 5: Run the frame-count sweep
+
+The key optimization lever for video inference is `num_frames` — how many frames
+the model sees. More frames = better temporal coverage, higher latency.
+
+Three named sweeps cover the 4 / 8 / 16 frame tradeoff:
+
+```bash
+# 4 frames — fastest; good for short clips or obvious single-moment events
+bench sweep --gpu rtx_pro6000 --sweep video-4f \
+    --scenarios-dir tests/smoke/scenarios_video/
+
+# 8 frames — balanced default (recommended starting point)
+bench sweep --gpu rtx_pro6000 --sweep video-8f \
+    --scenarios-dir tests/smoke/scenarios_video/
+
+# 16 frames — best temporal coverage; latency ~2× vs 8f
+bench sweep --gpu rtx_pro6000 --sweep video-16f \
+    --scenarios-dir tests/smoke/scenarios_video/
+```
+
+Each sweep runs all 4 models × 2 backends (vLLM + SGLang) at the given frame count.
+Nemotron-Omni runs vLLM-only (SGLang blocked on this GPU — see rtx_pro6000.yaml).
+
+---
+
+## Step 6: Load-test the winner (AIPerf concurrency curves)
+
+After the frame sweep identifies your latency/quality winner, measure how it
+holds up under concurrent requests:
+
+```bash
+# Backend must already be running (from Step 4)
+bench load-test \
+    --gpu rtx_pro6000 \
+    --backend vllm \
+    --model Qwen/Qwen3-VL-32B-Instruct-FP8 \
+    --concurrency "1,4,8,16"
+```
+
+Results land in `benchmarks/results/rtx_pro6000/aiperf/`.
+
+---
+
+## Step 7: Profile the bottleneck (Nsight Systems)
+
+If p95 latency is unexpectedly high, escalate to Nsight:
+
+```bash
+bench setup --backend profile    # one-time: installs nsys
+bench profile --tool nsys \
+    --gpu rtx_pro6000 \
+    --backend vllm \
+    --model qwen3-vl-32b-fp8 \
+    --scenarios-dir tests/smoke/scenarios_video/
+```
+
+Open the `.nsys-rep` in Nsight Systems UI. The NVTX markers identify whether
+latency is in the vision encoder (frame tokenization), the prefill (first token),
+or the decode (per-token generation).
+
+---
+
+## Step 8: Read the summary
+
+```bash
+bench summary --gpu rtx_pro6000
+```
+
+Reads `benchmarks/results/rtx_pro6000/summary.md` — the p50/p95 table, winner,
+and per-backend findings. The key-phrase coverage rate per scenario is included
+so you can see quality alongside latency.
+
+---
+
+## Changing the text prompt or video path after setup
+
+All edits live in the scenario `request.json` files — no code change needed:
+
+| What you want to change | Where to edit |
+|---|---|
+| The text question for scene 1 | `tests/smoke/scenarios_video/01_customer_scene_1/request.json` → `"prompt"` field |
+| The video file for scene 2 | Upload a new file, then update `"video_path"` in `02_customer_scene_2/request.json` |
+| Expected answer keywords | `expected.json` → `"key_phrases"` list |
+| Pass/fail threshold | `expected.json` → `"min_coverage"` (0.0–1.0) |
+| Per-request timeout | `request.json` → `"deadline_ms"` |
+
+---
+
+## FAQ
+
+**Q: Can I use a remote video URL instead of uploading the file?**
+Set `"video_url": "https://..."` in request.json and omit `"video_path"`. The
+serving framework fetches it directly. Only works if the instance has outbound
+internet access and the URL is publicly reachable.
+
+**Q: How do I add a 4th video scenario?**
+Create `tests/smoke/scenarios_video/04_my_scene/`, drop in `video.mp4`,
+`request.json`, and `expected.json` following the pattern above. No code change.
+
+**Q: What if the model response doesn't contain any key phrases?**
+Either (a) the model genuinely answered off-target — check the raw response in
+the per-scenario JSON under `benchmarks/results/rtx_pro6000/vllm/`; or (b) your
+key_phrases are too specific. Try shorter, more common words.
+
+**Q: Can I run just one model to iterate faster?**
+Yes — use `--model` to pin a single model instead of running the full sweep:
+```bash
+bench sweep --gpu rtx_pro6000 --sweep video-8f --model qwen3-vl-32b-fp8 \
+    --scenarios-dir tests/smoke/scenarios_video/
+```

@@ -203,7 +203,7 @@ Concrete decisions, with numbers, from one sweep. **The benchmark didn't make th
 
 ## 8. Where to go next
 
-- **Drive your first sweep**: [NITROGEN_QUICKSTART.md](../NITROGEN_QUICKSTART.md) — an agent-prompt walkthrough. Read it once, paste the prompts into Claude Code / Codex / Cursor, you'll have summary.md in 10 minutes.
+- **Drive your first sweep**: [QUICKSTART_NITROGEN.md](../QUICKSTART_NITROGEN.md) — an agent-prompt walkthrough. Read it once, paste the prompts into Claude Code / Codex / Cursor, you'll have summary.md in 10 minutes.
 - **What this harness measures (in detail)**: [docs/metrics.md](metrics.md).
 - **Player vs world model — which kind of model do you actually need?**: [docs/for-game-sim-teams.md](for-game-sim-teams.md).
 - **Capacity math (which model fits which GPU)**: [docs/capacity.md](capacity.md).

@@ -384,6 +384,46 @@ sweeps:
       - {model: nitrogen-500m-fp8-4step, backends: [nitrogen-tensorrt]}
       - {model: nitrogen-500m-nvfp4,     backends: [nitrogen-tensorrt]}   # Blackwell-only
 
+  # ─── Video+text inference sweep ───────────────────────────────────────────
+  # All four video-capable models × 2 HTTP backends (vllm, sglang) × 3
+  # num_frames values. Nemotron-Omni is vllm-only on this GPU (SGLang fused-MoE
+  # OOM on SM_120). TRT-LLM excluded for all (multimodal arch gaps on 1.2.1).
+  #
+  # `num_frames` is a per-request extra_body parameter (not a server launch flag)
+  # passed by VideoTextReasoner. Set VIDEO_NUM_FRAMES=4|8|16 before each run to
+  # pin the knob, or use the sub-sweeps below:
+  #
+  #   bench sweep --gpu rtx_pro6000 --sweep video-4f \
+  #       --scenarios-dir tests/smoke/scenarios_video
+  #
+  # Each sub-sweep fixes one frame count so you get a clean comparison across
+  # models at that frame budget. Run all three to build the full
+  # latency-vs-quality tradeoff table.
+
+  video-4f:
+    # 4 frames: fastest; suited for short clips or when the key moment is obvious
+    rounds:
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 4}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 4}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 4}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 4}
+
+  video-8f:
+    # 8 frames: balanced default; matches the video-capable models' recommended sweet spot
+    rounds:
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 8}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 8}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 8}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 8}
+
+  video-16f:
+    # 16 frames: highest temporal coverage; p50 latency ~2x vs 8f for dense video
+    rounds:
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 16}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 16}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 16}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 16}
+
   # Full matrix — every model × every variant on the relevant backends.
   # Variants here are vllm-only; rounds without a variant run on all three.
   full:
