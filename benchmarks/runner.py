@@ -246,7 +246,10 @@ def _run_round_video(
 
     run_id = uuid.uuid4().hex[:12]
     started_at = utc_now_iso()
-    per_scenario_dir = out_dir / gpu / round_.backend
+    # Use a -video suffix so video results don't mix with image benchmark
+    # results under the same backend directory (e.g. vllm-video/ vs vllm/).
+    backend_dir = f"{round_.backend}-video"
+    per_scenario_dir = out_dir / gpu / backend_dir
     per_scenario_dir.mkdir(parents=True, exist_ok=True)
 
     if warmup_requests > 0:
@@ -378,7 +381,7 @@ def _run_round_video(
         total_prompt_tokens=toks["total_prompt_tokens"],
         total_completion_tokens=toks["total_completion_tokens"],
     )
-    agg_path = out_dir / gpu / f"{round_.backend}-{round_.model_id}-{run_id}.json"
+    agg_path = out_dir / gpu / f"{backend_dir}-{round_.model_id}-{run_id}.json"
     agg_path.parent.mkdir(parents=True, exist_ok=True)
     agg_path.write_text(json.dumps(aggregate.to_dict(), indent=2, default=str))
     typer.echo(
