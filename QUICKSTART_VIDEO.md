@@ -98,7 +98,7 @@ is installed. Activate whichever backend venv you set up (or create a minimal on
 cd ~/qwenvl-inference-pipeline-benchmark
 
 # Option A — use an existing backend venv (vllm is the most common)
-source .venv-vllm/bin/activate
+source .venv-vllm/bin/activate && pip install -e . --quiet
 
 # Option B — create a lightweight base venv (no backend, just the CLI)
 python3 -m venv .venv && source .venv/bin/activate && pip install -e .
