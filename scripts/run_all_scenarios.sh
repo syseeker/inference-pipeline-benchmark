@@ -386,31 +386,60 @@ run_round() {
   # shellcheck source=/dev/null
   source "${venv}/bin/activate"
 
-  # Pre-flight: port + GPU memory. Fail loud, not silent.
-  local port
+  local port reuse_server=0
   port=$(cfg_field "$backend" port "$model" "$variant")
-  if ! preflight_port "$port" "$backend"; then
-    deactivate
-    return 1
-  fi
-  if ! preflight_gpu "$backend"; then
-    deactivate
-    return 1
+
+  # Reuse an already-running server if it's serving the right model.
+  # This lets `bench smoke/sweep` work against a server started manually in
+  # another terminal without requiring the user to kill and restart it.
+  # Only applies to HTTP backends (vllm/sglang/trtllm); nitrogen uses ZMQ.
+  if [[ "$backend" != nitrogen-* ]] && ss -ltnp 2>/dev/null | grep -qE ":${port}\b"; then
+    local hf_id models_url
+    hf_id=$(cfg_field "$backend" hf_id "$model" "$variant")
+    models_url="http://localhost:${port}/v1/models"
+    if curl -fsS --max-time 5 "$models_url" 2>/dev/null \
+        | python -c "
+import json, sys
+d = json.load(sys.stdin)
+ids = [m['id'] for m in d.get('data', [])]
+sys.exit(0 if any('${hf_id}' in i or i in '${hf_id}' for i in ids) else 1)
+" 2>/dev/null; then
+      echo ">> port ${port} already serving ${hf_id} — reusing existing server"
+      reuse_server=1
+      SERVER_PID=""   # don't kill it on cleanup
+      WAIT_URL="$models_url"
+    else
+      # Port is occupied by the wrong model or an unresponsive process.
+      preflight_port "$port" "$backend" || { deactivate; return 1; }
+    fi
   fi
 
-  WAIT_URL=""
-  if ! start_server "$backend" "$model" "$variant"; then
-    deactivate
-    return 1
+  if (( reuse_server == 0 )); then
+    # Pre-flight: port + GPU memory. Fail loud, not silent.
+    if ! preflight_port "$port" "$backend"; then
+      deactivate
+      return 1
+    fi
+    if ! preflight_gpu "$backend"; then
+      deactivate
+      return 1
+    fi
+
+    WAIT_URL=""
+    if ! start_server "$backend" "$model" "$variant"; then
+      deactivate
+      return 1
+    fi
+
+    # Per-model override (yaml `models.<id>.ready_timeout_s`); empty = use default.
+    local round_timeout
+    round_timeout=$(cfg_field "$backend" ready_timeout_s "$model" "$variant")
+    : "${round_timeout:=$READY_TIMEOUT_S}"
+
+    echo ">> ${backend} server pid=${SERVER_PID} (log: $LOG_DIR/${backend}.log)"
   fi
 
-  # Per-model override (yaml `models.<id>.ready_timeout_s`); empty = use default.
-  local round_timeout
-  round_timeout=$(cfg_field "$backend" ready_timeout_s "$model" "$variant")
-  : "${round_timeout:=$READY_TIMEOUT_S}"
-
-  echo ">> ${backend} server pid=${SERVER_PID} (log: $LOG_DIR/${backend}.log)"
-  if ! wait_for_ready "$WAIT_URL" "$backend" "$round_timeout"; then
+  if (( reuse_server == 0 )) && ! wait_for_ready "$WAIT_URL" "$backend" "$round_timeout"; then
     local log_file="$LOG_DIR/${backend}.log"
     # Missing optional dep (e.g. tensorrt, onnxruntime-gpu not installed in this
     # venv) → treat as a skipped round, not a sweep failure.
