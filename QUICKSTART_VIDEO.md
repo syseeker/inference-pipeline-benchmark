@@ -195,9 +195,10 @@ video scenarios. This is tracked as a future enhancement.
 
 ## Step 7: Profile the bottleneck (Nsight Systems)
 
-If p95 latency is unexpectedly high, escalate to Nsight. Unlike load-test,
-`bench profile` manages the server lifecycle itself — do NOT start vLLM manually
-first or you'll get a port conflict.
+If p95 latency from the sweep is unexpectedly high, escalate to Nsight.
+
+> **Unlike load-test**, `bench profile` manages the server lifecycle itself —
+> do NOT start vLLM manually first or you will get a port conflict.
 
 ```bash
 # One-time: install nsys
@@ -214,9 +215,24 @@ bench profile --tool nsys \
 This starts vLLM, runs all 3 video scenarios under Nsight, stops vLLM, and
 writes a `.nsys-rep` + `.summary.md` under `benchmarks/results/rtx_pro6000/profiles/`.
 
-Open the `.nsys-rep` in the Nsight Systems desktop UI. The NVTX markers identify
-whether latency is in the vision encoder (frame tokenization), the prefill (first
-token), or the decode (per-token generation).
+**What to look for in the Nsight Systems UI for video inference:**
+
+The timeline will show vLLM startup (~82s) followed by 3 inference runs. Zoom
+into a single inference call. You will see three distinct GPU phases:
+
+| Phase | NVTX label | What it means |
+|---|---|---|
+| Vision encoder | `vllm.vision_encoder` | Processing the N video frames through the ViT — scales with `num_frames` |
+| Prefill | `vllm.prefill` | Attention over all image tokens + text prompt tokens (TTFT ends here) |
+| Decode | `vllm.decode` | Autoregressive token generation |
+
+For video inference, **the vision encoder dominates** when `num_frames` is high.
+If TTFT is high relative to decode, the encoder or prefill is the bottleneck.
+If total latency is high but TTFT is low, decode (output length) is the bottleneck.
+
+> **Note**: Nsight is valid for video inference — unlike AIPerf, it wraps real
+> video requests (the same base64-encoded frames used by the sweep) so the
+> encoder and prefill phases are faithfully captured.
 
 ---
 
