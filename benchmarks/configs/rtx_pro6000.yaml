@@ -390,18 +390,38 @@ sweeps:
   # OOM on SM_120). TRT-LLM excluded for all (multimodal arch gaps on 1.2.1).
   #
   # `num_frames` is a per-request extra_body parameter (not a server launch flag)
-  # passed by VideoTextReasoner. Set VIDEO_NUM_FRAMES=4|8|16 before each run to
-  # pin the knob, or use the sub-sweeps below:
+  # passed by VideoTextReasoner.
   #
-  #   bench sweep --gpu rtx_pro6000 --sweep video-4f \
+  # `video`     — full matrix: all models × all frame counts (default, recommended)
+  # `video-4f`  — pin at 4 frames only (quick targeted run)
+  # `video-8f`  — pin at 8 frames only
+  # `video-16f` — pin at 16 frames only
+  #
+  #   bench sweep --gpu rtx_pro6000 --sweep video \
   #       --scenarios-dir tests/smoke/scenarios_video
-  #
-  # Each sub-sweep fixes one frame count so you get a clean comparison across
-  # models at that frame budget. Run all three to build the full
-  # latency-vs-quality tradeoff table.
+
+  video:
+    # Full matrix: 4 models × 2-3 backends × 3 frame counts = 21 rounds.
+    # Groups by frame count so results in summary.md are easy to compare.
+    rounds:
+      # — 4 frames: fastest; good for short clips or obvious single-moment events —
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 4}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 4}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 4}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 4}
+      # — 8 frames: balanced default; recommended starting point —
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 8}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 8}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 8}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 8}
+      # — 16 frames: highest temporal coverage; p50 latency ~2x vs 8f —
+      - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 16}
+      - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 16}
+      - {model: gemma-4-31b-it-fp8,     backends: [vllm, sglang], num_frames: 16}
+      - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 16}
 
   video-4f:
-    # 4 frames: fastest; suited for short clips or when the key moment is obvious
+    # Targeted run — 4 frames only, all models. Use when you already know 4f is your budget.
     rounds:
       - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 4}
       - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 4}
@@ -409,7 +429,7 @@ sweeps:
       - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 4}
 
   video-8f:
-    # 8 frames: balanced default; matches the video-capable models' recommended sweet spot
+    # Targeted run — 8 frames only, all models.
     rounds:
       - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 8}
       - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 8}
@@ -417,7 +437,7 @@ sweeps:
       - {model: nemotron-omni-fp8,       backends: [vllm],         num_frames: 8}
 
   video-16f:
-    # 16 frames: highest temporal coverage; p50 latency ~2x vs 8f for dense video
+    # Targeted run — 16 frames only, all models.
     rounds:
       - {model: qwen3-vl-32b-fp8,       backends: [vllm, sglang], num_frames: 16}
       - {model: qwen3-vl-30b-a3b-fp8,   backends: [vllm, sglang], num_frames: 16}

@@ -131,24 +131,30 @@ A passing smoke test writes a result JSON under `benchmarks/results/rtx_pro6000/
 The key optimization lever for video inference is `num_frames` — how many frames
 the model sees. More frames = better temporal coverage, higher latency.
 
-Three named sweeps cover the 4 / 8 / 16 frame tradeoff:
+Run the full matrix in one shot — all models × all frame counts:
 
 ```bash
-# 4 frames — fastest; good for short clips or obvious single-moment events
-bench sweep --gpu rtx_pro6000 --sweep video-4f \
-    --scenarios-dir tests/smoke/scenarios_video/
-
-# 8 frames — balanced default (recommended starting point)
-bench sweep --gpu rtx_pro6000 --sweep video-8f \
-    --scenarios-dir tests/smoke/scenarios_video/
-
-# 16 frames — best temporal coverage; latency ~2× vs 8f
-bench sweep --gpu rtx_pro6000 --sweep video-16f \
+bench sweep --gpu rtx_pro6000 --sweep video \
     --scenarios-dir tests/smoke/scenarios_video/
 ```
 
-Each sweep runs all 4 models × 2 backends (vLLM + SGLang) at the given frame count.
-Nemotron-Omni runs vLLM-only (SGLang blocked on this GPU — see rtx_pro6000.yaml).
+This runs 4 models × 2–3 backends × 3 frame counts (4 / 8 / 16) = 21 rounds total.
+Results let you compare latency and key-phrase coverage across every combination.
+
+If you already know your frame budget and want a faster targeted run:
+
+```bash
+# 4 frames — fastest; suited for short clips or obvious single-moment events
+bench sweep --gpu rtx_pro6000 --sweep video-4f --scenarios-dir tests/smoke/scenarios_video/
+
+# 8 frames — balanced default
+bench sweep --gpu rtx_pro6000 --sweep video-8f --scenarios-dir tests/smoke/scenarios_video/
+
+# 16 frames — highest temporal coverage; latency ~2× vs 8f
+bench sweep --gpu rtx_pro6000 --sweep video-16f --scenarios-dir tests/smoke/scenarios_video/
+```
+
+Nemotron-Omni runs vLLM-only in all sweeps (SGLang blocked on this GPU — see rtx_pro6000.yaml).
 
 ---
 
