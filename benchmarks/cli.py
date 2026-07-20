@@ -643,6 +643,7 @@ def load_test(
         "--concurrency", concurrency,
         "--warmup-request-count", str(warmup),
         "--output-artifact-dir", str(artifact_dir),
+        "--ui", "none",   # dashboard UI is unsupported in multi-concurrency sweep mode
     ]
     if duration > 0:
         cmd += ["--benchmark-duration", str(duration)]
