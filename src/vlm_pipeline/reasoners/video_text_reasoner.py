@@ -1,6 +1,6 @@
 """Video+text reasoner — OpenAI-compatible endpoint (vLLM / SGLang).
 
-Sends a video (local file:// or remote URL) + text prompt via the multimodal
+Sends a video (local file or remote URL) + text prompt via the multimodal
 chat completions API and returns the raw text response.
 
 Unlike the image-based VLM reasoners, the output here is free-form text (not
@@ -11,6 +11,11 @@ num_frames controls how many frames the serving framework extracts from the
 video before feeding the vision encoder. Set via VideoTextConfig.num_frames or
 the VIDEO_NUM_FRAMES env var. Sweep over 4 / 8 / 16 to measure the
 latency-vs-quality tradeoff — latency scales roughly linearly with frame count.
+
+Local video files are read and base64-encoded into a data: URL — the same
+pattern the image reasoners use for image_url. This avoids vLLM's
+--allowed-local-media-path requirement for file:// URLs and works with the
+default server config. For remote URLs (https://) the URL is passed directly.
 
 Supported by all VLM backends that serve Qwen3-VL or Gemma-4:
   vLLM   → VIDEO_BASE_URL=http://localhost:8000/v1
@@ -23,6 +28,7 @@ the video path works identically — same OpenAI-compatible client.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import urllib.request
@@ -49,9 +55,12 @@ def _discover_model(base_url: str, timeout_s: float = 5.0) -> str:
 
 
 def _to_video_url(video_path: str | None, video_url: str | None, scenario_dir: Path | None) -> str:
-    """Resolve to a URL the serving framework can fetch.
+    """Resolve to a URL the serving framework can accept.
 
-    Priority: explicit video_url → local video_path (resolved to file://).
+    Remote URLs (http/https) are passed through directly. Local files are
+    read and base64-encoded into a data: URL — identical to how the image
+    reasoners handle image_url. This avoids vLLM's --allowed-local-media-path
+    requirement for file:// URLs and works with the default server config.
     """
     if video_url:
         return video_url
@@ -59,7 +68,11 @@ def _to_video_url(video_path: str | None, video_url: str | None, scenario_dir: P
         p = Path(video_path)
         if not p.is_absolute() and scenario_dir:
             p = scenario_dir / p
-        return f"file://{p.resolve()}"
+        p = p.resolve()
+        data = p.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        mime_suffix = p.suffix.lstrip(".").lower() or "mp4"
+        return f"data:video/{mime_suffix};base64,{b64}"
     raise ValueError("scenario must set either video_path or video_url in request.json")
 
 
