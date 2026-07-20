@@ -173,37 +173,23 @@ Nemotron-Omni runs vLLM-only in all sweeps (SGLang blocked on this GPU — see r
 
 ---
 
-## Step 6: Load-test the winner (AIPerf concurrency curves)
+## Step 6: Concurrency measurement (NOT AIPerf)
 
-`bench load-test` requires the server to already be running — it does NOT start
-one itself. Start vLLM in terminal 1, wait for it to be ready, then run AIPerf
-in terminal 2.
+> **Why not `bench load-test` / AIPerf?**
+> AIPerf sends synthetic text-only prompts. For video inference that skips the
+> most expensive parts of the pipeline — video decode, frame tokenization, and
+> the vision encoder. The numbers would measure the serving stack, not the
+> workload you actually care about.
 
-**Terminal 1** — start the server:
-```bash
-source .venv-vllm/bin/activate
-vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
-    --max-model-len 32768 \
-    --no-enable-prefix-caching \
-    --gpu-memory-utilization 0.90 \
-    --max-num-seqs 32
-# wait for: INFO: Application startup complete
-# --max-num-seqs 32 matches the sweep config — limits KV cache allocation
-# and CUDA graph capture passes, cutting startup from ~5min to ~82s.
-```
+The right concurrency measurement for video inference is to run the sweep at
+increasing concurrency levels using real video payloads. Use the per-scenario
+JSONs already written by `bench sweep` to compare p50/p95 across backends and
+frame counts — that IS your concurrency signal at batch=1.
 
-**Terminal 2** — run the concurrency sweep:
-```bash
-source .venv-vllm/bin/activate && pip install -e . --quiet
-bench load-test \
-    --gpu rtx_pro6000 \
-    --backend vllm \
-    --model Qwen/Qwen3-VL-32B-Instruct-FP8 \
-    --concurrency "1,4,8,16"
-```
-
-Results land in `benchmarks/results/rtx_pro6000/aiperf/`. Kill the server in
-terminal 1 when done (Ctrl+C) to free VRAM before the next step.
+For multi-request concurrency with real video payloads, run multiple parallel
+`bench sweep` invocations against a single live server (each in its own terminal)
+or use the `--request-count` flag on a custom script that sends your actual
+video scenarios. This is tracked as a future enhancement.
 
 ---
 
