@@ -468,7 +468,10 @@ sys.exit(0 if any('${hf_id}' in i or i in '${hf_id}' for i in ids) else 1)
     effective_scenarios_dir="tests/smoke/scenarios_nitrogen"
   fi
   [[ -n "$effective_scenarios_dir" ]]     && args+=(--scenarios-dir "$effective_scenarios_dir")
-  $BENCH_PYTHON -m benchmarks.runner "${args[@]}"
+  # Use the backend venv's python for the runner — it needs backend-specific
+  # deps (e.g. openai for vllm/sglang). BENCH_PYTHON may be nitrogen's python
+  # which lacks those deps.
+  "${venv}/bin/python" -m benchmarks.runner "${args[@]}"
   local rc=$?
   set -e
 
