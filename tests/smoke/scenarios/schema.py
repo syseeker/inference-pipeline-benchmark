@@ -24,12 +24,17 @@ from vlm_pipeline.schemas import ActionSequence, ContextTurn, ValidationReport
 
 
 class ScenarioRequest(BaseModel):
-    """Serialisable form of a PipelineRequest, with the image referenced by path."""
+    """Serialisable form of a PipelineRequest, with the image referenced by path.
+
+    Image scenarios set image_path + instruction.
+    Video scenarios set video_path + prompt (image_path / instruction are None).
+    """
 
     name: str
     description: str
-    image_path: str = Field(..., description="Image path relative to the scenario dir.")
-    instruction: str
+    # Image scenario fields (required for image/policy scenarios)
+    image_path: str | None = Field(default=None, description="Image path relative to the scenario dir.")
+    instruction: str | None = None
     context_history: list[ContextTurn] = Field(default_factory=list)
     deadline_ms: int = 1500
     game_id: str | None = Field(
@@ -40,9 +45,23 @@ class ScenarioRequest(BaseModel):
             "by text-driven VLM reasoners."
         ),
     )
+    # Video scenario fields
+    video_path: str | None = Field(default=None, description="Video file path relative to the scenario dir.")
+    prompt: str | None = Field(default=None, description="Text question / instruction for video scenarios.")
+
+    @property
+    def is_video(self) -> bool:
+        return self.video_path is not None or (self.image_path is None and self.prompt is not None)
 
 
 class ScenarioExpected(BaseModel):
+    """Gold output for image/action scenarios."""
     actions: ActionSequence
     validation: ValidationReport
     notes: str | None = None
+
+
+class VideoScenarioExpected(BaseModel):
+    """Gold output for video+text scenarios — key-phrase coverage check."""
+    key_phrases: list[str]
+    min_coverage: float = 0.6

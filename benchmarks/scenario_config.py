@@ -111,6 +111,9 @@ class Round:
     # the runner's global default. Set on models with cold-cache loads that
     # exceed the default (e.g. Nemotron-Omni: ~280s download + ~150s load).
     ready_timeout_s: int | None = None
+    # Video sweep knob: how many frames to extract per video. None = use the
+    # VideoTextConfig default (8). Set per sweep round via `num_frames:` in the yaml.
+    num_frames: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -235,12 +238,15 @@ def iter_sweep(cfg: dict[str, Any], sweep_name: str) -> Iterator[Round]:
                     file=sys.stderr,
                 )
                 continue
-            yield resolve_round(
+            r = resolve_round(
                 cfg,
                 backend=bk,
                 model_id=rs.get("model"),
                 variant=rs.get("variant"),
             )
+            if "num_frames" in rs:
+                r.num_frames = int(rs["num_frames"])
+            yield r
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────

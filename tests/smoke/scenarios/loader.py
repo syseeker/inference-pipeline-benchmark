@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest
+from tests.smoke.scenarios.schema import ScenarioExpected, ScenarioRequest, VideoScenarioExpected
 from vlm_pipeline.pipeline import PipelineRequest
 
 DEFAULT_SCENARIOS_DIR = Path(__file__).parent
@@ -27,19 +27,22 @@ class LoadedScenario:
     name: str
     dir: Path
     spec: ScenarioRequest      # on-disk request spec (image referenced by path)
-    image_bytes: bytes
+    image_bytes: bytes | None  # None for video scenarios
     # Both ground-truth files are OPTIONAL — the grader dispatches on presence:
-    #   - `expected.json`     → VLM grading: parsed ActionSequence vs gold
-    #   - `gold_action.json`  → policy grading: gamepad vs gold via accuracy.py
-    # A scenario may carry zero, one, or both. The NitroGen extractor emits
-    # only gold_action; human-authored VLM scenarios emit only expected;
-    # dual-graded scenarios (same frame compared across families) carry both.
+    #   - `expected.json`       → VLM grading: parsed ActionSequence vs gold
+    #                             OR video grading: VideoScenarioExpected key-phrases
+    #   - `gold_action.json`    → policy grading: gamepad vs gold via accuracy.py
     expected: ScenarioExpected | None = None
+    video_expected: VideoScenarioExpected | None = None
     gold_action: dict[str, Any] | None = None
 
     def pipeline_request(self) -> PipelineRequest:
-        """Materialise the on-disk spec into a runtime PipelineRequest."""
-
+        """Materialise the on-disk spec into a runtime PipelineRequest (image scenarios only)."""
+        if self.spec.is_video:
+            raise ValueError(
+                f"scenario {self.name!r} is a video scenario — "
+                "use VideoTextReasoner.generate() directly, not pipeline_request()"
+            )
         return PipelineRequest(
             image=self.image_bytes,
             instruction=self.spec.instruction,
@@ -56,21 +59,27 @@ def load_scenario(name: str, scenarios_dir: Path | None = None) -> LoadedScenari
     if not sc_dir.is_dir():
         raise FileNotFoundError(f"scenario not found: {sc_dir}")
     spec = ScenarioRequest.model_validate_json((sc_dir / "request.json").read_text())
-    image_bytes = (sc_dir / spec.image_path).read_bytes()
+    image_bytes = (sc_dir / spec.image_path).read_bytes() if spec.image_path else None
+
+    expected: ScenarioExpected | None = None
+    video_expected: VideoScenarioExpected | None = None
     expected_path = sc_dir / "expected.json"
-    expected = (
-        ScenarioExpected.model_validate_json(expected_path.read_text())
-        if expected_path.exists()
-        else None
-    )
+    if expected_path.exists():
+        raw = json.loads(expected_path.read_text())
+        if "key_phrases" in raw:
+            video_expected = VideoScenarioExpected.model_validate(raw)
+        else:
+            expected = ScenarioExpected.model_validate(raw)
+
     gold_path = sc_dir / "gold_action.json"
     gold_action = json.loads(gold_path.read_text()) if gold_path.exists() else None
     return LoadedScenario(
         name=name,
         dir=sc_dir,
         spec=spec,
-        expected=expected,
         image_bytes=image_bytes,
+        expected=expected,
+        video_expected=video_expected,
         gold_action=gold_action,
     )
 

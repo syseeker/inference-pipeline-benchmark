@@ -220,6 +220,174 @@ def _run_one(pipe: Pipeline, sc, samples: LatencySamples) -> tuple[Any, bool, bo
     return resp, is_valid, bool(resp.was_executed)
 
 
+def _run_round_video(
+    *,
+    round_: Round,
+    pipeline_cfg: PipelineConfig,
+    gpu: str,
+    gpu_cfg: dict[str, Any],
+    label: str,
+    out_dir: Path,
+    scenarios: list,
+    warmup_requests: int,
+    gpu_index: int,
+    sampler_interval_ms: int,
+) -> None:
+    """Video+text scenario loop — bypasses the image pipeline entirely."""
+    from vlm_pipeline.config import VideoTextConfig
+    from vlm_pipeline.reasoners.video_text_reasoner import VideoTextReasoner, key_phrase_coverage
+
+    vcfg = VideoTextConfig(
+        base_url=round_.base_url,
+        model=round_.hf_id,
+        num_frames=round_.num_frames if round_.num_frames is not None else pipeline_cfg.video_text.num_frames,
+    )
+    reasoner = VideoTextReasoner(vcfg)
+
+    run_id = uuid.uuid4().hex[:12]
+    started_at = utc_now_iso()
+    per_scenario_dir = out_dir / gpu / round_.backend
+    per_scenario_dir.mkdir(parents=True, exist_ok=True)
+
+    if warmup_requests > 0:
+        typer.echo(f">> warming up: {warmup_requests} request(s) (video)")
+        for i in range(warmup_requests):
+            sc = scenarios[i % len(scenarios)]
+            try:
+                reasoner.generate(
+                    video_path=sc.spec.video_path,
+                    scenario_dir=sc.dir,
+                    prompt=sc.spec.prompt or "",
+                    deadline_ms=sc.spec.deadline_ms,
+                    num_frames=vcfg.num_frames,
+                )
+            except Exception as e:
+                typer.echo(f"   warm-up {i+1} ({sc.name}) failed: {e}", err=True)
+
+    samples = LatencySamples()
+    n_valid = 0
+    n_completed = 0
+    rows: list[dict[str, Any]] = []
+
+    gs_ctx = (
+        GpuSampler(gpu_index=gpu_index, interval_ms=sampler_interval_ms)
+        if gpu_index >= 0
+        else None
+    )
+    if gs_ctx is not None:
+        gs_ctx.__enter__()
+
+    t_loop_start = time.perf_counter()
+    try:
+        for sc in scenarios:
+            t0 = time.perf_counter()
+            raw, meta, ttft_ms = reasoner.generate(
+                video_path=sc.spec.video_path,
+                scenario_dir=sc.dir,
+                prompt=sc.spec.prompt or "",
+                deadline_ms=sc.spec.deadline_ms,
+                num_frames=vcfg.num_frames,
+            )
+            total_ms = (time.perf_counter() - t0) * 1000.0
+
+            if total_ms:
+                samples.end_to_end.append(total_ms)
+            if ttft_ms:
+                samples.ttft.append(ttft_ms)
+            pt = (meta.extras or {}).get("prompt_tokens")
+            ct = (meta.extras or {}).get("completion_tokens")
+            if isinstance(pt, int):
+                samples.prompt_tokens.append(pt)
+            if isinstance(ct, int):
+                samples.completion_tokens.append(ct)
+
+            coverage = None
+            passed = None
+            if sc.video_expected is not None:
+                coverage = key_phrase_coverage(raw, sc.video_expected.key_phrases)
+                passed = coverage >= sc.video_expected.min_coverage
+                n_valid += int(passed)
+            n_completed += 1
+
+            row: dict[str, Any] = {
+                "configs": {
+                    "scenario": sc.name,
+                    "framework": round_.backend,
+                    "model": round_.model_id,
+                    "hf_id": round_.hf_id,
+                    "variant": round_.variant,
+                    "run_label": label,
+                    "prompt": sc.spec.prompt,
+                    "num_frames": vcfg.num_frames,
+                },
+                "results": {
+                    "run_id": run_id,
+                    "latency_ms": {"total_ms": total_ms, "ttft_ms": ttft_ms},
+                    "prompt_tokens": pt,
+                    "completion_tokens": ct,
+                    "response": raw,
+                    "key_phrase_coverage": coverage,
+                    "passed": passed,
+                },
+            }
+            rows.append(row)
+            row_path = per_scenario_dir / f"{sc.name}__{run_id}.json"
+            row_path.write_text(json.dumps(row, indent=2, default=str))
+            typer.echo(
+                f"   {sc.name}: {total_ms:.0f}ms  ttft={ttft_ms:.0f}ms  "
+                f"coverage={coverage:.0%}" if coverage is not None
+                else f"   {sc.name}: {total_ms:.0f}ms  ttft={ttft_ms:.0f}ms"
+            )
+    finally:
+        if gs_ctx is not None:
+            gs_ctx.__exit__(None, None, None)
+
+    wall_time_s = (time.perf_counter() - t_loop_start) if n_completed > 0 else None
+    pct = summarise_latencies(samples)
+    toks = summarise_token_counts(samples)
+    tput = compute_throughput(samples, n_completed=n_completed, n_valid=n_valid, wall_time_s=wall_time_s)
+
+    aggregate = BenchmarkResult(
+        run_id=run_id,
+        started_at=started_at,
+        framework=round_.backend,
+        framework_version=_framework_version(round_.backend),
+        gpu=gpu_cfg.get("display_name", gpu) if gpu_cfg else gpu,
+        driver=gpu_cfg.get("driver", "unknown") if gpu_cfg else "unknown",
+        cuda=gpu_cfg.get("cuda", "unknown") if gpu_cfg else "unknown",
+        model=round_.model_id,
+        quantization=round_.quantization,
+        tensor_parallel=int(gpu_cfg.get("tensor_parallel", 1)) if gpu_cfg else 1,
+        concurrency=1,
+        n_requests=n_completed,
+        framework_knobs={"num_frames": vcfg.num_frames, "scenario_type": "video-text"},
+        run_label=label,
+        warmup_requests=warmup_requests,
+        wall_time_s=wall_time_s,
+        e2e_p50_ms=pct["e2e_p50_ms"],
+        e2e_p95_ms=pct["e2e_p95_ms"],
+        e2e_p99_ms=pct["e2e_p99_ms"],
+        grammar_validity_rate=(n_valid / n_completed) if n_completed else None,
+        ttft_p50_ms=pct["ttft_p50_ms"],
+        ttft_p95_ms=pct["ttft_p95_ms"],
+        ttft_p99_ms=pct["ttft_p99_ms"],
+        throughput_seq_per_s=tput["throughput_seq_per_s"],
+        goodput_seq_per_s=tput["goodput_seq_per_s"],
+        mean_prompt_tokens=toks["mean_prompt_tokens"],
+        mean_completion_tokens=toks["mean_completion_tokens"],
+        total_prompt_tokens=toks["total_prompt_tokens"],
+        total_completion_tokens=toks["total_completion_tokens"],
+    )
+    agg_path = out_dir / gpu / f"{round_.backend}-{round_.model_id}-{run_id}.json"
+    agg_path.parent.mkdir(parents=True, exist_ok=True)
+    agg_path.write_text(json.dumps(aggregate.to_dict(), indent=2, default=str))
+    typer.echo(
+        f">> video round done  p50={pct['e2e_p50_ms'] or 0:.0f}ms  "
+        f"p95={pct['e2e_p95_ms'] or 0:.0f}ms  "
+        f"coverage_pass={n_valid}/{n_completed}  wrote {agg_path}"
+    )
+
+
 def _run_round(
     *,
     round_: Round,
@@ -235,6 +403,29 @@ def _run_round(
     """Execute one (backend, model, variant) round end-to-end."""
     pipeline_cfg = PipelineConfig.from_env()
     _apply_round_to_cfg(pipeline_cfg, round_)
+
+    # Video scenarios bypass the image pipeline entirely.
+    scenarios = load_all(scenarios_dir)
+    if not scenarios:
+        where = scenarios_dir or "tests/smoke/scenarios/"
+        typer.echo(f"no scenarios found under {where}", err=True)
+        raise typer.Exit(2)
+
+    if scenarios and scenarios[0].spec.is_video:
+        _run_round_video(
+            round_=round_,
+            pipeline_cfg=pipeline_cfg,
+            gpu=gpu,
+            gpu_cfg=gpu_cfg,
+            label=label,
+            out_dir=out_dir,
+            scenarios=scenarios,
+            warmup_requests=warmup_requests,
+            gpu_index=gpu_index,
+            sampler_interval_ms=sampler_interval_ms,
+        )
+        return
+
     reasoner = _make_reasoner(round_.backend, pipeline_cfg)
     pipe = Pipeline(reasoner=reasoner, config=pipeline_cfg)
 
@@ -243,12 +434,6 @@ def _run_round(
 
     per_scenario_dir = out_dir / gpu / round_.backend
     per_scenario_dir.mkdir(parents=True, exist_ok=True)
-
-    scenarios = load_all(scenarios_dir)
-    if not scenarios:
-        where = scenarios_dir or "tests/smoke/scenarios/"
-        typer.echo(f"no scenarios found under {where}", err=True)
-        raise typer.Exit(2)
 
     if warmup_requests > 0:
         # Cycle through scenarios so each distinct input shape gets a
