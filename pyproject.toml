@@ -46,6 +46,10 @@ sglang  = [
     # Nemotron-Omni) hard-imports librosa but sglang doesn't list it as a
     # dep — server crashes on startup with ImportError otherwise.
     "librosa>=0.11",
+    # decord is sglang's video decoder for multimodal video inputs.
+    # vLLM ships its own decoder; sglang does not — omitting this causes
+    # InternalServerError 500 on any video request.
+    "decord>=0.6",
 ]
 # tensorrt-llm wheels are GPU/driver-specific and live on NVIDIA's index
 # (https://pypi.nvidia.com), not standard PyPI — pip can't satisfy them
