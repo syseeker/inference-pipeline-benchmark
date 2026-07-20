@@ -129,7 +129,8 @@ source .venv-vllm/bin/activate
 vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
     --max-model-len 32768 \
     --no-enable-prefix-caching \
-    --gpu-memory-utilization 0.90
+    --gpu-memory-utilization 0.90 \
+    --max-num-seqs 32
 
 # Terminal 2 — smoke test (single scenario, single backend)
 bench smoke --gpu rtx_pro6000 --backend vllm --model qwen3-vl-32b-fp8 \
@@ -184,8 +185,11 @@ source .venv-vllm/bin/activate
 vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 \
     --max-model-len 32768 \
     --no-enable-prefix-caching \
-    --gpu-memory-utilization 0.90
+    --gpu-memory-utilization 0.90 \
+    --max-num-seqs 32
 # wait for: INFO: Application startup complete
+# --max-num-seqs 32 matches the sweep config — limits KV cache allocation
+# and CUDA graph capture passes, cutting startup from ~5min to ~82s.
 ```
 
 **Terminal 2** — run the concurrency sweep:
