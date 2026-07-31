@@ -11,6 +11,7 @@ contract; the five sections below explain when to use each skill.
 
 - [`benchmark-gpu-inference`](#benchmark-gpu-inference) — Orchestrator skill: benchmark VLM and policy inference on an NVIDIA GPU across vLLM / SGLang / TRT-LLM / NitroGen execution backends. Use when the user asks to compare backends, pick a deployment target, measure latency/throughput/energy, or run a precision/step-count sweep. Composes the other four skills (prepare-nitrogen-dataset, setup-inference-backend, interpret-benchmark-summary, extend-benchmark-config).
 - [`extend-benchmark-config`](#extend-benchmark-config) — Edit benchmarks/configs/<gpu>.yaml to add a new model, GPU profile, or sweep. Respects the schema (models / backends / sweeps), the unsupported_backends pin field, the family: key for backend_args fan-out, and the prefer-latest-models rule.
+- [`gpu-contention-benchmark`](#gpu-contention-benchmark) — Measure how co-resident models degrade each other on one GPU — text LLM, video VLM, image-LM and computer vision sharing the same card. Use when the user asks about noisy neighbours, co-location, multi-tenant GPU capacity planning, safe-operating envelopes, or "can I run these two models on one GPU". Covers the hybrid serving topology (Triton for CV, native vLLM/SGLang/TRT-LLM for LLM/VLM), the two-driver load generation rule, and the open-loop measurement discipline that makes degradation ratios meaningful.
 - [`interpret-benchmark-summary`](#interpret-benchmark-summary) — Read benchmarks/results/<gpu>/summary.md + the per-result JSONs and rewrite the Core findings in the validated house style. Apply the "winner first, why + how-to-improve" rule. Cross-check docs/findings/knowledge.yaml for known-cause explanations of under-performers.
 - [`prepare-nitrogen-dataset`](#prepare-nitrogen-dataset) — Build benchmark scenarios from the nvidia/NitroGen dataset (or a customer-registered source). Pulls the ng.pt checkpoint + the actions parquet shards, decodes representative frames, and writes per-scenario request.json + gold_action.json. Handles dead URLs, bot-blocking cloud IPs (synthetic-frame fallback), and missing-mapping checkpoints.
 - [`setup-inference-backend`](#setup-inference-backend) — Idempotent installer for the per-backend Python venv + dependencies (.venv-vllm / .venv-sglang / .venv-trtllm / .venv-nitrogen / .venv-nim). Knows about the install gaps (torchvision for nitrogen, transformers<5 pin, NVIDIA-index wheels for TRT-LLM, JS runtime for yt-dlp) and the per-GPU `unsupported_backends` matrix in the GPU YAMLs.
@@ -36,6 +37,20 @@ Trigger phrases (not exhaustive):
 If the user only wants raw scenario building, use [prepare-nitrogen-dataset](../prepare-nitrogen-dataset/SKILL.md).
 If they only want to install a backend, use [setup-inference-backend](../setup-inference-backend/SKILL.md).
 If they only want to read existing results, use [interpret-benchmark-summary](../interpret-benchmark-summary/SKILL.md).
+
+## NitroGen exec × precision — valid combinations ONLY
+
+**eager / compile / cudagraph → bf16 only.**
+**tensorrt / onnxruntime → fp8 or nvfp4 only.**
+
+`nitrogen_exec.py` maps `Precision.FP8 → "bfloat16"` for the autocast dtype.
+Running `nitrogen-eager` with an fp8 model silently runs bf16 — no weight
+quantization happens. This is blocked via `unsupported_backends` in the GPU
+YAML, and the runner will exit with code 2.
+
+If asked to smoke or run `nitrogen-eager` at fp8, refuse and offer:
+- `nitrogen-eager` + `nitrogen-500m-bf16` — tests the PyTorch eager path
+- `nitrogen-tensorrt` + `nitrogen-500m-fp8` — tests real FP8 (downloads artifact)
 
 ## NitroGen FP8 / NVFP4 — pre-calibrated artifacts
 
@@ -313,6 +328,141 @@ If the yaml is malformed, `scenario_config` will error loudly — both
 - Per-finding write-ups: [docs/findings/](../../docs/findings/)
 - Per-GPU model rationale: [docs/models.md](../../docs/models.md)
 - Memory math: [docs/capacity.md](../../docs/capacity.md)
+
+---
+
+## gpu-contention-benchmark
+
+_Source: [skills/gpu-contention-benchmark/SKILL.md](skills/gpu-contention-benchmark/SKILL.md)_
+
+## When to invoke
+
+- "What happens to my LLM's latency if I also run object detection on this GPU?"
+- "How many models can I co-locate before p95 breaks?"
+- "Which of these two models is the noisy neighbour?"
+- "At what request rate does my CV pipeline start hurting the VLM?"
+- Capacity planning for multi-tenant inference nodes.
+
+**Do not** invoke for single-model benchmarking — that is
+[benchmark-gpu-inference](../benchmark-gpu-inference/SKILL.md). This skill is
+specifically about **two or more models resident at the same time**.
+
+## Build status
+
+This capability is under construction. Check before promising a result:
+
+| Step | State |
+|---|---|
+| Customer brief + test data staged (`workspace/contention/`) | ✅ done |
+| Design decisions recorded (`reference/`) | ✅ done |
+| Video clips transcoded to H.264 | ⏳ awaiting upload |
+| Phase-0 concurrency probe | ⬜ not built |
+| Co-tenancy result schema + timestamps | ⬜ not built |
+| `colocations:` config schema | ⬜ not built |
+| `bench coloc` orchestrator | ⬜ not built |
+| Triton CV tenants | ⬜ not built |
+| Contention analysis (summary §10) | ⬜ not built |
+
+## Two rules that are non-negotiable
+
+**1. Open-loop load, always.** Drive every tenant at a fixed *request rate*, never
+at a fixed *concurrency*. A closed-loop client throttles itself in proportion to
+the slowdown it is supposed to be measuring, so the degradation ratio ends up
+describing the harness rather than the GPU. Record `offered_rps` and
+`achieved_rps`; the point where they diverge is the safe-operating-envelope
+boundary. Full reasoning in [reference/design-decisions.md](reference/design-decisions.md).
+
+**2. One driver per tenant type.** AIPerf cannot drive Triton — it dropped
+GenAI-Perf's `kserve` and `dynamic_grpc` endpoint types.
+
+| Tenant | Driver | Open-loop flag | Arrival pattern flag |
+|---|---|---|---|
+| LLM / VLM (vLLM, SGLang, TRT-LLM) | `aiperf` | `--request-rate` | `--arrival-pattern {constant,poisson,gamma}` |
+| CV (Triton) | `perf_analyzer` | `--request-rate-range` | `--request-distribution {constant,poisson}` |
+
+Both support Poisson open-loop, so the two tenants remain comparable. The
+orchestrator's job is to start them together against a shared `t0` and merge
+their traces — not to generate load itself.
+
+## Serving topology
+
+Hybrid, and deliberately so — see [reference/serving-topology.md](reference/serving-topology.md).
+
+- **CV models → Triton** (`26.07-py3`), TensorRT backend for the optimised path,
+  ONNX Runtime for the portable baseline, Python backend for models with no
+  export path (kosmos-2.5, PaddleOCR).
+- **LLM / VLM → native servers** (vLLM, SGLang, TRT-LLM). They run their own
+  process with their own scheduler; putting them behind Triton buys nothing.
+- **Isolation is a fixed setting, not a swept dimension.** MPS on everywhere.
+  MIG exists only on RTX PRO 6000 and is used for a single hardware-isolated
+  reference run.
+
+## Recipe
+
+Phases follow the customer's own structure in
+`workspace/contention/experiment_design.md`.
+
+```bash
+# Phase 0 — GATE. Do this first and stop if it fails.
+python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
+#   Confirms tenants genuinely overlap on the GPU rather than time-slicing.
+#   Also measures run-to-run variance (5x) — that sets the repetition policy.
+
+# Phase 1 — solo baselines, at the SAME offered rate as the contention runs
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --solo-only
+
+# Phases 2-6 — named colocations from the GPU yaml
+bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv     # rate sweep
+bench coloc --gpu rtx_pro6000 --colocation mix-full            # all 4 categories
+
+bench summary --gpu rtx_pro6000                                # §10 = contention
+python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
+```
+
+## Pre-flight checks (do not skip)
+
+1. **VRAM budget.** `sum(tenant gpu_memory_utilization) + CV footprint <= 1.0`.
+   vLLM defaults to `0.9` and will take the whole card, starving tenant 2.
+2. **Clock policy applied.** Power limit first, then `nvidia-smi -lgc` at 60–80%
+   of max boost. On GeForce the lock is *advisory* — verify, don't assume.
+3. **No throttle reasons active.** Abort if `clocks_throttle_reasons.active`
+   shows `SwPowerCap` or `HwThermalSlowdown`; a throttled run is not a
+   contention measurement.
+4. **Video clips are H.264.** `mp4v` (MPEG-4 Part 2) risks a CPU decode fallback,
+   which turns a "GPU video tenant" into a partly-CPU tenant.
+5. **Triton client shared memory enabled** — `--allow-client-shm=true`. Disabled
+   by default since Triton 26.04; without it, large CV tensors read as a model
+   regression when it is really serialization overhead.
+6. **One GPU sampler for the whole window**, not one per tenant. N samplers means
+   N `dcgmi dmon` processes and every tenant reporting whole-GPU memory as its own.
+
+## Failure recovery
+
+| Symptom | Cause | Action |
+|---|---|---|
+| Phase 0 shows ~1.0× aggregate throughput, ~2.0× latency | Tenants are **serialising**, not sharing | Stop. Enable MPS and retry. If still serialised, the study measures time-slice fairness — rescope and tell the user |
+| Tenant 2 OOMs at startup | Tenant 1 took the whole card | Set explicit `gpu_memory_utilization` per tenant |
+| `achieved_rps` << `offered_rps` even solo | The driver is the bottleneck, not the GPU | Lower the rate, or check the client host isn't CPU-saturated |
+| Degradation ratio ≈ 1.0 everywhere | Load too low to contend, or closed-loop crept back in | Raise offered rate; confirm `--request-rate` is set, not `--concurrency` |
+| Ratio varies wildly between repeats | Near-OOM KV-cache eviction is bimodal | Expected at the memory-pressure points — report both modes, not the mean |
+| CV latency varies with image content | NMS is data-dependent | Expected for YOLOv8; hold the input fixed so the variance you measure is contention |
+
+## Verification
+
+- **Null test** — a "colocation" of one tenant alone must give ratio ≈ 1.0. If a
+  tenant degrades against no neighbour, the harness is wrong, not the GPU.
+- **Load fidelity** — `achieved_rps ≈ offered_rps` at low load.
+- **Sampler sanity** — exactly one sampler process per run.
+- **Clock integrity** — no published run had a throttle reason fire.
+
+## Pinned references
+
+- [reference/design-decisions.md](reference/design-decisions.md) — the methodology and *why*: open-loop, clock policy, sampler ownership, timestamps, repetition policy
+- [reference/model-catalogue.md](reference/model-catalogue.md) — verified model sources, per-GPU scoping, and which picks are broken
+- [reference/serving-topology.md](reference/serving-topology.md) — vLLM vs Triton vs MPS vs MIG, explained from first principles
+- `workspace/contention/experiment_design.md` — the customer's original brief
+- `workspace/contention/experiment_config.json` — model catalogue, prompts, phase definitions
+- [docs/metrics.md](../../docs/metrics.md) — per-request metric definitions, reused unchanged
 
 ---
 
