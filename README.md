@@ -1,326 +1,108 @@
 # inference-pipeline-benchmark
 
-A benchmark harness for **VLM-to-action** inference pipelines on NVIDIA
-GPUs. Bring your visual scenarios + a target GPU, get apples-to-apples
-numbers across **vLLM**, **SGLang**, **TensorRT-LLM** and **Nitrogen** with one
-command.
+A benchmark harness for **inference pipelines on NVIDIA GPUs**. Bring your
+scenarios and a target GPU; get apples-to-apples latency, throughput, energy
+and accuracy numbers across **vLLM**, **SGLang**, **TensorRT-LLM** and the
+**NitroGen** execution engines — from one command, one CLI, or one agent prompt.
 
-> **Pipeline**: image + short context history + high-level instruction
-> → schema-validated low-level command sequence (move / click / keypress
-> / say) **OR** continuous gamepad action vector. Pipeline scaffolding
-> lives in [src/vlm_pipeline/](src/vlm_pipeline/); the encoder/executor
-> are passthrough today, the reasoner is the stage wired to backends.
+The output is a per-GPU `summary.md` that answers a deployment question:
+*which backend, which precision, which model, at what cost?*
 
-## Two backend families (don't conflate them)
+```markdown
+## Core findings
+- nitrogen-tensorrt @ fp8 wins: 43 ms p50, 20.4 seq/s, 4.3 J/req.
+- FP8 halves latency vs BF16 — weight bytes ↓50%, GEMM dispatches to Blackwell FP8 paths.
+- BF16 engines (eager / compile / cudagraph) cluster within 1 ms: launch overhead
+  is marginal at batch=1 for a 500M model.
 
-This harness benchmarks **two kinds of model**, served through **two
-kinds of backend**. Knowing which is which is the load-bearing concept:
+## 1. Decision metrics
+| backend            | precision | e2e p50 | e2e p95 | seq/s | J/req | validity |
+|--------------------|-----------|---------|---------|-------|-------|----------|
+| nitrogen-tensorrt  | fp8       | 43 ms   | 46 ms   | 20.4  | 4.3   | 100%     |
+| nitrogen-onnx      | fp8       | 43 ms   | 47 ms   | 20.3  | 4.4   | 100%     |
+| nitrogen-eager     | bf16      | 69 ms   | 73 ms   | 9.3   | 10.4  | 100%     |
+```
+
+Nine sections in total — decision metrics, latency diagnostics, throughput,
+cache & scheduling, GPU resource usage, cross-run deltas, per-scenario detail,
+environment, and concurrency profile. See [docs/metrics.md](docs/metrics.md).
+
+---
+
+## What you can benchmark
+
+Two axes: **how many models are loaded**, and **what kind of model** it is.
+
+### Single model (today)
+
+One model, one backend, one round at a time. Two model families:
+
+| Family | Input → output | Scenarios | Backends |
+|---|---|---|---|
+| **VLM** — image+text | screenshot + instruction → schema-valid action sequence | 3 shipped game scenarios | vLLM · SGLang · TRT-LLM · NIM |
+| **VLM** — video+text | short video + question → free-form analysis | you bring the videos | vLLM · SGLang · TRT-LLM |
+| **Policy** — NitroGen | game frame → continuous gamepad action | built from the NitroGen dataset | 5 execution engines (see below) |
+
+### Multiple models concurrently (planned)
+
+Several models resident on one GPU at the same time, serving interleaved
+traffic — measuring how memory pressure, scheduler contention and KV-cache
+sharing change the per-model numbers. Not yet implemented; see
+[Status](#status).
+
+---
+
+## The two model families (don't conflate them)
+
+Within single-model benchmarking, the load-bearing distinction is what the
+model emits and therefore how it is served:
 
 | Family | Model emits | Served by |
 |---|---|---|
-| **VLM** (Qwen3-VL / Gemma 4 / Nemotron-Omni) | language tokens, parsed to an `ActionSequence` JSON | **vLLM**, **SGLang**, **TRT-LLM**, **NIM** — OpenAI-compatible HTTP servers |
-| **Policy** (NitroGen 500M) | continuous gamepad action directly (no token stream) | **nitrogen-eager** / **nitrogen-compile** / **nitrogen-cudagraph** / **nitrogen-tensorrt** / **nitrogen-onnx** — ZMQ execution engines |
+| **VLM** (Qwen3-VL / Gemma 4 / Nemotron-Omni) | language tokens, parsed to an `ActionSequence` JSON or read as free text | **vLLM**, **SGLang**, **TRT-LLM**, **NIM** — OpenAI-compatible HTTP servers |
+| **Policy** (NitroGen 500M) | a continuous gamepad action directly — no token stream | **nitrogen-eager** / **-compile** / **-cudagraph** / **-tensorrt** / **-onnx** — ZMQ execution engines |
 
-Both families share the same scenario format, the same
-`bench {probe,setup,scenarios,smoke,sweep,summary}` surface, and the
-same `summary.md` output — so a single run can compare them apples-to-
-apples on the same input. See [docs/nitrogen.md](docs/nitrogen.md) for
-the policy-vs-VLM distinction in depth and [docs/scenarios.md](docs/scenarios.md)
-for the on-disk shape that lets one harness drive both.
+Both families share the same scenario format, the same `bench` command surface,
+and the same `summary.md` — so one run can compare them on the same input.
+Depth: [docs/nitrogen.md](docs/nitrogen.md) for the policy-vs-VLM distinction,
+[docs/scenarios.md](docs/scenarios.md) for the on-disk shape that drives both.
 
 ---
 
-## Driving it from CLI and an agent
+## Start here
 
-There are **two layers of Python environment** — don't mix them up:
-
-| Environment | Purpose | Lives at |
-|---|---|---|
-| CLI venv | Runs `bench` commands. Install once. | `~/venv` (or any venv you own) |
-| Backend venvs | One per backend family; created by `bench setup`. The sweep activates these automatically. | `.venv-nitrogen`, `.venv-vllm`, etc. inside the repo |
-
-All nitrogen execution engines (eager / compile / cudagraph / tensorrt / onnx) and quantization tools share **one venv: `.venv-nitrogen`**. There is no separate `nitrogen-quant` venv.
-
-### Step 1 — install the `bench` CLI (once per machine)
-
-```bash
-# If your system Python is not writable (e.g. /opt/python-venv), create a venv you own:
-python3 -m venv ~/venv && source ~/venv/bin/activate
-pip install -e .                                # installs the `bench` console script
-```
-
-### Step 2 — set up the nitrogen venv (once per repo)
-
-```bash
-bench setup --backend nitrogen --json           # creates .venv-nitrogen inside the repo
-
-# NitroGen package (policy model runtime) must be installed into .venv-nitrogen separately:
-git clone https://github.com/MineDojo/NitroGen ../NitroGen
-source .venv-nitrogen/bin/activate
-pip install -e ../NitroGen
-# TRT + modelopt wheels live on NVIDIA's index (needed for tensorrt/onnx exec engines):
-pip install nvidia-modelopt onnxruntime-gpu --extra-index-url https://pypi.nvidia.com
-deactivate
-
-# Download the checkpoint (hf lives in ~/venv — re-activate it after deactivating above):
-source ~/venv/bin/activate
-hf download nvidia/NitroGen ng.pt
-```
-
-### Step 3 — build scenarios and run the sweep
-
-```bash
-bench probe --json                              # GPU + driver + per-backend versions
-
-# First time only: download the NitroGen dataset and extract one shard
-hf download nvidia/NitroGen --repo-type dataset
-tar -xzf ~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions/SHARD_0000.tar.gz \
-    -C ~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions/
-export NITROGEN_ACTIONS_ROOT=~/.cache/huggingface/hub/datasets--nvidia--NitroGen/snapshots/*/actions
-
-bench scenarios build --source nitrogen --n 3 --synthetic-frames --json
-bench smoke --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
-bench sweep --gpu rtx_pro6000 --sweep nitrogen-backends --json
-bench summary --gpu rtx_pro6000 --json
-```
-
-Other commands (once backends are running):
-
-```bash
-# Nitrogen backends — launches N replicas, one client thread per replica
-bench load-test --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --concurrency "1,2,4,8,16,32" --json
-
-bench profile --tool nsys --gpu rtx_pro6000 --backend nitrogen-eager --model nitrogen-500m-bf16 --json
-```
-
-User walkthrough with **natural-language prompts** via agent(recommended, no flag memorisation):
-**→ [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md)** ←
-
-Don't yet know why this project exists? Start with
-**→ [docs/why-this-matters.md](docs/why-this-matters.md)** — an
-engineer-friendly tour of the four budgets your model has to fit
-inside (latency, throughput, energy, precision) and how the harness
-exposes each one.
-
-## What this harness orchestrates
-
-Under the hood we wrap three NVIDIA tools so customers don't need to learn them:
-
-| Tool | What | When |
-|---|---|---|
-| [**modelopt**](https://github.com/NVIDIA/TensorRT-Model-Optimizer) | FP8 / NVFP4 PTQ calibration + ONNX export | We run it once on a known-good box; ship the calibrated artifact via [`syseeker-at-nv/nitrogen-quant`](https://huggingface.co/syseeker-at-nv/nitrogen-quant). Customers `hf download`. |
-| [**AIPerf**](https://github.com/ai-dynamo/aiperf) | Client-side load generator (OpenAI-compatible) | `bench load-test` wraps it; produces summary.md §9 (concurrency curves for HTTP backends). |
-| [**Nsight Systems**](https://developer.nvidia.com/nsight-systems) | GPU timeline profiler | `bench profile --tool nsys` wraps it; escalation tool when summary.md flags a row that needs explanation (auto-installer in `bench setup --backend profile`). |
-
-You can still call each tool directly if you need to — these are
-wrappers, not abstractions over.
-
-> **Note on system tools (nsys, modelopt, tensorrt, etc.).** These are
-> system binaries / NVIDIA-index wheels, not regular Python packages —
-> they're **not in `requirements.txt` or `pyproject.toml`** by design
-> (you can't `pip install nsight-systems-cli`). Don't go hunting there.
-> Run `bench setup --backend <name>` for each backend you want; it
-> handles the system-level installs (apt-get for nsys, NVIDIA wheel
-> index for tensorrt + modelopt, post-install chmod and symlinks). You
-> only see `sudo` once at install time, then forget about it.
+| What you want to do | Go to |
+|---|---|
+| Benchmark a **VLM** on image or video scenarios | **[QUICKSTART_VLM.md](QUICKSTART_VLM.md)** |
+| Benchmark the **NitroGen policy model** across execution engines | **[QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md)** |
+| Understand *why* any of this matters before running it | **[docs/why-this-matters.md](docs/why-this-matters.md)** |
+| Evaluate this for a game-AI or simulation team | **[docs/for-game-sim-teams.md](docs/for-game-sim-teams.md)** |
+| Look up a flag, a yaml field, or an output path | **[BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md)** |
 
 ---
 
-## How to run a benchmark — five steps (low-level)
+## Three ways to drive it
 
-If you'd rather drive the scripts directly (no `bench` CLI), here are
-the underlying entry points. Each step links to the doc with the full
-detail.
+Every benchmark can be run three ways. They are the same code path — the CLI
+wraps the scripts, and the agent skills wrap the CLI. Pick whichever suits you.
 
-### 1. Pick a GPU profile and a model
+1. **Agent prompt** *(recommended)* — "Run the nitrogen sweep and tell me the
+   winner." Five skills ship in [skills/](skills/); install with
+   `bench install-skill`. Works with Claude Code, Codex and Cursor. No flags to
+   memorise, and the agent reads `summary.md` back to you in plain language.
+2. **`bench` CLI** — `bench {probe,setup,scenarios,smoke,sweep,summary,load-test,profile}`.
+   Every command takes `--json` and returns a structured status with an exit
+   code you can branch on. Full surface in [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+3. **Shell scripts** — `scripts/run_all_scenarios.sh` and friends, if you would
+   rather not install the CLI. This is what the other two layers call.
 
-The benchmark ships with three GPU profiles — `rtx5090`, `rtx_pro6000`,
-`h200` — each with a curated list of candidate models that fit. Skim
-[docs/models.md](docs/models.md) to see the picks per GPU and
-[docs/capacity.md](docs/capacity.md) for the memory math.
+Both quickstarts show all three for each step.
 
-The defaults are sensible (`rtx_pro6000` → `Qwen3-VL-32B-Instruct-FP8`).
-You only need this step if you want to change the model.
-
-### 2. Set up the inference server venv
-
-One venv per backend family — VLM serving (vLLM/SGLang/TRT-LLM) goes
-in its own venv per server; NitroGen's five execution engines share
-**one** venv (`.venv-nitrogen`) because they're all swap-in runtimes
-for the same `serve_nitrogen.py`. See [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md)
-for the full install commands.
-
-```bash
-# VLM serving venvs
-python3 -m venv .venv-vllm && source .venv-vllm/bin/activate
-pip install -e ".[vllm,dev]" && deactivate
-
-python3 -m venv .venv-sglang && source .venv-sglang/bin/activate
-pip install -e ".[sglang,dev]" && deactivate
-
-# TRT-LLM (NVIDIA's wheel index — only needed if you want the trtllm leg)
-python3 -m venv .venv-trtllm && source .venv-trtllm/bin/activate
-pip install tensorrt-llm --extra-index-url https://pypi.nvidia.com
-pip install -e ".[dev]" && deactivate
-
-# NitroGen policy venv (covers nitrogen-eager / -compile / -cudagraph
-# / -tensorrt / -onnx — five engines, one venv).
-python3 -m venv .venv-nitrogen && source .venv-nitrogen/bin/activate
-pip install -e ".[nitrogen,dataset,dev]"
-pip install nvidia-modelopt onnxruntime-gpu --extra-index-url https://pypi.nvidia.com
-pip install -e ../NitroGen                    # clone https://github.com/MineDojo/NitroGen first
-hf download nvidia/NitroGen ng.pt             # checkpoint
-deactivate
-```
-
-### 3. Smoke-test that one server actually works
-
-Before running the full benchmark, bring up one backend and confirm a
-single scenario goes through end-to-end. See
-[SMOKE_TESTS.md](SMOKE_TESTS.md) for the per-backend launch command and
-the smoke-test pytest invocation.
-
-**VLM backend (HTTP):**
-
-```bash
-# Shell A: start a server
-source .venv-vllm/bin/activate
-vllm serve Qwen/Qwen3-VL-32B-Instruct-FP8 --port 8000
-
-# Shell B: run one scenario through it
-source .venv-vllm/bin/activate
-python -m examples.run_scenario 01_clash_of_clans_start_attack --backend vllm
-```
-
-**NitroGen policy backend (ZMQ):**
-
-```bash
-# Shell A: start the ZMQ policy server
-source .venv-nitrogen/bin/activate
-python scripts/serve_nitrogen.py ~/.cache/huggingface/hub/models--nvidia--NitroGen/snapshots/*/ng.pt \
-    --port 5560 --exec eager --precision bf16 --steps 16
-
-# Shell B: drive a synthetic scenario via the NitrogenReasoner client
-# (or via the runner — see Step 4).
-```
-
-If that prints actual-vs-gold action sequences (VLM) or a Gamepad dict
-with non-zero latency (NitroGen), your stack is wired correctly.
-
-### 4. Run the benchmark
-
-The orchestrator script starts each backend's server, runs every
-scenario through the real `Pipeline`, writes per-scenario + aggregate
-JSON, and regenerates the per-GPU `summary.md`. Full operational detail
-in [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
-
-```bash
-# Default VLM model on vllm/sglang/trtllm (rtx_pro6000)
-scripts/run_all_scenarios.sh
-
-# A different GPU profile
-scripts/run_all_scenarios.sh --gpu h200
-
-# A different VLM model (must be defined in the GPU yaml's `models:` block)
-scripts/run_all_scenarios.sh --model qwen3.6-27b-fp8
-
-# A backend-flag A/B comparison (vllm-only knobs in this case)
-scripts/run_all_scenarios.sh --backends vllm --variants "baseline eager"
-
-# Auto-run every VLM model in the yaml, on every VLM backend
-scripts/run_all_scenarios.sh --sweep models
-
-# NitroGen — all 5 execution engines × precision × denoise-step sweep.
-# (Pre-built FP8/NVFP4 ONNX artifacts auto-download from
-#  syseeker-at-nv/nitrogen-quant on the first FP8 round; the per-GPU
-#  TRT plan is compiled on first use, ~10 s.)
-NITROGEN_CKPT_PATH=~/.cache/huggingface/hub/models--nvidia--NitroGen/snapshots/*/ng.pt \
-    scripts/run_all_scenarios.sh --gpu rtx_pro6000 --sweep nitrogen-backends \
-    --backends "nitrogen-eager nitrogen-compile nitrogen-cudagraph nitrogen-onnx nitrogen-tensorrt" \
-    --scenarios-dir tests/smoke/scenarios_nitrogen
-```
-
-Outputs land under `benchmarks/results/<gpu>/`:
-- `summary.md` — per-GPU aggregated table (regenerated each run)
-- `<backend>-<model>-<run_id>.json` — one aggregate `BenchmarkResult` per round
-- `<backend>/<scenario>__<run_id>.json` — per-scenario detail
-
-### 5. Run with your own scenarios
-
-Every scenario is a directory with three files — point the runner at a
-folder of them and it iterates. The format is documented in
-[tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md):
-
-```
-my_scenarios/
-├── 01_my_scene/
-│   ├── request.json     # ScenarioRequest: instruction, context_history, image_path, deadline_ms
-│   ├── screen.png       # the image referenced by request.json (PNG or JPEG)
-│   └── expected.json    # ScenarioExpected: gold ActionSequence + ValidationReport
-├── 02_another_scene/
-│   └── ...
-```
-
-Then:
-
-```bash
-scripts/run_all_scenarios.sh --scenarios-dir /path/to/my_scenarios
-```
-
-The Pydantic models for both files are in
-[tests/smoke/scenarios/schema.py](tests/smoke/scenarios/schema.py).
-Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios/)
-— copy one as a template.
-
----
-
-## Doc map
-
-| File | What's in it |
-| --- | --- |
-| **README.md** | This file — the journey above, project overview below |
-| [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) | Install vLLM / SGLang / TRT-LLM venvs, three operational modes (NIM cloud, local server, NIM container) |
-| [SMOKE_TESTS.md](SMOKE_TESTS.md) | Per-backend "is the server alive" check before benchmarking |
-| [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) | Full benchmark operational reference: yaml schema, sweep design, output structure, troubleshooting |
-| [docs/models.md](docs/models.md) | Per-GPU model picks (Qwen3-VL, Qwen3.5/3.6, Nemotron-3-Nano-Omni) and the rationale |
-| [docs/capacity.md](docs/capacity.md) | Memory math — which checkpoint fits which GPU at BF16 / FP8 / NVFP4 |
-| [docs/metrics.md](docs/metrics.md) | What each metric means and why it's tracked (decision metrics vs diagnostics) |
-| [docs/frameworks.md](docs/frameworks.md) | Per-framework one-pager (vLLM, SGLang, TRT-LLM PyTorch backend, ModelOpt, Triton) |
-| [docs/gpu-strategy.md](docs/gpu-strategy.md) | When to do tensor parallelism vs replicas; PCIe-vs-NVLink considerations |
-| [docs/architecture.md](docs/architecture.md) | Pipeline shape (today: VLM-only; v1+: split CV ↔ VLM ↔ decoder ↔ validator) |
-| [docs/nitrogen.md](docs/nitrogen.md) | NitroGen diffusion-policy backend: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend optimization study |
-| [docs/scenarios.md](docs/scenarios.md) | Scenario shape (request + screen + optional `expected` / `gold_action`), the NitroGen-chunk → scenario mapping, why we convert, and how to add your own dataset source |
-| [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: what this measures for you, player-vs-world-model choice, the bandwidth reality, and per-genre accuracy workflow |
-| [docs/why-this-matters.md](docs/why-this-matters.md) | **Andrew-Ng-style intro** for engineers new to inference benchmarking. The four budgets (latency / throughput / energy / precision), why backend choice isn't free, two real questions answered. |
-| [QUICKSTART_VLM.md](QUICKSTART_VLM.md) | **Agent-prompt walkthrough** for VLM benchmarks — image+text and video+text scenarios across vLLM / SGLang / TRT-LLM. |
-| [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) | **Agent-prompt walkthrough** for the NitroGen policy-model sweep end-to-end. Each step shows the prompt + what the agent does + what to expect on disk. |
-| [skills/](skills/) | Five Claude Code / Codex / Cursor skills — `benchmark-gpu-inference`, `prepare-nitrogen-dataset`, `setup-inference-backend`, `interpret-benchmark-summary`, `extend-benchmark-config`. Install via `bench install-skill`. |
-| [docs/findings/](docs/findings/) | Per-(gpu, framework, model) postmortems referenced by the summary generator (Core findings auto-link). |
-| [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
-
----
-
-## What you're benchmarking
-
-Three families per GPU so the cross-backend comparison covers a VLM
-headline, a dense-text TRT-engine win-case, and an NV-tuned multimodal
-MoE:
-
-- **Qwen3-VL** (`Qwen/Qwen3-VL-*-Instruct[-FP8]`) — headline VLM.
-- **Qwen3.5 / Qwen3.6** (`Qwen/Qwen3.5-9B`, `Qwen/Qwen3.6-27B-FP8`,
-  `Qwen/Qwen3.6-35B-A3B-FP8`) — dense text, TRT-LLM trt-engine candidate.
-- **Nemotron-3-Nano-Omni** (`nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16`)
-  — NV multimodal MoE (NVFP4 on 5090, FP8 on PRO 6000, BF16 on H200).
-
-| GPU | VRAM | Default model | Why |
-| --- | --- | --- | --- |
-| RTX 5090 | 32 GB GDDR7 | `qwen3-vl-8b-fp8` | Customer-relevant device; 8B-FP8 is the only Qwen3-VL size that fits with KV headroom |
-| RTX PRO 6000 | 96 GB GDDR7 | `qwen3-vl-32b-fp8` | Server workflow; 32B-FP8 leaves comfortable KV room |
-| H200 | 141 GB HBM3e | `qwen3-vl-32b-bf16` | Bandwidth ceiling; HBM3e at 4.8 TB/s + BF16 = cleanest accuracy baseline |
-
-Tensor parallelism on consumer cards is **an experiment, not the
-default**. See [docs/gpu-strategy.md](docs/gpu-strategy.md) for the
-staged proposal.
+> **Two layers of Python environment — don't mix them up.** The `bench` CLI
+> lives in a venv you own (`~/venv`); each backend gets its own venv inside the
+> repo (`.venv-vllm`, `.venv-nitrogen`, …), created by `bench setup` and
+> activated automatically by the sweep. All five NitroGen execution engines
+> share **one** venv, `.venv-nitrogen`.
 
 ---
 
@@ -328,42 +110,129 @@ staged proposal.
 
 Tokens/sec is **not** the decision metric. The pipeline succeeds when:
 
-- **Valid command-sequence latency** — time from image+instruction in
-  to a schema-valid command list out — meets the interactive budget.
-- **Command success rate** — fraction of generated sequences the
-  executor accepts and that achieve the intended outcome.
-- **Safety / grammar validity** — fraction passing the validator on
-  first try.
+- **Valid command-sequence latency** — time from input in to a schema-valid
+  command list out — meets the interactive budget.
+- **Command success rate** — fraction of generated sequences the executor
+  accepts and that achieve the intended outcome.
+- **Safety / grammar validity** — fraction passing the validator on first try.
 - **p95 / p99 stability** — tail latency under realistic concurrency.
+- **Energy per request** — J/req, the number that decides fleet cost.
 
-Token-level metrics (TTFT, ITL, vision-encoder latency, mem-bw util,
-KV-cache hit rate, CUDA-graph delta, quant accuracy loss, TP efficiency)
-are tracked as **diagnostics**. See [docs/metrics.md](docs/metrics.md)
-for the full list and per-field definitions.
+For video scenarios, key-phrase coverage replaces schema validity as the
+quality signal. For NitroGen, accuracy is measured against the dataset's gold
+gamepad action.
+
+Token-level metrics (TTFT, ITL, vision-encoder latency, mem-bw util, KV-cache
+hit rate, CUDA-graph delta, quant accuracy loss, TP efficiency) are tracked as
+**diagnostics**. Full per-field definitions in [docs/metrics.md](docs/metrics.md).
 
 ---
 
-## Frameworks under test
+## What this harness orchestrates
 
-| Framework | Role |
-| --- | --- |
-| vLLM | Baseline — most-deployed open serving stack, the one you've most likely already used |
-| SGLang | Low-latency challenger; RadixAttention + structured output |
-| TensorRT-LLM | PyTorch backend via `trtllm-serve` (HTTP, OpenAI-shape — mirrors vLLM/SGLang) |
-| ModelOpt | FP8 / NVFP4 / W8A8 quant + calibration (placeholder; not wired yet) |
-| TensorRT + Triton | CV encoder + LLM decoder ensemble for end-to-end serving (placeholder) |
-| NitroGen | Diffusion **policy** model (not a VLM). Run on execution-engine backends — `nitrogen-eager` / `-compile` / `-cudagraph` / `-tensorrt` / `-onnx` — × precision × denoise steps. See [docs/nitrogen.md](docs/nitrogen.md). |
+We wrap three NVIDIA tools so you don't have to learn them first:
 
-See [docs/frameworks.md](docs/frameworks.md).
+| Tool | What | When |
+|---|---|---|
+| [**modelopt**](https://github.com/NVIDIA/TensorRT-Model-Optimizer) | FP8 / NVFP4 PTQ calibration + ONNX export | Run once on a known-good box; the calibrated artifact ships via [`syseeker-at-nv/nitrogen-quant`](https://huggingface.co/syseeker-at-nv/nitrogen-quant) and auto-downloads on the first FP8 round. |
+| [**AIPerf**](https://github.com/ai-dynamo/aiperf) | Client-side load generator (OpenAI-compatible) | `bench load-test` wraps it; fills `summary.md` §9 with concurrency curves for HTTP backends. |
+| [**Nsight Systems**](https://developer.nvidia.com/nsight-systems) | GPU timeline profiler | `bench profile --tool nsys` wraps it. Escalation tool for when `summary.md` flags a row that needs proof, not inference. |
+
+These are wrappers, not abstractions — call any of the tools directly whenever
+you need to.
+
+> **On system tools (nsys, modelopt, tensorrt).** These are system binaries and
+> NVIDIA-index wheels, not ordinary Python packages, so they are deliberately
+> **not** in `requirements.txt` or `pyproject.toml` — don't go hunting there.
+> `bench setup --backend <name>` handles the system-level installs (apt for
+> nsys, the NVIDIA wheel index for tensorrt and modelopt, post-install chmod
+> and symlinks). You see `sudo` once at install time and then forget about it.
+
+---
+
+## GPUs and models
+
+Three GPU profiles ship, each with a curated model list that fits its VRAM:
+
+| GPU | VRAM | Default VLM | Why |
+|---|---|---|---|
+| RTX 5090 | 32 GB GDDR7 | `qwen3-vl-8b-fp8` | Customer-relevant device; 8B-FP8 is the largest Qwen3-VL that fits with KV headroom |
+| RTX PRO 6000 | 96 GB GDDR7 | `qwen3-vl-32b-fp8` | Server workflow; 32B-FP8 leaves comfortable KV room |
+| H200 | 141 GB HBM3e | `qwen3-vl-32b-bf16` | Bandwidth ceiling; HBM3e at 4.8 TB/s + BF16 = cleanest accuracy baseline |
+
+Model families under test: **Qwen3-VL** (headline VLM), **Qwen3.5 / Qwen3.6**
+(dense text, TRT-LLM engine candidate), **Gemma 4** (cross-vendor, video-capable),
+**Nemotron-3-Nano-Omni** (NV multimodal MoE), and **NitroGen 500M** (policy).
+
+Not every model runs on every backend. Each GPU yaml carries an
+`unsupported_backends:` field with a one-line reason per pinned-out combination
+— the sweep skips those rows and tells you why. Picks and rationale in
+[docs/models.md](docs/models.md); memory math in [docs/capacity.md](docs/capacity.md).
+
+Tensor parallelism on consumer cards is **an experiment, not the default** —
+see [docs/gpu-strategy.md](docs/gpu-strategy.md).
+
+---
+
+## Doc map
+
+**Getting started**
+
+| File | What's in it |
+|---|---|
+| [QUICKSTART_VLM.md](QUICKSTART_VLM.md) | VLM benchmarks end-to-end — image+text and video+text, across vLLM / SGLang / TRT-LLM |
+| [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) | NitroGen policy sweep end-to-end — 5 execution engines × precision × denoise steps |
+| [docs/why-this-matters.md](docs/why-this-matters.md) | Engineer-friendly intro: the four budgets (latency / throughput / energy / precision) and why backend choice isn't free |
+| [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: player-vs-world-model choice, the bandwidth reality, per-genre accuracy workflow |
+
+**Operational reference**
+
+| File | What's in it |
+|---|---|
+| [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) | The full reference: `bench` command surface, yaml schema, sweep design, output structure, troubleshooting |
+| [INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md) | Install vLLM / SGLang / TRT-LLM venvs; three operational modes (NIM cloud, local server, NIM container) |
+| [SMOKE_TESTS.md](SMOKE_TESTS.md) | Per-backend "is the server alive" check before benchmarking |
+| [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
+
+**Concepts and rationale**
+
+| File | What's in it |
+|---|---|
+| [docs/metrics.md](docs/metrics.md) | Every metric defined — decision metrics vs diagnostics, mapped to `summary.md` sections |
+| [docs/models.md](docs/models.md) | Per-GPU model picks, the rationale, and hypothesis-vs-measured-reality |
+| [docs/capacity.md](docs/capacity.md) | Memory math — which checkpoint fits which GPU at BF16 / FP8 / NVFP4 |
+| [docs/nitrogen.md](docs/nitrogen.md) | The NitroGen diffusion policy: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend study |
+| [docs/scenarios.md](docs/scenarios.md) | Scenario shape, the NitroGen-chunk → scenario mapping, and how to register your own dataset source |
+| [docs/frameworks.md](docs/frameworks.md) | Per-framework one-pager (vLLM, SGLang, TRT-LLM PyTorch backend, ModelOpt, Triton) |
+| [docs/gpu-strategy.md](docs/gpu-strategy.md) | Tensor parallelism vs replicas; PCIe-vs-NVLink considerations |
+| [docs/architecture.md](docs/architecture.md) | Pipeline shape — today VLM-only; v1+ splits CV ↔ VLM ↔ decoder ↔ validator |
+| [docs/findings/](docs/findings/) | Per-(gpu, framework, model) postmortems that the summary generator auto-links from Core findings |
+
+**Agent integration**
+
+| File | What's in it |
+|---|---|
+| [skills/](skills/) | Five Claude Code / Codex / Cursor skills — `benchmark-gpu-inference`, `prepare-nitrogen-dataset`, `setup-inference-backend`, `interpret-benchmark-summary`, `extend-benchmark-config`. Install via `bench install-skill`. |
+| [AGENTS.md](AGENTS.md) | Rendered from `skills/` for Codex. Auto-loaded; do not edit by hand. |
 
 ---
 
 ## Status
 
-The pipeline (encoder → reasoner → decoder → validator → executor),
-all four reasoner backends (NIM, vLLM, SGLang, TRT-LLM HTTP), the
-scenario benchmark runner, the orchestrator script, metrics, and the
-summary writer all run today. The vision encoder is currently a
-passthrough and the executor is dry-run. The TRT-LLM reasoner targets
-`trtllm-serve --backend pytorch` — see
-[INFERENCE_BACKENDS.md](INFERENCE_BACKENDS.md).
+**Running today.** The five-stage pipeline (encoder → reasoner → decoder →
+validator → executor); all VLM reasoner backends (NIM, vLLM, SGLang, TRT-LLM
+over HTTP) plus the NitroGen ZMQ reasoner; video+text scenarios; the benchmark
+runner, orchestrator script, metrics and summary writer; the NitroGen
+quantization chain (modelopt calibration → ONNX export → TRT plan compile);
+GPU sampling via DCGM with an nvidia-smi fallback; AIPerf concurrency sweeps;
+and Nsight profiling.
+
+**Placeholders.** The vision encoder is a passthrough and the executor is
+dry-run, so `command_success_rate` currently tracks `grammar_validity_rate`.
+ModelOpt for VLMs and the TensorRT+Triton CV-encoder ensemble are documented
+but not wired. NVFP4 NitroGen rows are pinned out until TensorRT ships the FP4
+plugin.
+
+**Planned.** Multi-model concurrent benchmarking — several models resident on
+one GPU serving interleaved traffic, to measure memory-pressure and
+scheduler-contention effects that single-model rounds cannot surface.
