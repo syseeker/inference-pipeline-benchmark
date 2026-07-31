@@ -27,19 +27,33 @@ specifically about **two or more models resident at the same time**.
 
 ## Build status
 
-This capability is under construction. Check before promising a result:
+This capability is under construction. **This table is the handoff record** —
+read it first, update it as you complete a step, and commit the change.
 
-| Step | State |
-|---|---|
-| Customer brief + test data staged (`workspace/contention/`) | ✅ done |
-| Design decisions recorded (`reference/`) | ✅ done |
-| Video clips transcoded to H.264 | ⏳ awaiting upload |
-| Phase-0 concurrency probe | ⬜ not built |
-| Co-tenancy result schema + timestamps | ⬜ not built |
-| `colocations:` config schema | ⬜ not built |
-| `bench coloc` orchestrator | ⬜ not built |
-| Triton CV tenants | ⬜ not built |
-| Contention analysis (summary §10) | ⬜ not built |
+| # | Step | State |
+|---|---|---|
+| 1 | Customer brief + test data staged (`workspace/contention/`) | ✅ done |
+| 1b | Design decisions recorded (`reference/`) | ✅ done |
+| 2 | Video clips → H.264 at spec | ⏳ **run `workspace/contention/test_data/transcode_clips.sh` on the GPU instance** (needs ffmpeg) |
+| 3 | Phase-0 concurrency probe + clock policy | ⬜ not built |
+| 4 | Co-tenancy result schema + per-request timestamps | ⬜ not built |
+| 5 | `colocations:` config schema | ⬜ not built |
+| 6 | `bench coloc` orchestrator | ⬜ not built |
+| 7 | Triton CV tenants | ⬜ not built |
+| 8 | Contention analysis (summary §10, `align_traces.py`) | ⬜ not built |
+
+### Continuing on another machine
+
+Everything needed to resume is committed to the repo — no local state is
+required. On a fresh clone:
+
+1. Read the table above to see where the build stopped.
+2. Read [reference/build-plan.md](reference/build-plan.md) §8 for the full build
+   sequence, and the section covering your step for the design detail.
+3. Read [reference/design-decisions.md](reference/design-decisions.md) **before**
+   writing measurement code — the open-loop rule and sampler ownership are easy
+   to get wrong and invalidate results silently.
+4. Test data is already in `workspace/contention/` (checked in, not ignored).
 
 ## Two rules that are non-negotiable
 
