@@ -37,11 +37,26 @@ Two axes: **how many models are loaded**, and **what kind of model** it is.
 
 One model, one backend, one round at a time. Two model families:
 
-| Family | Input → output | Scenarios | Backends |
+| Family | Input → output | Backends |
+|---|---|---|
+| **VLM** — image+text | screenshot + instruction → schema-valid action sequence | vLLM · SGLang · TRT-LLM · NIM |
+| **VLM** — video+text | short video + question → free-form analysis | vLLM · SGLang · TRT-LLM |
+| **Policy** — NitroGen | game frame → continuous gamepad action | 5 execution engines (see below) |
+
+**Bring your own scenarios.** Each type reads a directory of scenario folders.
+Three image scenarios ship ready to run; for video and policy you supply the
+inputs. Point any run at a different folder with `--scenarios-dir`.
+
+| Type | Default directory | What ships | To add your own |
 |---|---|---|---|
-| **VLM** — image+text | screenshot + instruction → schema-valid action sequence | 3 shipped game scenarios | vLLM · SGLang · TRT-LLM · NIM |
-| **VLM** — video+text | short video + question → free-form analysis | you bring the videos | vLLM · SGLang · TRT-LLM |
-| **Policy** — NitroGen | game frame → continuous gamepad action | built from the NitroGen dataset | 5 execution engines (see below) |
+| image+text | `tests/smoke/scenarios/` | 3 game scenarios, runnable as-is | Copy a folder as a template: `screen.png` + `request.json` (instruction, context history, deadline) + `expected.json` (gold action sequence) |
+| video+text | `tests/smoke/scenarios_video/` | 3 folders with placeholder `request.json` / `expected.json` | Drop your `.mp4` in, then fill in `prompt` and the `key_phrases` you expect in a correct answer |
+| policy | `tests/smoke/scenarios_nitrogen/` | nothing — generated on demand | `bench scenarios build --source nitrogen --n 3` pulls frames + gold gamepad actions from the NitroGen dataset |
+
+Format and Pydantic models: [docs/scenarios.md](docs/scenarios.md) and
+[tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md). Registering
+a custom dataset source as an entry-point is covered in
+[docs/scenarios.md](docs/scenarios.md).
 
 ### Multiple models concurrently (planned)
 
