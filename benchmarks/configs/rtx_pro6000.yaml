@@ -240,6 +240,165 @@ models:
     backend_args:
       nitrogen: ["--precision=nvfp4", "--steps=16"]
 
+  # ─── Contention study roster ─────────────────────────────────────────
+  # Customer-selected models for the multi-model co-residency study. The
+  # target is consumer/prosumer hardware, so these are deliberately SMALL
+  # enough that 1 CV + 1 LLM/VLM fit together — this is a co-residency
+  # study, not a best-latest-model study. Do not modernise these without
+  # asking; see skills/gpu-contention-benchmark/reference/model-catalogue.md.
+  #
+  # This GPU (96 GB) carries the full ladder. The 32 GB profile omits
+  # 32b/72b on VRAM grounds — that is scoping, not removal.
+
+  qwen2.5-7b:
+    hf_id: "Qwen/Qwen2.5-7B-Instruct"
+    family: "qwen2.5"
+    quantization: "bf16"
+    role: "contention-llm-small"
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  qwen2.5-14b:
+    hf_id: "Qwen/Qwen2.5-14B-Instruct"
+    family: "qwen2.5"
+    quantization: "bf16"
+    role: "contention-llm-size-scaling"
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  # NOTE: the customer's config lists `qwen2.5-27b`. That checkpoint does not
+  # exist — the Qwen2.5 ladder is 0.5/1.5/3/7/14/32/72B. Corrected to 32B.
+  qwen2.5-32b:
+    hf_id: "Qwen/Qwen2.5-32B-Instruct"
+    family: "qwen2.5"
+    quantization: "bf16"
+    role: "contention-llm-size-scaling"
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  qwen2.5-72b:
+    hf_id: "Qwen/Qwen2.5-72B-Instruct-AWQ"
+    family: "qwen2.5"
+    quantization: "awq"
+    role: "contention-memory-pressure-anchor"
+    notes: "AWQ ~45 GB. BF16 (145 GB) needs >=2 GPUs. Anchors the VRAM-pressure curve."
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  gemma2-9b:
+    hf_id: "google/gemma-2-9b-it"
+    family: "gemma2"
+    quantization: "bf16"
+    role: "contention-llm-cross-arch"
+    notes: "Gated repo — needs `hf auth login` with licence accepted."
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  llama3.1-8b:
+    hf_id: "meta-llama/Llama-3.1-8B-Instruct"
+    family: "llama3"
+    quantization: "bf16"
+    role: "contention-llm-cross-arch"
+    notes: "Gated repo. Validates that contention behaviour generalises beyond Qwen."
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  mistral-7b:
+    hf_id: "mistralai/Mistral-7B-Instruct-v0.3"
+    family: "mistral"
+    quantization: "bf16"
+    role: "contention-llm-cross-arch"
+    backend_args:
+      vllm: ["--max-model-len=8192"]
+      sglang: ["--context-length=8192"]
+  qwen2.5-vl-7b:
+    hf_id: "Qwen/Qwen2.5-VL-7B-Instruct-AWQ"
+    family: "qwen2.5-vl"
+    quantization: "awq"
+    role: "contention-vlm-video"
+    notes: "Official AWQ. Native video input — carries the VLM prefill-burst dimension."
+    backend_args:
+      vllm: ["--max-model-len=16384"]
+      sglang: ["--context-length=16384"]
+
+  # Customer pick that cannot serve the dimension it was chosen for. Kept —
+  # it loads and serves IMAGE workloads fine — but video rounds skip with a
+  # reason instead of crashing mid-sweep. paligemma2 is 28B (not 32B), is a
+  # `-pt-` base checkpoint, and vLLM's paligemma.py raises
+  # ValueError("Only image modality is supported").
+  gemma-vlm-32b:
+    hf_id: "google/paligemma2-28b-pt-896"
+    family: "paligemma2"
+    quantization: "bf16"
+    role: "contention-ilm"
+    notes: "Customer-selected. Image-only; see unsupported_workloads. Gated repo."
+    unsupported_backends:
+      sglang: "no PaliGemma implementation in SGLang"
+    unsupported_workloads:
+      vlm_video_short: "paligemma2 is image-only — vLLM raises 'Only image modality is supported'; use a video VLM (qwen2.5-vl-7b)"
+      vlm_video_long: "paligemma2 is image-only — vLLM raises 'Only image modality is supported'; use a video VLM (qwen2.5-vl-7b)"
+
+  # ─── CV models (Triton tenants) ──────────────────────────────────────
+  # Served from Triton, never from vLLM/SGLang/TRT-LLM — they are not
+  # language models. `unsupported_backends` states that once per model so a
+  # mis-specified tenant fails with a reason rather than at server launch.
+  yolov8-n:
+    hf_id: "ultralytics/yolov8n"
+    family: "cv-detect"
+    quantization: "fp16"
+    role: "contention-cv-launch-bound"
+    notes: "Many short kernels — the scheduler/launch-pressure aggressor."
+    unsupported_backends: &cv_only
+      vllm: "CV model — not a language model; served via Triton"
+      sglang: "CV model — not a language model; served via Triton"
+      trtllm: "CV model — not a language model; served via Triton"
+  yolov8-l:
+    hf_id: "ultralytics/yolov8l"
+    family: "cv-detect"
+    quantization: "fp16"
+    role: "contention-cv-launch-bound"
+    unsupported_backends: *cv_only
+  dinov2-base:
+    hf_id: "facebook/dinov2-base"
+    family: "cv-embed"
+    quantization: "fp16"
+    role: "contention-cv-bandwidth-bound"
+    notes: "Large GEMMs + attention — the bandwidth aggressor. Fixed 224px patch grid."
+    unsupported_backends: *cv_only
+  dinov2-large:
+    hf_id: "facebook/dinov2-large"
+    family: "cv-embed"
+    quantization: "fp16"
+    role: "contention-cv-bandwidth-bound"
+    unsupported_backends: *cv_only
+  rfdetr-medium:
+    hf_id: "roboflow/rf-detr-medium"
+    family: "cv-detect"
+    quantization: "fp16"
+    role: "contention-cv-detect"
+    notes: "RFDETRBase was deprecated 2025-07-23; Medium is the comparable successor."
+    unsupported_backends: *cv_only
+  paddleocr:
+    hf_id: "PaddlePaddle/PP-OCRv5"
+    family: "cv-ocr"
+    quantization: "fp16"
+    role: "contention-cv-ocr"
+    notes: >-
+      Triton PYTHON backend only. PaddleOCR's TensorRT path pins TensorRT
+      8.6.1.6 + CUDA 11.8, which cannot coexist with the Triton 26.07 stack
+      (CUDA 13.3 / TRT 11) — so it runs unoptimised rather than not at all.
+    unsupported_backends: *cv_only
+  kosmos-2.5:
+    hf_id: "microsoft/kosmos-2.5"
+    family: "ilm"
+    quantization: "bf16"
+    role: "contention-ilm"
+    notes: >-
+      Triton PYTHON backend. Absent from vLLM's model registry and there is no
+      kosmos*.py in either the vLLM or SGLang tree — the "vLLM supported" note
+      on its HF page is the generic deploy widget, not real support.
+    unsupported_backends: *cv_only
+
 # Headline model for ad-hoc single runs. Sweeps below override this per round.
 default_model: qwen3-vl-32b-fp8
 
@@ -278,6 +437,34 @@ backends:
     # Per-request context caps live on each model's backend_args block
     # (SGLang flag: `--context-length`). Same reasoning as vllm.
     extra_args: []
+    variants: {}
+
+  # Triton Inference Server — CV tenants only (contention study).
+  #
+  # Why Triton here and native servers for LLM/VLM: Triton has no SGLang or
+  # llama.cpp backend, and an LLM served by vLLM is already its own process,
+  # so an all-Triton topology can't hold the stack anyway. CV models are
+  # where Triton genuinely earns its place — clean ONNX/TensorRT export,
+  # dynamic batching, and per-request server-side timing decomposition
+  # (queue / compute-input / compute-infer / compute-output) which is
+  # exactly the attribution a contention study needs.
+  #
+  # Ports avoid vLLM's 8000. Triton's gRPC listener is port+1 (8101) and
+  # metrics port+2 (8102); perf_analyzer talks gRPC by default.
+  #
+  # ⚠ Launch with --allow-client-shm=true. Client shared memory has been
+  # DISABLED by default since Triton 26.04, and without it large CV input
+  # tensors carry serialization overhead that reads as a model regression.
+  #
+  # `variants` selects the execution backend per round — see
+  # `triton_backend:` on a colocation tenant (tensorrt | onnx | python).
+  triton:
+    transport: triton
+    family: triton
+    base_url: "http://localhost:8100"
+    port: 8100
+    extra_args:
+      - "--allow-client-shm=true"
     variants: {}
 
   # NitroGen execution-engine backends. One ZMQ runtime (serve_nitrogen.py) per
@@ -456,6 +643,197 @@ sweeps:
       - {model: qwen3.6-27b-fp8}        # trtllm dropped via unsupported_backends
       - {model: gemma-4-31b-it-fp8}     # trtllm dropped via unsupported_backends (until bump)
       - {model: nemotron-omni-fp8}      # sglang+trtllm dropped via unsupported_backends
+
+# ─── Workloads (contention study) ──────────────────────────────────────
+# What each tenant sends. Adopted verbatim from the customer's
+# experiment_config.json `prompts` + `prompt_to_data_mapping`, so the
+# request shapes are theirs, not invented here.
+#
+# A tenant references one of these by name; the orchestrator hands the
+# files to whichever driver that tenant uses (aiperf `--input-file`, or
+# perf_analyzer `--input-data`).
+workloads:
+  # Text-only. Output length is a study dimension: 32 vs 512 tokens.
+  llm_short:
+    prompts: ["workspace/contention/prompts/llm_short.jsonl"]   # 3 prompts, ~50 tok
+    output_tokens: 32
+  llm_long:
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~1000 tok
+    output_tokens: 512
+
+  # Video. Frame count IS the VLM input-size dimension — the 40-frame clip
+  # is the sustained prefill burst other tenants are measured against.
+  vlm_video_short:
+    prompts: ["workspace/contention/prompts/vlm_video.jsonl"]
+    data: ["workspace/contention/test_data/vlm/clip_3s_224.mp4"]    # 224², 1 fps, 3 frames
+    output_tokens: 128
+  vlm_video_long:
+    prompts: ["workspace/contention/prompts/vlm_video.jsonl"]
+    data: ["workspace/contention/test_data/vlm/clip_10s_720p.mp4"]  # 720p, 4 fps, 40 frames
+    output_tokens: 128
+
+  # Document understanding (image-LM tenant).
+  ilm_document:
+    prompts: ["workspace/contention/prompts/ilm_document.jsonl"]
+    data: ["workspace/contention/test_data/cv/sample_document.png"]
+    output_tokens: 256
+
+  # CV. 640² is YOLO-native and is the default where input size isn't swept;
+  # 320²/1280² are the two ends of the CV input-size dimension.
+  cv_detect_default:
+    data: ["workspace/contention/test_data/cv/sample_640x640.jpg"]
+  cv_detect_small:
+    data: ["workspace/contention/test_data/cv/sample_320x320.jpg"]
+  cv_detect_large:
+    data: ["workspace/contention/test_data/cv/sample_1280x1280.jpg"]
+  # DINOv2 is pinned to 224² — its patch grid is fixed, so sweeping input
+  # size there would change the model's token count rather than its pixel
+  # load, which is a different experiment.
+  cv_embed:
+    data: ["workspace/contention/test_data/cv/sample_224x224.jpg"]
+  cv_ocr:
+    data: ["workspace/contention/test_data/cv/sample_document.png"]
+
+# ─── Colocations (contention study) ────────────────────────────────────
+# A colocation is one timed window with N tenants sharing this GPU.
+# `--emit-colocations <name>` expands it; solo baselines come first.
+#
+# LOAD IS OPEN-LOOP (`rps`), never concurrency. A closed-loop client
+# throttles itself in proportion to the slowdown being measured, so the
+# degradation ratio would describe the harness rather than the GPU. Where
+# `achieved_rps` falls below `rps`, that crossing IS the safe-operating
+# envelope. See the design-decisions reference in the skill.
+#
+# Composition: `extends` inherits a base (tenants merge by name),
+# `rps_sweep` expands one tenant's rate, `vary` expands any tenant field.
+# Phases match workspace/contention/experiment_design.md.
+colocations:
+
+  # ── Phase 3 — model type mix ───────────────────────────────────────
+  mix-llm-cv:
+    phase: 3
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    tenants:
+      - name: llm
+        backend: vllm
+        model: qwen2.5-7b
+        workload: llm_short
+        # Explicit cap. vLLM defaults to 0.90 and would take the whole card,
+        # leaving the CV tenant to OOM at startup.
+        gpu_memory_utilization: 0.45
+        load: {pattern: poisson, rps: 4}
+      - name: cv
+        backend: triton
+        model: yolov8-l
+        triton_backend: tensorrt
+        workload: cv_detect_default
+        load: {pattern: poisson, rps: 50}
+
+  mix-vlm-cv:
+    phase: 3
+    extends: mix-llm-cv
+    tenants:
+      - name: llm
+        model: qwen2.5-vl-7b
+        workload: vlm_video_long     # 40-frame encode = the prefill burst
+        gpu_memory_utilization: 0.50
+        load: {pattern: poisson, rps: 1}
+      - name: cv
+        model: dinov2-base           # bandwidth-bound neighbour
+        workload: cv_embed
+
+  mix-ilm-cv:
+    phase: 3
+    extends: mix-llm-cv
+    tenants:
+      - name: llm
+        backend: triton              # kosmos-2.5 has no vLLM/SGLang support
+        model: kosmos-2.5
+        triton_backend: python
+        workload: ilm_document
+        load: {pattern: poisson, rps: 2}
+
+  # ── Phase 4 — cross-type contention: sweep the neighbour's load ────
+  # The knee in the subject's latency against CV rate is the disruption
+  # threshold; where achieved_rps < offered_rps is the envelope boundary.
+  cross-llm-vs-cv:
+    phase: 4
+    extends: mix-llm-cv
+    rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}
+
+  cross-vlm-prefill-vs-llm:
+    phase: 4
+    duration_s: 180
+    isolation: mps
+    solo_baselines: auto
+    tenants:
+      - name: vlm
+        backend: vllm
+        model: qwen2.5-vl-7b
+        workload: vlm_video_long
+        gpu_memory_utilization: 0.45
+        load: {pattern: poisson, rps: 1}
+      - name: llm
+        backend: vllm
+        model: gemma2-9b
+        workload: llm_short
+        gpu_memory_utilization: 0.35
+        load: {pattern: poisson, rps: 4}
+
+  # Same architecture, four sizes — is contention vulnerability a function
+  # of model size? (Consumer tier keeps 7b/14b; 32b/72b need this GPU.)
+  cross-size-scaling:
+    phase: 4
+    extends: mix-llm-cv
+    vary:
+      tenant: llm
+      field: model
+      values: [qwen2.5-7b, qwen2.5-14b, qwen2.5-32b, qwen2.5-72b]
+
+  # Does contention behaviour generalise beyond Qwen? If all three agree
+  # within ~20%, the size-scaling conclusions carry.
+  cross-arch-validation:
+    phase: 4
+    extends: mix-llm-cv
+    vary:
+      tenant: llm
+      field: model
+      values: [qwen2.5-7b, llama3.1-8b, mistral-7b]
+
+  # ── Phase 6 — secondary dimensions ─────────────────────────────────
+  secondary-backend-llm:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: llm, field: backend, values: [vllm, sglang]}
+
+  secondary-backend-cv:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+
+  secondary-output-length:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: llm, field: workload, values: [llm_short, llm_long]}
+
+  secondary-input-size-cv:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: cv, field: workload, values: [cv_detect_small, cv_detect_large]}
+
+  # Noisy-neighbour fairness: does the heavy user starve the light one?
+  # 1:1 / 4:1 / 16:1 against a fixed LLM rate of 4 rps.
+  secondary-asymmetry:
+    phase: 6
+    extends: mix-llm-cv
+    rps_sweep: {tenant: cv, values: [4, 16, 64]}
+
+  secondary-arrival:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: cv, field: load, values: [{pattern: poisson, rps: 50}, {pattern: constant, rps: 50}]}
 
 # ─── Aux ───────────────────────────────────────────────────────────────
 # Placeholder blocks for tools wired up later. Not read by the runner today.

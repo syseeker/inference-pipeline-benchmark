@@ -36,8 +36,8 @@ read it first, update it as you complete a step, and commit the change.
 | 1b | Design decisions recorded (`reference/`) | ✅ done |
 | 2 | Video clips → H.264 at spec | ⏳ **run `workspace/contention/test_data/transcode_clips.sh` on the GPU instance** (needs ffmpeg) |
 | 3 | Phase-0 concurrency probe + clock policy | ⬜ not built |
-| 4 | Co-tenancy result schema + per-request timestamps | ⬜ not built |
-| 5 | `colocations:` config schema | ⬜ not built |
+| 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
+| 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
 | 6 | `bench coloc` orchestrator | ⬜ not built |
 | 7 | Triton CV tenants | ⬜ not built |
 | 8 | Contention analysis (summary §10, `align_traces.py`) | ⬜ not built |

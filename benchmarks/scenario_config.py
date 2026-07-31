@@ -249,6 +249,282 @@ def iter_sweep(cfg: dict[str, Any], sweep_name: str) -> Iterator[Round]:
             yield r
 
 
+# ─── Colocations (multi-model contention) ─────────────────────────────
+#
+# A `Colocation` is a set of tenants that share the GPU for one timed
+# window. It reuses `resolve_round()` per tenant, so backend_args fan-out
+# via `family:` and `unsupported_backends` gating work exactly as they do
+# for single-model sweeps.
+#
+# See skills/gpu-contention-benchmark/reference/design-decisions.md.
+
+
+# Which load generator drives which backend. This is not a preference:
+# AIPerf dropped GenAI-Perf's `kserve`/`dynamic_grpc` endpoint types and
+# CANNOT drive Triton, so a Triton tenant must use perf_analyzer. Encoded
+# here so a yaml typo fails loudly instead of silently producing a run
+# with no load on one tenant.
+_DRIVER_FOR_TRANSPORT = {"http": "aiperf", "zmq": "zmq_client", "triton": "perf_analyzer"}
+
+
+@dataclass
+class LoadSpec:
+    """Offered load for one tenant.
+
+    Open-loop (`rps` set) is the default and the only shape that yields a
+    valid degradation ratio: a closed-loop client throttles itself in
+    proportion to the slowdown being measured, so the ratio would describe
+    the harness rather than the GPU.
+    """
+
+    pattern: str = "poisson"          # poisson | constant | gamma | closed
+    rps: float | None = None
+    output_tokens: int | None = None
+
+    @property
+    def is_open_loop(self) -> bool:
+        return self.pattern != "closed" and self.rps is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class Tenant:
+    """One model in a colocation, plus how it is loaded."""
+
+    name: str                          # role label, e.g. "victim_llm"
+    round: Round                       # resolved launch params
+    driver: str                        # aiperf | perf_analyzer | zmq_client
+    load: LoadSpec
+    workload: str | None = None        # key into the yaml `workloads:` block
+    gpu_memory_utilization: float | None = None
+    triton_backend: str | None = None  # tensorrt | onnx | python
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["round"] = self.round.to_dict()
+        d["load"] = self.load.to_dict()
+        return d
+
+
+@dataclass
+class Colocation:
+    """One timed window: N tenants sharing a GPU, or 1 tenant solo."""
+
+    id: str                            # yaml key, e.g. "mix-llm-cv"
+    tenants: list[Tenant]
+    duration_s: int = 120
+    isolation: str = "mps"             # none | mps | mig | separate-gpu
+    phase: int | None = None
+    is_solo: bool = False
+
+    @property
+    def run_label(self) -> str:
+        """Pairs a contention row with its baseline in summary.py, which
+        keys cross-run deltas off `run_label`."""
+        return "solo" if self.is_solo else f"coloc:{self.id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "phase": self.phase,
+            "duration_s": self.duration_s,
+            "isolation": self.isolation,
+            "is_solo": self.is_solo,
+            "run_label": self.run_label,
+            "n_tenants": len(self.tenants),
+            "tenants": [t.to_dict() for t in self.tenants],
+        }
+
+
+def _merge_extends(colos: dict[str, Any], name: str, _seen: set[str] | None = None) -> dict[str, Any]:
+    """Resolve `extends:` into a flat spec. Child keys win; `tenants` are
+    merged by tenant `name` so a child can override one field of one tenant
+    without restating the whole roster."""
+    _seen = _seen or set()
+    if name in _seen:
+        raise ValueError(f"circular extends: {' -> '.join([*_seen, name])}")
+    if name not in colos:
+        raise ValueError(f"unknown colocation {name!r}; defined: {sorted(colos)}")
+
+    spec = dict(colos[name] or {})
+    parent_name = spec.pop("extends", None)
+    if not parent_name:
+        return spec
+
+    parent = _merge_extends(colos, str(parent_name), _seen | {name})
+    merged = {**parent, **spec}
+
+    parent_tenants = {t["name"]: dict(t) for t in (parent.get("tenants") or [])}
+    for child in spec.get("tenants") or []:
+        nm = child["name"]
+        parent_tenants[nm] = {**parent_tenants.get(nm, {}), **child}
+    if parent_tenants:
+        merged["tenants"] = list(parent_tenants.values())
+    return merged
+
+
+def _resolve_tenant(cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[str, Any]) -> Tenant:
+    backend = tspec["backend"]
+    model_id = tspec.get("model")
+    r = resolve_round(cfg, backend=backend, model_id=model_id, variant=tspec.get("variant"))
+
+    wl_name = tspec.get("workload")
+    wl = (workloads.get(wl_name) or {}) if wl_name else {}
+    if wl_name and wl_name not in workloads:
+        raise ValueError(f"unknown workload {wl_name!r}; defined: {sorted(workloads)}")
+
+    # A model can be incompatible with a workload rather than a backend —
+    # e.g. an image-only VLM asked to serve a video workload. Same
+    # fail-safely contract as unsupported_backends: raise with the reason
+    # so the caller skips the row instead of crashing mid-run.
+    models = cfg.get("models") or {}
+    unsupported_wl = (models.get(r.model_id, {}).get("unsupported_workloads") or {})
+    if wl_name and wl_name in unsupported_wl:
+        raise ValueError(
+            f"model {r.model_id!r} does not support workload {wl_name!r}: "
+            f"{unsupported_wl[wl_name]}"
+        )
+
+    load_spec = dict(tspec.get("load") or {})
+    load = LoadSpec(
+        pattern=str(load_spec.get("pattern", "poisson")),
+        rps=float(load_spec["rps"]) if load_spec.get("rps") is not None else None,
+        # Output length lives on the workload, not the load spec — it is a
+        # property of what we're asking for, not how fast we ask.
+        output_tokens=(
+            int(load_spec["output_tokens"]) if load_spec.get("output_tokens") is not None
+            else (int(wl["output_tokens"]) if wl.get("output_tokens") is not None else None)
+        ),
+    )
+
+    transport = "triton" if backend == "triton" or r.transport == "triton" else r.transport
+    default_driver = _DRIVER_FOR_TRANSPORT.get(transport, "aiperf")
+    driver = str(tspec.get("driver") or default_driver)
+    if transport == "triton" and driver == "aiperf":
+        raise ValueError(
+            f"tenant {tspec['name']!r}: aiperf cannot drive Triton (no kserve / "
+            "dynamic_grpc endpoint type). Use driver: perf_analyzer."
+        )
+
+    return Tenant(
+        name=str(tspec["name"]),
+        round=r,
+        driver=driver,
+        load=load,
+        workload=wl_name,
+        gpu_memory_utilization=(
+            float(tspec["gpu_memory_utilization"])
+            if tspec.get("gpu_memory_utilization") is not None else None
+        ),
+        triton_backend=tspec.get("triton_backend"),
+    )
+
+
+def _solo_key(t: Tenant) -> tuple:
+    """Identity of a solo baseline. A baseline is only valid for a
+    contention run at the SAME offered load, so load is part of the key —
+    but two contention runs sharing a tenant config share one baseline,
+    which is why we dedupe rather than re-running it per colocation."""
+    return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+
+
+def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
+    """Yield every run for a named colocation: solo baselines first, then the
+    co-resident window(s).
+
+    Expansion rules, applied in order:
+      extends    — inherit a base colocation, merging tenants by name
+      rps_sweep  — one colocation per rate for the named tenant
+      vary       — one colocation per value of a named tenant field
+
+    Baselines come first so that a partial run still produces the reference
+    numbers the ratios need; a contention row without its baseline is
+    uninterpretable.
+
+    Baselines are deduped WITHIN a colocation but not across them — the same
+    (backend, model, workload, load) recurs in several. That is deliberate:
+    each colocation is independently runnable. The orchestrator is expected
+    to cache by `_solo_key` across a session so a full study doesn't re-run
+    identical baselines (~40 of the 69 emitted runs are baselines, most of
+    them repeats).
+    """
+    colos = cfg.get("colocations") or {}
+    spec = _merge_extends(colos, name)
+    workloads = cfg.get("workloads") or {}
+
+    base_tenants = spec.get("tenants") or []
+    if len(base_tenants) < 1:
+        raise ValueError(f"colocation {name!r} has no tenants")
+
+    # Build the variant list of tenant-spec rosters.
+    rosters: list[list[dict[str, Any]]] = [[dict(t) for t in base_tenants]]
+
+    sweep = spec.get("rps_sweep")
+    if sweep:
+        target, values = str(sweep["tenant"]), list(sweep["values"])
+        expanded = []
+        for v in values:
+            roster = [dict(t) for t in base_tenants]
+            for t in roster:
+                if t["name"] == target:
+                    t["load"] = {**(t.get("load") or {}), "rps": v}
+            expanded.append(roster)
+        rosters = expanded
+
+    vary = spec.get("vary")
+    if vary:
+        target, fld, values = str(vary["tenant"]), str(vary["field"]), list(vary["values"])
+        expanded = []
+        for roster in rosters:
+            for v in values:
+                new = [dict(t) for t in roster]
+                for t in new:
+                    if t["name"] == target:
+                        t[fld] = v
+                expanded.append(new)
+        rosters = expanded
+
+    duration_s = int(spec.get("duration_s", 120))
+    isolation = str(spec.get("isolation", "mps"))
+    phase = int(spec["phase"]) if spec.get("phase") is not None else None
+    want_solo = str(spec.get("solo_baselines", "auto")) == "auto"
+
+    seen_solo: set[tuple] = set()
+    pending: list[Colocation] = []
+
+    for roster in rosters:
+        try:
+            tenants = [_resolve_tenant(cfg, t, workloads) for t in roster]
+        except ValueError as e:
+            # Skip the whole window: a 2-tenant contention test cannot run
+            # with one tenant missing, and a silently-degraded roster would
+            # produce a ratio against the wrong baseline.
+            print(f">> colocation skip {name}: {e}", file=sys.stderr)
+            continue
+
+        if want_solo:
+            for t in tenants:
+                k = _solo_key(t)
+                if k in seen_solo:
+                    continue
+                seen_solo.add(k)
+                yield Colocation(
+                    id=name, tenants=[t], duration_s=duration_s,
+                    isolation=isolation, phase=phase, is_solo=True,
+                )
+
+        pending.append(
+            Colocation(
+                id=name, tenants=tenants, duration_s=duration_s,
+                isolation=isolation, phase=phase, is_solo=False,
+            )
+        )
+
+    yield from pending
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -285,6 +561,18 @@ def main(
     emit_rounds: str = typer.Option(
         None, "--emit-rounds",
         help="Print newline-delimited JSON rounds for the named sweep. Passed value is the sweep name.",
+    ),
+    emit_colocations: str = typer.Option(
+        None, "--emit-colocations",
+        help=(
+            "Print newline-delimited JSON colocations for the named entry in "
+            "`colocations:`. Solo baselines are emitted first, then the "
+            "co-resident window(s). Expands extends / rps_sweep / vary."
+        ),
+    ),
+    list_colocations: bool = typer.Option(
+        False, "--list-colocations",
+        help="List defined colocations with their phase number.",
     ),
     has_sweep: str = typer.Option(
         None, "--has-sweep",
@@ -343,6 +631,22 @@ def main(
         except ValueError as e:
             typer.echo(str(e), err=True)
             raise typer.Exit(2)
+        return
+
+    # Colocation iteration ─────────────────────────────────────────
+    if emit_colocations is not None:
+        try:
+            for c in iter_colocation(cfg, emit_colocations):
+                typer.echo(json.dumps(c.to_dict()))
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(2)
+        return
+
+    if list_colocations:
+        for nm, spec in sorted((cfg.get("colocations") or {}).items()):
+            phase = (spec or {}).get("phase")
+            typer.echo(f"{nm}\tphase={phase if phase is not None else '-'}")
         return
 
     # Single-field resolution ──────────────────────────────────────
