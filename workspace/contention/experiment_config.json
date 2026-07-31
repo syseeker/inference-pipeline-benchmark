@@ -1,0 +1,922 @@
+{
+    "metadata": {
+        "experiment": "heterogeneous-gpu-contention",
+        "version": "2.0",
+        "description": "Systematic contention benchmarking across text generation, vision-language, and computer vision models",
+        "hardware_target": "NVIDIA RTX PRO 6000 Blackwell (98 GB VRAM)"
+    },
+
+    "fixed_methodology": {
+        "warmup_rounds": 3,
+        "measurement_rounds": 10,
+        "gpu_sampling_interval_ms": 100,
+        "temperature": 0.7,
+        "timeout_per_request_s": 120,
+        "inter_round_delay_s": 0,
+        "statistical_rationale": "GPU inference on dedicated hardware is near-deterministic (<5% run-to-run variance). Contention effects are large (2-10x degradation), not subtle — clearly visible from a single run with 10 rounds. Standard statistical robustness concerns (confidence intervals, large sample sizes) do not apply to most scenarios in a controlled lab benchmark with fixed inputs and no production traffic confounders.",
+        "repetitions": {
+            "default": 1,
+            "critical_scenarios": 3,
+            "critical_scenarios_list": [
+                "cross-memory-pressure-*"
+            ],
+            "rationale": "Memory-pressure scenarios near OOM are the ONE exception to low variance. KV cache eviction triggers non-deterministically (depends on exact allocation order at runtime), producing bimodal behavior — the model either fits comfortably or thrashes. This creates genuine run-to-run variance that single runs cannot capture. 3 repetitions reveal whether a result is stable or bimodal, and provide mean ± std for reporting."
+        },
+        "metrics_reporting": {
+            "latency_percentiles": ["P50", "P95", "max"],
+            "note": "With 10 measurement rounds × 2-3 prompts = 20-30 samples per run. P50 is the primary metric. P95 = 2nd-worst sample (indicative but noisy for tail). Max captures worst-case spikes. P99 not reported (insufficient samples)."
+        },
+        "model_load_measurement": {
+            "enabled": true,
+            "captures": ["time_to_first_ready_s", "vram_after_load_gb"],
+            "rationale": "Cold start penalty is invisible to inference metrics but critical for deployment decisions"
+        }
+    },
+
+    "models": {
+        "text_generation": {
+            "qwen2.5-7b": {
+                "name": "Qwen 2.5 7B",
+                "params": "7B",
+                "hf_id": "Qwen/Qwen2.5-7B-Instruct",
+                "vram_q4_gb": 4.5,
+                "vram_fp16_gb": 14,
+                "backends": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                "default_backend": "vllm"
+            },
+            "qwen2.5-14b": {
+                "name": "Qwen 2.5 14B",
+                "params": "14B",
+                "hf_id": "Qwen/Qwen2.5-14B-Instruct",
+                "vram_q4_gb": 8.5,
+                "vram_fp16_gb": 28,
+                "backends": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                "default_backend": "vllm"
+            },
+            "qwen2.5-27b": {
+                "name": "Qwen 2.5 27B",
+                "params": "27B",
+                "hf_id": "Qwen/Qwen2.5-27B-Instruct",
+                "vram_q4_gb": 16,
+                "vram_fp16_gb": 54,
+                "backends": ["vllm", "trt-llm", "sglang"],
+                "default_backend": "vllm"
+            },
+            "llama3.1-8b": {
+                "name": "Llama 3.1 8B",
+                "params": "8B",
+                "hf_id": "meta-llama/Llama-3.1-8B-Instruct",
+                "vram_q4_gb": 5,
+                "vram_fp16_gb": 16,
+                "backends": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                "default_backend": "vllm",
+                "role": "cross-architecture validation at ~7-9B size class"
+            },
+            "mistral-7b": {
+                "name": "Mistral 7B v0.3",
+                "params": "7B",
+                "hf_id": "mistralai/Mistral-7B-Instruct-v0.3",
+                "vram_q4_gb": 4.5,
+                "vram_fp16_gb": 14,
+                "backends": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                "default_backend": "vllm",
+                "role": "cross-architecture validation at ~7-9B size class"
+            },
+            "gemma2-9b": {
+                "name": "Gemma 2 9B",
+                "params": "9B",
+                "hf_id": "google/gemma-2-9b-it",
+                "vram_q4_gb": 5.5,
+                "vram_fp16_gb": 18,
+                "backends": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                "default_backend": "vllm"
+            },
+            "qwen2.5-72b": {
+                "name": "Qwen 2.5 72B",
+                "params": "72B",
+                "hf_id": "Qwen/Qwen2.5-72B-Instruct",
+                "vram_q4_gb": 42,
+                "vram_fp16_gb": 145,
+                "backends": ["vllm", "trt-llm", "sglang"],
+                "default_backend": "vllm",
+                "notes": "Requires Q4 on single 98GB GPU. FP16 requires multi-GPU."
+            }
+        },
+        "vision_language": {
+            "gemma-vlm-32b": {
+                "name": "Gemma 32B VLM",
+                "params": "32B",
+                "hf_id": "google/paligemma2-28b-pt-896",
+                "vram_fp16_gb": 64,
+                "backends": ["vllm", "trt-llm"],
+                "default_backend": "vllm",
+                "input_modality": ["video", "text"]
+            },
+            "qwen2.5-vl-7b": {
+                "name": "Qwen 2.5 VL 7B",
+                "params": "7B",
+                "hf_id": "Qwen/Qwen2.5-VL-7B-Instruct",
+                "vram_fp16_gb": 16,
+                "backends": ["vllm", "sglang"],
+                "default_backend": "vllm",
+                "input_modality": ["video", "image", "text"]
+            },
+            "qwen2.5-vl-72b": {
+                "name": "Qwen 2.5 VL 72B",
+                "params": "72B",
+                "hf_id": "Qwen/Qwen2.5-VL-72B-Instruct",
+                "vram_fp16_gb": 145,
+                "vram_q4_gb": 42,
+                "backends": ["vllm", "sglang"],
+                "default_backend": "vllm",
+                "input_modality": ["video", "image", "text"],
+                "notes": "Requires multi-GPU or Q4 quantization to fit on single 98GB GPU"
+            }
+        },
+        "image_language": {
+            "kosmos-2.5": {
+                "name": "Kosmos-2.5",
+                "params": "1.3B",
+                "hf_id": "microsoft/kosmos-2.5",
+                "vram_fp16_gb": 3,
+                "backends": ["vllm", "sglang"],
+                "default_backend": "vllm",
+                "input_modality": ["image", "text"]
+            },
+            "qwen2.5-vl-7b": {
+                "name": "Qwen 2.5 VL 7B",
+                "params": "7B",
+                "hf_id": "Qwen/Qwen2.5-VL-7B-Instruct",
+                "vram_fp16_gb": 16,
+                "backends": ["vllm", "sglang"],
+                "default_backend": "vllm",
+                "input_modality": ["video", "image", "text"]
+            },
+            "qwen2.5-vl-72b": {
+                "name": "Qwen 2.5 VL 72B",
+                "params": "72B",
+                "hf_id": "Qwen/Qwen2.5-VL-72B-Instruct",
+                "vram_fp16_gb": 145,
+                "vram_q4_gb": 42,
+                "backends": ["vllm", "sglang"],
+                "default_backend": "vllm",
+                "input_modality": ["video", "image", "text"],
+                "notes": "Requires multi-GPU or Q4 quantization to fit on single 98GB GPU"
+            }
+        },
+        "computer_vision": {
+            "paddleocr": {
+                "name": "PaddleOCR v4",
+                "params": "12M",
+                "source": "paddleocr",
+                "vram_gb": 0.2,
+                "backends": ["pytorch", "onnx"],
+                "default_backend": "pytorch",
+                "default_batch_size": 8,
+                "input_type": "image"
+            },
+            "yolov8-n": {
+                "name": "YOLOv8 Nano",
+                "params": "3M",
+                "source": "ultralytics:yolov8n.pt",
+                "vram_gb": 0.05,
+                "backends": ["pytorch", "onnx", "tensorrt"],
+                "default_backend": "pytorch",
+                "default_batch_size": 8,
+                "input_type": "image"
+            },
+            "yolov8-l": {
+                "name": "YOLOv8 Large",
+                "params": "44M",
+                "source": "ultralytics:yolov8l.pt",
+                "vram_gb": 0.3,
+                "backends": ["pytorch", "onnx", "tensorrt"],
+                "default_backend": "pytorch",
+                "default_batch_size": 8,
+                "input_type": "image"
+            },
+            "rfdetr-base": {
+                "name": "RF-DETR Base",
+                "params": "40M",
+                "source": "roboflow:rf-detr-base",
+                "vram_gb": 0.4,
+                "backends": ["pytorch", "onnx", "tensorrt"],
+                "default_backend": "pytorch",
+                "default_batch_size": 4,
+                "input_type": "image"
+            },
+            "dinov2-base": {
+                "name": "DINOv2 ViT-B/14",
+                "params": "86M",
+                "hf_id": "facebook/dinov2-base",
+                "vram_gb": 0.35,
+                "backends": ["pytorch", "onnx", "tensorrt"],
+                "default_backend": "pytorch",
+                "default_batch_size": 16,
+                "input_type": "image"
+            },
+            "dinov2-large": {
+                "name": "DINOv2 ViT-L/14",
+                "params": "300M",
+                "hf_id": "facebook/dinov2-large",
+                "vram_gb": 1.2,
+                "backends": ["pytorch", "onnx", "tensorrt"],
+                "default_backend": "pytorch",
+                "default_batch_size": 16,
+                "input_type": "image"
+            }
+        }
+    },
+
+    "dimensions": {
+        "concurrency_llm": {
+            "description": "Concurrent in-flight requests per LLM/VLM model",
+            "options": [1, 2, 4, 8, 16],
+            "default": 4
+        },
+        "concurrency_cv_rps": {
+            "description": "Sustained requests per second for CV models",
+            "options": [1, 10, 50, 200],
+            "default": 50
+        },
+        "gpu_count": {
+            "description": "Number of GPUs available",
+            "options": [1, 2, 4],
+            "default": 1
+        },
+        "output_length": {
+            "description": "Max output tokens for LLM/VLM",
+            "options": {
+                "short": 32,
+                "long": 512
+            },
+            "default": "short"
+        },
+        "input_size_llm": {
+            "description": "Input prompt length in tokens for LLM",
+            "options": {
+                "short-input": 50,
+                "long-input": 1000
+            },
+            "default": "short-input"
+        },
+        "input_size_vlm": {
+            "description": "Input video specification for VLM",
+            "options": {
+                "short-clip": {"resolution": [224, 224], "duration_s": 3, "fps": 1, "frames": 3},
+                "long-clip": {"resolution": [1280, 720], "duration_s": 10, "fps": 4, "frames": 40}
+            },
+            "default": "short-clip"
+        },
+        "input_size_cv": {
+            "description": "Input image resolution for CV models",
+            "options": {
+                "cv-small": [320, 320],
+                "cv-large": [1280, 1280]
+            },
+            "default": "cv-small"
+        },
+        "quantization": {
+            "description": "Model quantization for LLM/VLM",
+            "options": ["q4", "fp16"],
+            "default": "q4"
+        },
+        "inference_backend_llm": {
+            "description": "Execution engine for LLM/VLM models — determines GPU kernel pattern and contention signature",
+            "options": {
+                "vllm": {"engine": "vLLM", "kernel_pattern": "many small PagedAttention kernels", "contention": "frequent gaps, neighbors can interleave"},
+                "trt-llm": {"engine": "TensorRT-LLM", "kernel_pattern": "fused large kernels, compiled graph", "contention": "long GPU bursts, starves neighbors"},
+                "sglang": {"engine": "SGLang", "kernel_pattern": "RadixAttention, prefix sharing", "contention": "less total compute, less contention"},
+                "llamacpp": {"engine": "llama.cpp", "kernel_pattern": "layer-by-layer, frequent CPU-GPU sync", "contention": "many sync points, lots of interleaving"}
+            },
+            "default": "vllm"
+        },
+        "inference_backend_cv": {
+            "description": "Execution engine for CV models — determines kernel fusion and scheduling gaps",
+            "options": {
+                "pytorch": {"engine": "PyTorch eager", "kernel_pattern": "many small kernel launches", "contention": "more scheduling gaps for LLM"},
+                "onnx": {"engine": "ONNX Runtime (CUDA)", "kernel_pattern": "some graph optimization", "contention": "moderate interleaving"},
+                "tensorrt": {"engine": "TensorRT", "kernel_pattern": "few large fused kernels", "contention": "long bursts, less interleaving"}
+            },
+            "default": "pytorch"
+        },
+        "serving_platform": {
+            "description": "Fixed serving platform for multi-model concurrent GPU execution",
+            "fixed": "triton",
+            "note": "Triton enables true multi-model concurrent GPU execution via CUDA streams. Not a variable — fixed across all experiments."
+        },
+        "load_asymmetry": {
+            "description": "Load ratio between models (heaviest:lightest)",
+            "options": {
+                "equal": "1:1",
+                "moderate": "4:1",
+                "extreme": "16:1"
+            },
+            "default": "equal"
+        },
+        "arrival_pattern": {
+            "description": "How requests arrive over time",
+            "options": ["burst", "uniform"],
+            "default": "burst"
+        }
+    },
+
+    "prompts": {
+        "llm_short": [
+            "What is CUDA?",
+            "Name three GPU architectures.",
+            "Define tensor parallelism in one sentence."
+        ],
+        "llm_long": [
+            "Explain the complete memory hierarchy of a modern GPU, covering registers, shared memory, L1 cache, L2 cache, and global memory. Describe how data flows between these levels during a typical matrix multiplication kernel. Include the role of memory coalescing and bank conflicts. Discuss how the programmer can optimize memory access patterns to maximize throughput. Cover the differences between compute capability generations in terms of cache sizes and bandwidth. Finally, explain how unified memory and managed memory simplify programming but may impact performance.",
+            "Write a detailed technical specification for a distributed inference system that serves multiple large language models across a GPU cluster. Cover model placement strategies, request routing, load balancing, fault tolerance, autoscaling policies, and latency budgets. Include specific numerical targets for tail latency percentiles and throughput requirements. Describe the monitoring and alerting infrastructure needed to maintain SLOs."
+        ],
+        "vlm_video": [
+            "Describe what happens in this video in detail. Include the people visible, what they are wearing, what device is being used, and any interactions between people.",
+            "Watch this video and answer: How many people are visible? What is the child doing? What is the relationship between the people shown?"
+        ],
+        "ilm_document": [
+            "Read this document image. Extract all text fields and their values into a structured format.",
+            "Identify the document type, list all form fields with their labels and filled values, and note any signatures or handwritten content."
+        ]
+    },
+
+    "test_data": {
+        "cv": {
+            "small": "test_data/cv/sample_320x320.jpg",
+            "medium": "test_data/cv/sample_640x640.jpg",
+            "large": "test_data/cv/sample_1280x1280.jpg",
+            "dino_input": "test_data/cv/sample_224x224.jpg",
+            "document": "test_data/cv/sample_document.png"
+        },
+        "vlm": {
+            "short-clip": "test_data/vlm/clip_3s_224.mp4",
+            "long-clip": "test_data/vlm/clip_10s_720p.mp4"
+        },
+        "source": {
+            "scene": "test_data/source/scene.jpg",
+            "document": "test_data/source/document.png",
+            "video": "test_data/source/test_clip.mp4"
+        },
+        "prompt_to_data_mapping": {
+            "llm_short": null,
+            "llm_long": null,
+            "vlm_video": ["test_data/vlm/clip_3s_224.mp4", "test_data/vlm/clip_10s_720p.mp4"],
+            "ilm_document": ["test_data/cv/sample_document.png"],
+            "yolov8": ["test_data/cv/sample_320x320.jpg", "test_data/cv/sample_640x640.jpg", "test_data/cv/sample_1280x1280.jpg"],
+            "rfdetr": ["test_data/cv/sample_320x320.jpg", "test_data/cv/sample_640x640.jpg", "test_data/cv/sample_1280x1280.jpg"],
+            "dinov2": ["test_data/cv/sample_224x224.jpg"],
+            "paddleocr": ["test_data/cv/sample_document.png"]
+        }
+    },
+
+    "phases": {
+        "phase0_concurrency_validation": {
+            "description": "Validate that Triton achieves true multi-model concurrent GPU execution (not serialization). Must pass before proceeding.",
+            "rationale": "If Triton serializes model backends at the CUDA context level, the entire experiment measures scheduling overhead, not GPU contention. This phase confirms the fundamental assumption.",
+            "experiments": [
+                {
+                    "id": "validate-concurrent-kernels",
+                    "description": "Run LLM + CV simultaneously, monitor GPU SM utilization at ms granularity via DCGM/nsight. If SM shows interleaved kernels from both models in the same time window, concurrency is confirmed.",
+                    "models": ["qwen2.5-7b", "yolov8-l"],
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "monitoring": {
+                        "tool": "dcgmi dmon or nsight systems",
+                        "sample_interval_ms": 1,
+                        "duration_s": 30,
+                        "expected_signal": "overlapping SM activity from both model backends"
+                    },
+                    "pass_criteria": "SM utilization from both models visible in overlapping time windows (not alternating blocks)",
+                    "fail_action": "If serialized: document as finding, pivot experiment to measure time-slicing overhead instead of GPU contention",
+                    "estimated_runs": 1
+                },
+                {
+                    "id": "validate-vlm-cv-concurrent",
+                    "description": "VLM prefill + CV forward pass — confirm both use GPU simultaneously (VLM prefill is the most GPU-intensive operation)",
+                    "models": ["qwen2.5-vl-7b", "rfdetr-base"],
+                    "concurrency_llm": 2,
+                    "concurrency_cv_rps": 50,
+                    "input_size_vlm": "short-clip",
+                    "monitoring": {
+                        "tool": "dcgmi dmon or nsight systems",
+                        "sample_interval_ms": 1,
+                        "duration_s": 30
+                    },
+                    "pass_criteria": "VLM prefill kernels and CV inference kernels overlap in timeline",
+                    "estimated_runs": 1
+                },
+                {
+                    "id": "validate-standalone-vs-triton",
+                    "description": "Compare single-model throughput: standalone vLLM vs vLLM-inside-Triton. Confirms Triton wrapper doesn't add overhead that confounds contention measurement.",
+                    "models": ["qwen2.5-7b"],
+                    "concurrency_llm": 4,
+                    "compare": ["standalone-vllm", "triton-vllm-backend"],
+                    "pass_criteria": "Throughput difference < 5% (Triton wrapper overhead negligible)",
+                    "estimated_runs": 1
+                }
+            ],
+            "total_estimated_runs": 3
+        },
+
+        "phase1_baselines": {
+            "description": "Solo model baselines — each model in isolation, establishes 1.0x reference for degradation ratios",
+            "experiments": [
+                {
+                    "id": "baseline-llm-{model_id}-{quant}-{output}",
+                    "description": "Text generation baselines with quantization and output length sweep",
+                    "category": "text_generation",
+                    "sweep": {
+                        "model_id": ["qwen2.5-7b", "qwen2.5-14b", "qwen2.5-27b", "qwen2.5-72b", "gemma2-9b", "llama3.1-8b", "mistral-7b"],
+                        "quant": ["q4", "fp16"],
+                        "output": ["short", "long"]
+                    },
+                    "filter": "qwen2.5-72b only runs q4 (fp16 requires 145GB, exceeds 98GB GPU)",
+                    "gpu_count": 1,
+                    "concurrency": 1,
+                    "estimated_runs": 26
+                },
+                {
+                    "id": "baseline-vlm-{model_id}-{input_size}",
+                    "description": "Video VLM baselines with input size sweep",
+                    "category": "vision_language",
+                    "sweep": {
+                        "model_id": ["gemma-vlm-32b", "qwen2.5-vl-7b", "qwen2.5-vl-72b"],
+                        "input_size": ["short-clip", "long-clip"]
+                    },
+                    "filter": "qwen2.5-vl-72b runs at q4 quantization",
+                    "gpu_count": 1,
+                    "concurrency": 1,
+                    "estimated_runs": 6
+                },
+                {
+                    "id": "baseline-ilm-{model_id}",
+                    "description": "Image/document understanding baselines",
+                    "category": "image_language",
+                    "sweep": {
+                        "model_id": ["kosmos-2.5", "qwen2.5-vl-7b", "qwen2.5-vl-72b"]
+                    },
+                    "input": "document image",
+                    "gpu_count": 1,
+                    "concurrency": 1,
+                    "estimated_runs": 3
+                },
+                {
+                    "id": "baseline-cv-{model_id}",
+                    "description": "Computer vision baselines",
+                    "category": "computer_vision",
+                    "sweep": {
+                        "model_id": ["paddleocr", "yolov8-n", "yolov8-l", "rfdetr-base", "dinov2-base", "dinov2-large"]
+                    },
+                    "gpu_count": 1,
+                    "concurrency": 1,
+                    "estimated_runs": 6
+                }
+            ],
+            "total_estimated_runs": 41
+        },
+
+        "phase2_concurrency_sweep": {
+            "description": "Fixed model mix per category, sweep concurrency to find saturation curves",
+            "experiments": [
+                {
+                    "id": "concurrency-llm-{level}",
+                    "description": "Two LLMs at increasing concurrency",
+                    "models": ["qwen2.5-7b", "gemma2-9b"],
+                    "mix_type": "llm-only",
+                    "sweep": {
+                        "level": [1, 2, 4, 8, 16]
+                    },
+                    "gpu_count": 1,
+                    "output_length": "short",
+                    "estimated_runs": 5
+                },
+                {
+                    "id": "concurrency-cv-{rps}",
+                    "description": "Three CV models at increasing request rate",
+                    "models": ["yolov8-l", "rfdetr-base", "dinov2-base"],
+                    "mix_type": "cv-only",
+                    "sweep": {
+                        "rps": [1, 10, 50, 200]
+                    },
+                    "gpu_count": 1,
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "concurrency-vlm-{level}",
+                    "description": "Two video VLMs at increasing concurrency",
+                    "models": ["gemma-vlm-32b", "qwen2.5-vl-7b"],
+                    "mix_type": "vlm-only",
+                    "sweep": {
+                        "level": [1, 2, 4, 8]
+                    },
+                    "gpu_count": 1,
+                    "input_size_vlm": "short-clip",
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "concurrency-ilm-{level}",
+                    "description": "Two image LMs at increasing concurrency",
+                    "models": ["kosmos-2.5", "qwen2.5-vl-7b"],
+                    "mix_type": "ilm-only",
+                    "sweep": {
+                        "level": [1, 2, 4, 8]
+                    },
+                    "gpu_count": 1,
+                    "estimated_runs": 4
+                }
+            ],
+            "total_estimated_runs": 17
+        },
+
+        "phase3_model_type_mix": {
+            "description": "Fixed concurrency (c4/rps50), vary model composition across all 8 mix types",
+            "experiments": [
+                {
+                    "id": "mix-llm-only",
+                    "models": ["qwen2.5-7b", "qwen2.5-14b", "gemma2-9b"],
+                    "mix_type": "llm-only",
+                    "concurrency_llm": 4
+                },
+                {
+                    "id": "mix-cv-only",
+                    "models": ["yolov8-l", "rfdetr-base", "dinov2-base", "paddleocr"],
+                    "mix_type": "cv-only",
+                    "concurrency_cv_rps": 50
+                },
+                {
+                    "id": "mix-vlm-ilm",
+                    "description": "Video VLM + image LM — both transformer-based but different prefill patterns (multi-frame vs single-frame)",
+                    "models": ["gemma-vlm-32b", "kosmos-2.5"],
+                    "mix_type": "vlm+ilm",
+                    "concurrency_llm": 4,
+                    "input_vlm": "short-clip",
+                    "input_ilm": "document"
+                },
+                {
+                    "id": "mix-llm-cv",
+                    "models": ["qwen2.5-14b", "gemma2-9b", "yolov8-l", "rfdetr-base"],
+                    "mix_type": "llm+cv",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50
+                },
+                {
+                    "id": "mix-vlm-cv",
+                    "description": "Video VLM sustained prefill + high-throughput CV — tests whether CV suffers during video encoding bursts",
+                    "models": ["gemma-vlm-32b", "yolov8-l", "dinov2-base"],
+                    "mix_type": "vlm+cv",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "input_size_vlm": "long-clip"
+                },
+                {
+                    "id": "mix-llm-vlm",
+                    "description": "LLM autoregressive decode + VLM video prefill bursts — tests ITL stability of LLM",
+                    "models": ["gemma2-9b", "qwen2.5-vl-7b"],
+                    "mix_type": "llm+vlm",
+                    "concurrency_llm": 4,
+                    "input_size_vlm": "short-clip"
+                },
+                {
+                    "id": "mix-ilm-cv",
+                    "description": "Image LM + CV — similar input modality (images) but different compute patterns (transformer decode vs CNN forward pass)",
+                    "models": ["kosmos-2.5", "qwen2.5-vl-7b", "yolov8-l", "rfdetr-base"],
+                    "mix_type": "ilm+cv",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50
+                },
+                {
+                    "id": "mix-full",
+                    "description": "All four categories simultaneously — maximum heterogeneity",
+                    "models": ["qwen2.5-7b", "qwen2.5-vl-7b", "kosmos-2.5", "yolov8-l", "dinov2-base"],
+                    "mix_type": "full-mix",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "input_size_vlm": "short-clip"
+                }
+            ],
+            "fixed": {
+                "gpu_count": 1,
+                "quantization": "q4",
+                "output_length": "short",
+                "arrival_pattern": "burst"
+            },
+            "total_estimated_runs": 8
+        },
+
+        "phase4_cross_type_contention": {
+            "description": "Characterize specific contention interactions — one model as subject, sweep neighbor load",
+            "experiments": [
+                {
+                    "id": "cross-llm-vs-cv-rps-{rps}",
+                    "description": "Fixed LLM (qwen2.5-7b at c4), sweep CV RPS to find LLM disruption threshold",
+                    "models": ["qwen2.5-7b", "yolov8-l"],
+                    "subject": "qwen2.5-7b",
+                    "metric_focus": "ITL stability, TTFT",
+                    "sweep": {
+                        "rps": [1, 10, 50, 200]
+                    },
+                    "concurrency_llm": 4,
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "cross-vlm-prefill-vs-llm",
+                    "description": "VLM encoding 10s video (40 frames, sustained GPU burst) while LLM decodes — measures ITL spikes in LLM",
+                    "models": ["gemma-vlm-32b", "gemma2-9b"],
+                    "subject": "gemma2-9b",
+                    "metric_focus": "ITL P99 spike magnitude during VLM prefill window",
+                    "input_size_vlm": "long-clip",
+                    "concurrency_llm": 4,
+                    "estimated_runs": 1
+                },
+                {
+                    "id": "cross-ilm-vs-cv-rps-{rps}",
+                    "description": "Fixed ILM (kosmos-2.5 at c4), sweep CV RPS — tests single-frame prefill vs CV contention",
+                    "models": ["kosmos-2.5", "rfdetr-base"],
+                    "subject": "kosmos-2.5",
+                    "metric_focus": "TTFT and throughput degradation",
+                    "sweep": {
+                        "rps": [1, 10, 50, 200]
+                    },
+                    "concurrency_llm": 4,
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "cross-cv-vs-llm-concurrency-{level}",
+                    "description": "Fixed CV pipeline (rps50), sweep LLM concurrency to find CV disruption point",
+                    "models": ["qwen2.5-14b", "yolov8-l", "rfdetr-base"],
+                    "subject": "yolov8-l",
+                    "metric_focus": "CV P95 latency increase",
+                    "concurrency_cv_rps": 50,
+                    "sweep": {
+                        "level": [1, 4, 8, 16]
+                    },
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "cross-memory-pressure-{vram_level}",
+                    "description": "VRAM utilization curve — 4 points from comfortable to near-OOM, all using qwen2.5-72b (42GB Q4) as anchor",
+                    "sweep": {
+                        "vram_level": [
+                            {"pair": ["qwen2.5-72b", "qwen2.5-7b"], "total_gb": 46.5, "util_pct": 47, "label": "comfortable"},
+                            {"pair": ["qwen2.5-72b", "qwen2.5-14b"], "total_gb": 50.5, "util_pct": 52, "label": "moderate"},
+                            {"pair": ["qwen2.5-72b", "qwen2.5-27b"], "total_gb": 58, "util_pct": 59, "label": "high"},
+                            {"pair": ["qwen2.5-vl-72b", "qwen2.5-72b"], "total_gb": 84, "util_pct": 86, "label": "extreme"}
+                        ]
+                    },
+                    "subject": "both",
+                    "metric_focus": "throughput degradation curve vs VRAM utilization — identify cliff point where KV cache eviction begins",
+                    "concurrency_llm": 4,
+                    "quantization": "q4",
+                    "note": "Extreme case (84GB) runs at c2 to avoid immediate OOM. Others run at c4.",
+                    "repetitions": 3,
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "cross-size-scaling-{model_size}",
+                    "description": "Same architecture (Qwen 2.5) at different sizes as subject under fixed CV load — how does model size affect contention vulnerability?",
+                    "models_subject": ["qwen2.5-7b", "qwen2.5-14b", "qwen2.5-27b", "qwen2.5-72b"],
+                    "models_neighbor": ["yolov8-l", "rfdetr-base"],
+                    "metric_focus": "degradation ratio vs model size — linear? exponential? flat?",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "sweep": {
+                        "model_size": ["7b", "14b", "27b", "72b"]
+                    },
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "cross-arch-validation-{arch}",
+                    "description": "Same scenario (LLM + CV at rps50) across 3 architectures at ~7-9B size — validates that contention behavior generalizes beyond Qwen",
+                    "models_subject": ["qwen2.5-7b", "llama3.1-8b", "mistral-7b"],
+                    "models_neighbor": ["yolov8-l", "rfdetr-base"],
+                    "metric_focus": "degradation ratio consistency across architectures — if all 3 show similar degradation, Qwen size-scaling results generalize",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "sweep": {
+                        "arch": ["qwen2.5-7b", "llama3.1-8b", "mistral-7b"]
+                    },
+                    "note": "If degradation ratios differ >20% across architectures, size-scaling conclusions from Qwen-only sweep may not generalize",
+                    "estimated_runs": 3
+                }
+            ],
+            "fixed": {
+                "gpu_count": 1,
+                "quantization": "q4",
+                "output_length": "short"
+            },
+            "total_estimated_runs": 24
+        },
+
+        "phase5_gpu_scaling": {
+            "description": "Repeat key scenarios with 2 and 4 GPUs — does adding GPUs eliminate contention or just redistribute it?",
+            "experiments": [
+                {
+                    "id": "scale-{scenario}-{gpus}gpu",
+                    "description": "GPU scaling for mix type and cross-type scenarios",
+                    "sweep": {
+                        "scenario": [
+                            "mix-llm-only",
+                            "mix-cv-only",
+                            "mix-llm-cv",
+                            "mix-vlm-cv",
+                            "mix-ilm-cv",
+                            "mix-full",
+                            "cross-llm-vs-cv-rps-50",
+                            "cross-vlm-prefill-vs-llm",
+                            "cross-cv-vs-llm-concurrency-8",
+                            "cross-memory-pressure-llm"
+                        ],
+                        "gpus": [2, 4]
+                    },
+                    "estimated_runs": 20
+                },
+                {
+                    "id": "scale-concurrency-llm-{level}-{gpus}gpu",
+                    "description": "Concurrency re-sweep at multi-GPU — compare saturation point shift",
+                    "models": ["qwen2.5-7b", "gemma2-9b"],
+                    "sweep": {
+                        "level": [4, 8, 16],
+                        "gpus": [2, 4]
+                    },
+                    "estimated_runs": 6
+                }
+            ],
+            "total_estimated_runs": 26
+        },
+
+        "phase6_secondary_confirmation": {
+            "description": "Sweep secondary dimensions against TWO contrasting baselines — confirms whether dimension matters and whether its effect is context-dependent",
+            "baselines": {
+                "baseline_A": {
+                    "label": "compute-bound (small models, high concurrency)",
+                    "models": ["qwen2.5-7b", "gemma2-9b", "yolov8-l"],
+                    "mix_type": "llm+cv",
+                    "concurrency_llm": 8,
+                    "concurrency_cv_rps": 50,
+                    "gpu_count": 1,
+                    "quantization": "q4",
+                    "output_length": "short",
+                    "arrival_pattern": "burst",
+                    "load_asymmetry": "equal"
+                },
+                "baseline_B": {
+                    "label": "memory-bound (large model, moderate concurrency)",
+                    "models": ["qwen2.5-72b", "qwen2.5-14b", "yolov8-l"],
+                    "mix_type": "llm+cv",
+                    "concurrency_llm": 4,
+                    "concurrency_cv_rps": 50,
+                    "gpu_count": 1,
+                    "quantization": "q4",
+                    "output_length": "short",
+                    "arrival_pattern": "burst",
+                    "load_asymmetry": "equal"
+                },
+                "rationale": "If a secondary dimension shows similar effect size across both baselines, it's universally applicable. If it differs, there's an interaction effect worth documenting (e.g., 'backend choice matters 3x more under memory pressure')."
+            },
+            "experiments": [
+                {
+                    "id": "secondary-output-length-{baseline}",
+                    "description": "Does output length change the degradation ratio? (longer decode = more overlap time with neighbor)",
+                    "vary": "output_length",
+                    "values": ["short", "long"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "secondary-input-size-{baseline}",
+                    "description": "Does longer prefill cause neighbor disruption? (1000-token prompt = longer prefill burst)",
+                    "vary": "input_size_llm",
+                    "values": ["short-input", "long-input"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "secondary-quantization-{baseline}",
+                    "description": "FP16 doubles VRAM usage — tests VRAM pressure effect on contention",
+                    "vary": "quantization",
+                    "values": ["q4", "fp16"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "filter": "baseline_B with fp16: qwen2.5-72b cannot fit (145GB) — substitute qwen2.5-27b fp16 (54GB) + qwen2.5-14b fp16 (28GB) = 82GB",
+                    "estimated_runs": 4
+                },
+                {
+                    "id": "secondary-backend-llm-{baseline}",
+                    "description": "Same model, different execution engines — kernel pattern changes contention signature",
+                    "vary": "inference_backend_llm",
+                    "values": ["vllm", "trt-llm", "sglang", "llamacpp"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "filter": "baseline_B with llamacpp: 72B not supported — substitute qwen2.5-27b",
+                    "estimated_runs": 8
+                },
+                {
+                    "id": "secondary-backend-cv-{baseline}",
+                    "description": "Same CV model, different engines — kernel fusion level changes interleaving gaps",
+                    "vary": "inference_backend_cv",
+                    "values": ["pytorch", "onnx", "tensorrt"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "estimated_runs": 6
+                },
+                {
+                    "id": "secondary-asymmetry-{baseline}",
+                    "description": "Unequal load distribution — does the heavy user starve the light user?",
+                    "vary": "load_asymmetry",
+                    "values": ["equal", "moderate", "extreme"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "estimated_runs": 6
+                },
+                {
+                    "id": "secondary-arrival-{baseline}",
+                    "description": "Bursty arrival (synchronized requests) vs uniform spacing — tests queue depth spikes",
+                    "vary": "arrival_pattern",
+                    "values": ["burst", "uniform"],
+                    "run_against": ["baseline_A", "baseline_B"],
+                    "estimated_runs": 4
+                }
+            ],
+            "total_estimated_runs": 36
+        }
+    },
+
+    "total_estimated_runs": 155,
+    "total_with_repetitions": "155 unique + 8 critical repeats (4 memory-pressure × 2 extra reps) = 163 total executions",
+
+    "runtime_estimate": {
+        "per_run_methodology": "3 warmup + 10 measurement rounds = 13 total iterations per run (standard). Memory-pressure runs: 3 repetitions each.",
+        "model_load_times": {
+            "small_llm_7b_q4": "30-60s",
+            "medium_llm_14-27b_q4": "60-120s",
+            "large_llm_72b_q4": "180-300s",
+            "vlm_32b_fp16": "120-180s",
+            "vlm_72b_q4": "180-300s",
+            "ilm_kosmos_1.3b": "15-30s",
+            "cv_models": "5-15s each"
+        },
+        "per_run_inference_time": {
+            "llm_short_output_c1": "13 rounds × 3 prompts × 3s = ~2 min",
+            "llm_long_output_c1": "13 rounds × 2 prompts × 25s = ~11 min",
+            "vlm_short_clip": "13 rounds × 2 prompts × 8s = ~3.5 min",
+            "vlm_long_clip": "13 rounds × 2 prompts × 20s = ~8.5 min",
+            "ilm_document": "13 rounds × 2 prompts × 5s = ~2 min",
+            "cv_at_rps50": "13 rounds × 10s window = ~2 min",
+            "contention_multi_model": "1.5-3x solo time due to contention overhead"
+        },
+        "phase_estimates": {
+            "phase0_validation": {
+                "runs": 3,
+                "breakdown": "3 validation runs with nsight profiling (~5 min each + analysis)",
+                "time_minutes": 20,
+                "time_hours": 0.3
+            },
+            "phase1_baselines": {
+                "runs": 41,
+                "breakdown": "26 LLM (avg 8 min) + 6 VLM (avg 8 min) + 3 ILM (avg 4 min) + 6 CV (avg 2 min)",
+                "time_minutes": 280,
+                "time_hours": 4.7
+            },
+            "phase2_concurrency": {
+                "runs": 17,
+                "breakdown": "5 LLM (10 min) + 4 CV (5 min) + 4 VLM (10 min) + 4 ILM (8 min)",
+                "time_minutes": 142,
+                "time_hours": 2.4
+            },
+            "phase3_mix": {
+                "runs": 8,
+                "breakdown": "Multi-model load + contention measurement (~15 min each)",
+                "time_minutes": 120,
+                "time_hours": 2.0
+            },
+            "phase4_cross_type": {
+                "runs": 24,
+                "effective_executions": 32,
+                "breakdown": "24 unique runs (includes 3 cross-arch validation). Memory-pressure (4 runs × 3 reps = 12 executions, 8 extra). Avg ~12 min per execution.",
+                "time_minutes": 384,
+                "time_hours": 6.4
+            },
+            "phase5_gpu_scaling": {
+                "runs": 26,
+                "breakdown": "Multi-GPU model placement adds ~3 min overhead per run (~15 min avg)",
+                "time_minutes": 390,
+                "time_hours": 6.5
+            },
+            "phase6_secondary": {
+                "runs": 36,
+                "breakdown": "7 dimensions × 2 baselines × avg 2.6 values = 36 runs (~10 min avg)",
+                "time_minutes": 360,
+                "time_hours": 6.0
+            }
+        },
+        "total_hours_range": "22-34 hours",
+        "total_hours_optimistic": 22,
+        "total_hours_pessimistic": 34,
+        "notes": [
+            "10 measurement rounds sufficient for deterministic GPU inference (contention effects are 2-10x, not subtle)",
+            "Phase 4 memory-pressure runs execute 3x each — the ONLY scenario with genuine run-to-run variance (bimodal KV cache eviction behavior near OOM boundary)",
+            "Phase 6 doubled by running against two baselines (compute-bound + memory-bound) to detect interaction effects",
+            "Optimistic: warm model cache, fast loads, no OOM retries, models grouped to minimize reloading",
+            "Pessimistic: cold starts, 72B load times at 5min, contention runs take 3x solo time, OOM retries on extreme cases",
+            "Largest time sinks: Phase 5 (6.5h multi-GPU) and Phase 6 (6.0h dual-baseline secondary)",
+            "Optimization: group runs by model to reduce reloading (saves ~2-3h total)"
+        ]
+    }
+}
