@@ -351,7 +351,11 @@ def scenarios_build(
         command="scenarios.build",
         status="ok",
         artifacts=[str(out)],
-        next_action=f"built {count}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}",
+        next_action=(
+            f"built {count}/{n} scenarios; run: bench smoke --backend vllm --model qwen3-vl-32b-fp8 --scenarios-dir {out}"
+            if source == "video-text" else
+            f"built {count}/{n} scenarios; run: bench smoke --backend nitrogen-eager --model nitrogen-500m-bf16 --scenarios-dir {out}"
+        ),
         data={"source": source, "out_dir": str(out), "count": count, "scenarios": built},
         json_out=json_out,
     )
@@ -639,6 +643,7 @@ def load_test(
         "--concurrency", concurrency,
         "--warmup-request-count", str(warmup),
         "--output-artifact-dir", str(artifact_dir),
+        "--ui", "none",   # dashboard UI is unsupported in multi-concurrency sweep mode
     ]
     if duration > 0:
         cmd += ["--benchmark-duration", str(duration)]

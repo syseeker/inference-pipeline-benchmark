@@ -73,8 +73,22 @@ class NitrogenConfig:
 
 
 @dataclass
+class VideoTextConfig:
+    """Config for the video+text reasoner (vLLM / SGLang OpenAI-compatible endpoint).
+
+    num_frames: how many frames to extract from the video before feeding the
+    vision encoder. Passed as extra_body per request. Sweep over 4 / 8 / 16
+    to measure the latency-vs-quality tradeoff. Override via VIDEO_NUM_FRAMES.
+    """
+
+    base_url: str = "http://localhost:8000/v1"
+    model: str | None = None
+    num_frames: int = 8
+
+
+@dataclass
 class PipelineConfig:
-    backend: str = "nim"  # nim | vllm | sglang | trtllm | triton | nitrogen
+    backend: str = "nim"  # nim | vllm | sglang | trtllm | triton | nitrogen | video-text
     deadline_ms: int = 1500  # interactive budget per request
     max_history_turns: int = 6
     nim: NimConfig = field(default_factory=NimConfig)
@@ -83,6 +97,7 @@ class PipelineConfig:
     trtllm: TrtLlmConfig = field(default_factory=TrtLlmConfig)
     triton: TritonConfig = field(default_factory=TritonConfig)
     nitrogen: NitrogenConfig = field(default_factory=NitrogenConfig)
+    video_text: VideoTextConfig = field(default_factory=VideoTextConfig)
 
     @classmethod
     def from_env(cls, yaml_path: str | Path | None = None) -> PipelineConfig:
@@ -107,6 +122,10 @@ class PipelineConfig:
         cfg.nitrogen.game_id = os.getenv("NITROGEN_GAME_ID", cfg.nitrogen.game_id)
         if seed := os.getenv("NITROGEN_SEED"):
             cfg.nitrogen.seed = int(seed)
+        cfg.video_text.base_url = os.getenv("VIDEO_BASE_URL", cfg.video_text.base_url)
+        cfg.video_text.model = os.getenv("VIDEO_MODEL", cfg.video_text.model)
+        if nf := os.getenv("VIDEO_NUM_FRAMES"):
+            cfg.video_text.num_frames = int(nf)
         if backend := os.getenv("PIPELINE_BACKEND"):
             cfg.backend = backend
         return cfg
