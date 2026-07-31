@@ -33,6 +33,22 @@ class LatencySamples:
     prompt_tokens: list[int] = field(default_factory=list)
     completion_tokens: list[int] = field(default_factory=list)
 
+    # Wall-clock request boundaries, ms since the Unix epoch.
+    #
+    # These exist for CROSS-PROCESS ALIGNMENT, not for measurement: under
+    # co-residency we need to show that one tenant's p99 spike lands inside
+    # another tenant's prefill window, and durations alone cannot prove that.
+    # Use time.time() here (comparable across processes) and perf_counter()
+    # for the duration fields above (monotonic). Never conflate the two.
+    #
+    # NOTE ON LENGTH: unlike every other list here, these are appended once
+    # per request ATTEMPT — including attempts whose latency came back None.
+    # So `len(start_epoch_ms)` is the attempt count and may exceed
+    # `len(end_to_end)`. Use `request_rows()` to zip them safely rather than
+    # indexing across lists.
+    start_epoch_ms: list[float] = field(default_factory=list)
+    end_epoch_ms: list[float] = field(default_factory=list)
+
 
 @dataclass
 class PromMetrics:
@@ -140,6 +156,45 @@ class BenchmarkResult:
     quant_accuracy_delta: float | None = None        # baseline_acc - quant_acc
     tp_efficiency: float | None = None               # latency(TP=1) / (2 * latency(TP=2))
 
+    # ---- Co-residency / contention -------------------------------------
+    # Populated only for `bench coloc` runs; None for single-model rounds.
+    # See skills/gpu-contention-benchmark/reference/design-decisions.md.
+
+    # Identity — what shared the GPU. Without this a contention row cannot
+    # be paired with its solo baseline, and the number is uninterpretable.
+    colocation_id: str | None = None       # "mix-llm-cv" — the tenant-set name
+    tenant_name: str | None = None         # "victim_llm" — this row's role in it
+    co_tenants: list[str] = field(default_factory=list)  # sorted OTHER tenant model ids
+    n_tenants: int = 1                     # 1 == solo baseline
+    isolation_mode: str | None = None      # none | mps | mig | separate-gpu
+
+    # Offered load. Open-loop rate, NOT concurrency — a closed-loop client
+    # throttles itself in proportion to the slowdown being measured, which
+    # would make every degradation ratio describe the harness, not the GPU.
+    arrival_pattern: str | None = None     # poisson | constant | gamma | closed
+    offered_rps: float | None = None
+
+    # Measured
+    achieved_rps: float | None = None      # < offered_rps ⇒ past the envelope
+    t0_epoch_ms: float | None = None       # shared-timeline anchor across tenants
+    request_trace_path: str | None = None  # <tenant>.ndjson, per-request rows
+    time_to_first_ready_s: float | None = None   # cold-start cost, invisible to
+    vram_after_load_gb: float | None = None      #   inference metrics but decides
+                                                 #   whether co-location deploys
+    # Clock integrity. On GeForce a clock lock is advisory, so a run can be
+    # throttled without anyone noticing and the loss reads as contention.
+    sm_clock_mhz_p50: float | None = None
+    sm_clock_mhz_min: float | None = None
+    throttle_reasons: list[str] = field(default_factory=list)  # non-empty ⇒ discard
+
+    # Ratios vs the solo baseline — computed by summary.py from paired runs,
+    # following the cuda_graph_speedup / tp_efficiency precedent above.
+    solo_baseline_run_id: str | None = None
+    degradation_ratio_e2e_p50: float | None = None    # coloc / solo; 1.0 = no harm
+    degradation_ratio_e2e_p95: float | None = None
+    degradation_ratio_ttft_p95: float | None = None
+    throughput_retention: float | None = None         # achieved_rps coloc / solo
+
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -170,6 +225,13 @@ _CONFIG_FIELDS: frozenset[str] = frozenset({
     "framework_knobs", "run_label", "warmup_requests",
     "chunked_prefill_enabled", "enforce_eager",
     "n_requests",
+    # co-residency identity + offered load. These describe the experiment
+    # we asked for, so they belong in `configs`. Everything else on the
+    # contention block is measured and stays in `results` — notably
+    # `achieved_rps`, which is precisely what we're testing the offered
+    # rate against.
+    "colocation_id", "tenant_name", "co_tenants", "n_tenants",
+    "isolation_mode", "arrival_pattern", "offered_rps",
 })
 
 
@@ -277,6 +339,58 @@ def compute_throughput(
 
 def mean(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
+
+
+def request_rows(samples: LatencySamples) -> list[dict[str, Any]]:
+    """Per-request records for the co-residency trace, one dict per attempt.
+
+    The lists on `LatencySamples` are NOT index-aligned — the duration and
+    token lists skip requests where the framework returned None, while the
+    epoch lists record every attempt. Zipping them positionally would
+    silently attribute one request's latency to another's timestamp, which
+    is exactly the kind of error that makes an alignment plot look
+    convincing and be wrong.
+
+    So we only pair up to the shortest available list per field, and emit
+    None beyond it. Callers get an honest record or an explicit gap.
+
+    Returns rows shaped for `<tenant>.ndjson`:
+        {t_start_ms, t_end_ms, e2e_ms, ttft_ms, prompt_tokens,
+         completion_tokens}
+    """
+    n = len(samples.start_epoch_ms)
+
+    def at(seq: list, i: int) -> Any:
+        return seq[i] if i < len(seq) else None
+
+    return [
+        {
+            "t_start_ms": samples.start_epoch_ms[i],
+            "t_end_ms": at(samples.end_epoch_ms, i),
+            "e2e_ms": at(samples.end_to_end, i),
+            "ttft_ms": at(samples.ttft, i),
+            "prompt_tokens": at(samples.prompt_tokens, i),
+            "completion_tokens": at(samples.completion_tokens, i),
+        }
+        for i in range(n)
+    ]
+
+
+def achieved_rps(samples: LatencySamples) -> float | None:
+    """Completed requests per second of wall clock, from the epoch stamps.
+
+    This is the measured counterpart to the offered rate. Where it falls
+    below `offered_rps` the tenant could not keep up — and that crossing is
+    the safe-operating-envelope boundary, so it is a headline number rather
+    than a diagnostic. Measured from first request start to last request
+    end, so it excludes server startup and teardown.
+    """
+    if len(samples.start_epoch_ms) < 2 or not samples.end_epoch_ms:
+        return None
+    span_ms = max(samples.end_epoch_ms) - min(samples.start_epoch_ms)
+    if span_ms <= 0:
+        return None
+    return len(samples.end_epoch_ms) / (span_ms / 1000.0)
 
 
 def utc_now_iso() -> str:

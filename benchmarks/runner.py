@@ -199,7 +199,19 @@ def _detect_server_flags(
 
 def _run_one(pipe: Pipeline, sc, samples: LatencySamples) -> tuple[Any, bool, bool]:
     """Run one scenario, append samples, return (resp, is_valid, was_executed)."""
-    resp = pipe.run(sc.pipeline_request())
+    # Wall-clock bounds for cross-tenant alignment. time.time() (not
+    # perf_counter) because these must be comparable across processes —
+    # under co-residency we align this tenant's spikes against another
+    # tenant's prefill windows. Durations still come from the pipeline's
+    # own monotonic timing below; the two are never mixed.
+    t_start_ms = time.time() * 1000.0
+    try:
+        resp = pipe.run(sc.pipeline_request())
+    finally:
+        # Recorded even on failure, so a request that errored still shows
+        # up as occupying the GPU during that window.
+        samples.start_epoch_ms.append(t_start_ms)
+        samples.end_epoch_ms.append(time.time() * 1000.0)
 
     if resp.latency.total_ms is not None:
         samples.end_to_end.append(resp.latency.total_ms)
@@ -281,6 +293,10 @@ def _run_round_video(
     try:
         for sc in scenarios:
             t0 = time.perf_counter()
+            # Epoch bounds for cross-tenant alignment — see _run_one().
+            # The video tenant matters most here: its multi-second frame
+            # encode is the burst other tenants get measured against.
+            t_start_ms = time.time() * 1000.0
             raw, meta, ttft_ms = reasoner.generate(
                 video_path=sc.spec.video_path,
                 scenario_dir=sc.dir,
@@ -289,6 +305,8 @@ def _run_round_video(
                 num_frames=vcfg.num_frames,
             )
             total_ms = (time.perf_counter() - t0) * 1000.0
+            samples.start_epoch_ms.append(t_start_ms)
+            samples.end_epoch_ms.append(time.time() * 1000.0)
 
             if total_ms:
                 samples.end_to_end.append(total_ms)
