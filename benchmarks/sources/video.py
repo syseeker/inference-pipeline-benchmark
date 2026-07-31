@@ -7,7 +7,7 @@ customer's video file. This source just validates the directory and reports
 the count — no transformation needed.
 
 Customer workflow:
-  1. Drop your video files into the scenario folders (see QUICKSTART_VIDEO.md).
+  1. Drop your video files into the scenario folders (see QUICKSTART_VLM.md).
   2. Fill in request.json (description, prompt) and expected.json (key_phrases).
   3. Run: bench scenarios build --source video-text --out tests/smoke/scenarios_video/
      (or skip build entirely and pass --scenarios-dir directly to bench sweep).
@@ -36,7 +36,7 @@ def build(
     if not out.exists():
         raise FileNotFoundError(
             f"scenarios_video directory not found: {out}\n"
-            "Create it and populate scenario folders per QUICKSTART_VIDEO.md."
+            "Create it and populate scenario folders per QUICKSTART_VLM.md."
         )
 
     ready = []
@@ -56,7 +56,7 @@ def build(
     if missing_video:
         raise FileNotFoundError(
             f"Video files missing in {len(missing_video)} scenario(s): {missing_video}\n"
-            "Upload your .mp4 files into the scenario folders — see QUICKSTART_VIDEO.md "
+            "Upload your .mp4 files into the scenario folders — see QUICKSTART_VLM.md "
             "'Step 1: Upload your videos'."
         )
 

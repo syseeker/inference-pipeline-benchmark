@@ -292,7 +292,8 @@ Three reference scenarios live in [tests/smoke/scenarios/](tests/smoke/scenarios
 | [docs/scenarios.md](docs/scenarios.md) | Scenario shape (request + screen + optional `expected` / `gold_action`), the NitroGen-chunk → scenario mapping, why we convert, and how to add your own dataset source |
 | [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: what this measures for you, player-vs-world-model choice, the bandwidth reality, and per-genre accuracy workflow |
 | [docs/why-this-matters.md](docs/why-this-matters.md) | **Andrew-Ng-style intro** for engineers new to inference benchmarking. The four budgets (latency / throughput / energy / precision), why backend choice isn't free, two real questions answered. |
-| [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) | **Agent-prompt walkthrough** to take the NitroGen sweep end-to-end. Each step shows the prompt + what the agent does + what to expect on disk. The retest doc. |
+| [QUICKSTART_VLM.md](QUICKSTART_VLM.md) | **Agent-prompt walkthrough** for VLM benchmarks — image+text and video+text scenarios across vLLM / SGLang / TRT-LLM. |
+| [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) | **Agent-prompt walkthrough** for the NitroGen policy-model sweep end-to-end. Each step shows the prompt + what the agent does + what to expect on disk. |
 | [skills/](skills/) | Five Claude Code / Codex / Cursor skills — `benchmark-gpu-inference`, `prepare-nitrogen-dataset`, `setup-inference-backend`, `interpret-benchmark-summary`, `extend-benchmark-config`. Install via `bench install-skill`. |
 | [docs/findings/](docs/findings/) | Per-(gpu, framework, model) postmortems referenced by the summary generator (Core findings auto-link). |
 | [tests/smoke/scenarios/README.md](tests/smoke/scenarios/README.md) | Scenario file format + how to add your own |
