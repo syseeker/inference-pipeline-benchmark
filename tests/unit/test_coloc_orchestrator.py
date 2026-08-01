@@ -318,3 +318,122 @@ def test_solo_cache_dedupes_identical_baselines():
 def test_solo_cache_ignores_non_solo():
     cache = coloc.SoloBaselineCache()
     assert cache.seen(_coloc(is_solo=False)) is None
+
+
+# ── perf_analyzer CSV parsing ────────────────────────────────────────────────
+
+_PA_HEADER = (
+    "Inferences/Second,Client Send,Network+Server Send/Recv,Server Queue,"
+    "Server Compute Input,Server Compute Infer,Server Compute Output,Client Recv,"
+    "p50 latency,p90 latency,p95 latency,p99 latency,Avg latency,request_count"
+)
+_PA_ROW = "47.2,0,100,50,10,5000,10,0,5200,6500,7000,8000,5500,472"
+
+
+def test_parse_perf_analyzer_records(tmp_path):
+    art = tmp_path / "cv.aiperf"
+    art.mkdir()
+    (art / "perf_analyzer.csv").write_text(f"{_PA_HEADER}\n{_PA_ROW}\n")
+    recs = coloc.parse_perf_analyzer_records(art)
+    assert len(recs) == 1
+    assert recs[0]["measured_rps"] == 47.2
+    assert abs(recs[0]["e2e_ms"] - 5.5) < 0.01       # 5500 us → 5.5 ms
+    assert abs(recs[0]["p50_ms"] - 5.2) < 0.01        # 5200 us → 5.2 ms
+    assert abs(recs[0]["p95_ms"] - 7.0) < 0.01        # 7000 us → 7.0 ms
+    assert abs(recs[0]["p99_ms"] - 8.0) < 0.01        # 8000 us → 8.0 ms
+    assert recs[0]["ok"] is True
+
+
+def test_parse_perf_analyzer_records_uses_last_data_row(tmp_path):
+    # Some perf_analyzer versions emit a trailing status line; we take lines[-1].
+    art = tmp_path / "cv.aiperf"
+    art.mkdir()
+    (art / "perf_analyzer.csv").write_text(
+        f"{_PA_HEADER}\n47.2,0,100,50,10,5000,10,0,5200,6500,7000,8000,5500,472\n"
+        f"50.0,0,100,50,10,5000,10,0,5300,6600,7100,8100,5600,500\n"
+    )
+    recs = coloc.parse_perf_analyzer_records(art)
+    assert recs[0]["measured_rps"] == 50.0             # last row wins
+
+
+def test_parse_perf_analyzer_records_empty_when_absent(tmp_path):
+    assert coloc.parse_perf_analyzer_records(tmp_path) == []
+
+
+def test_parse_perf_analyzer_records_empty_on_header_only(tmp_path):
+    art = tmp_path / "cv.aiperf"
+    art.mkdir()
+    (art / "perf_analyzer.csv").write_text(_PA_HEADER + "\n")
+    assert coloc.parse_perf_analyzer_records(art) == []
+
+
+def test_achieved_rps_uses_measured_rps():
+    recs = [{"measured_rps": 47.2, "e2e_ms": 5.5, "ok": True}]
+    assert coloc.achieved_rps(recs) == 47.2
+
+
+def test_achieved_rps_falls_back_to_timestamps_when_no_measured_rps():
+    # Standard aiperf records have no measured_rps — existing path unchanged.
+    recs = [
+        {"t_start_ms": 0.0, "t_end_ms": 50.0},
+        {"t_start_ms": 100.0, "t_end_ms": 150.0},
+        {"t_start_ms": 150.0, "t_end_ms": 200.0},
+    ]
+    r = coloc.achieved_rps(recs)
+    assert r is not None and 14.0 < r < 16.0
+
+
+# ── RunPaths.triton_repo_root ─────────────────────────────────────────────────
+
+def test_run_paths_triton_repo_root(tmp_path):
+    paths = coloc.RunPaths(root=tmp_path / "coloc" / "run-1")
+    # Two levels up from coloc/run-1/ → tmp_path/, then triton_repo/.
+    assert paths.triton_repo_root == tmp_path / "triton_repo"
+
+
+# ── build_perf_analyzer_cmd additions ────────────────────────────────────────
+
+def _cv_tenant(**kw):
+    defaults = dict(name="cv", backend="triton", transport="triton",
+                    driver="perf_analyzer", rps=50.0, frac=None,
+                    workload="cv_detect_default")
+    defaults.update(kw)
+    return _tenant(**defaults)
+
+
+def test_build_perf_analyzer_writes_csv_flag(tmp_path):
+    cmd = coloc.build_perf_analyzer_cmd(
+        model="yolov8-l", url="localhost:8100", tenant=_cv_tenant(),
+        duration_s=120, output_csv=tmp_path / "perf_analyzer.csv",
+    )
+    assert "-f" in cmd
+    assert str(tmp_path / "perf_analyzer.csv") in cmd
+
+
+def test_build_perf_analyzer_no_csv_flag_without_path():
+    cmd = coloc.build_perf_analyzer_cmd(
+        model="yolov8-l", url="localhost:8100", tenant=_cv_tenant(), duration_s=120,
+    )
+    assert "-f" not in cmd
+
+
+def test_build_perf_analyzer_strips_http_scheme():
+    cmd = coloc.build_perf_analyzer_cmd(
+        model="yolov8-l", url="http://localhost:8100", tenant=_cv_tenant(), duration_s=120,
+    )
+    u = cmd[cmd.index("-u") + 1]
+    assert u == "localhost:8100"
+
+
+def test_build_perf_analyzer_strips_https_scheme():
+    cmd = coloc.build_perf_analyzer_cmd(
+        model="yolov8-l", url="https://localhost:8100", tenant=_cv_tenant(), duration_s=120,
+    )
+    assert cmd[cmd.index("-u") + 1] == "localhost:8100"
+
+
+def test_build_perf_analyzer_passthrough_bare_url():
+    cmd = coloc.build_perf_analyzer_cmd(
+        model="yolov8-l", url="localhost:8100", tenant=_cv_tenant(), duration_s=120,
+    )
+    assert cmd[cmd.index("-u") + 1] == "localhost:8100"

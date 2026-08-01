@@ -198,26 +198,28 @@ def build_aiperf_cmd(
 
 
 def build_perf_analyzer_cmd(
-    *, model: str, url: str, tenant: Tenant, duration_s: int, input_data: Path | None = None,
+    *, model: str, url: str, tenant: Tenant, duration_s: int,
+    input_data: Path | None = None, output_csv: Path | None = None,
 ) -> list[str]:
     """perf_analyzer command for an open-loop Triton CV tenant.
 
     Open-loop via `--request-rate-range` (fixed low==high==rps) and
-    `--request-distribution`. `--shared-memory` off but client SHM allowed at the
-    server; the `--allow-client-shm=true` gotcha is a Triton *server* flag (step
-    7), not a perf_analyzer flag. The Triton server side is step 7; this builder
-    is exercised by unit tests until then.
+    `--request-distribution`. `--allow-client-shm=true` is a Triton *server*
+    flag, not a perf_analyzer flag. `output_csv` writes aggregate stats to a
+    file via `-f`; the orchestrator reads it with parse_perf_analyzer_records().
     """
     load = tenant.load
     if not load.is_open_loop:
         raise ValueError(f"tenant {tenant.name!r} (CV) needs an open-loop rps.")
     rps = int(load.rps)
     dist = "poisson" if load.pattern == "poisson" else "constant"
+    # perf_analyzer -u expects hostname:port, not a full URL with scheme.
+    clean_url = url.removeprefix("http://").removeprefix("https://")
     cmd = [
         "perf_analyzer",
         "-m", model,
         "--service-kind", "triton",
-        "-u", url,
+        "-u", clean_url,
         "--request-rate-range", f"{rps}:{rps}:1",
         "--request-distribution", dist,
         "--measurement-mode", "time_windows",
@@ -225,6 +227,8 @@ def build_perf_analyzer_cmd(
     ]
     if input_data is not None:
         cmd += ["--input-data", str(input_data)]
+    if output_csv is not None:
+        cmd += ["-f", str(output_csv)]
     return cmd
 
 
@@ -289,6 +293,51 @@ def parse_aiperf_records(artifact_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+def parse_perf_analyzer_records(artifact_dir: Path) -> list[dict[str, Any]]:
+    """Aggregate summary from perf_analyzer's `-f` CSV output.
+
+    perf_analyzer writes one header row + one data row per rate point. With
+    `--request-rate-range R:R:1` there is exactly one data row. Latency columns
+    are in microseconds; we convert to milliseconds to match the aiperf trace
+    schema. `measured_rps` carries the Inferences/Second value so achieved_rps()
+    can return it directly without per-request timestamps. Returns [] if the CSV
+    is absent or unparseable.
+    """
+    path = artifact_dir / "perf_analyzer.csv"
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return []
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return []
+    headers = [h.strip() for h in lines[0].split(",")]
+    values = [v.strip() for v in lines[-1].split(",")]
+    row: dict[str, str] = dict(zip(headers, values))
+
+    def _float(key: str) -> float | None:
+        v = row.get(key)
+        try:
+            return float(v) if v is not None else None
+        except ValueError:
+            return None
+
+    def _us_to_ms(key: str) -> float | None:
+        v = _float(key)
+        return v / 1000.0 if v is not None else None
+
+    return [{
+        "measured_rps": _float("Inferences/Second"),
+        "e2e_ms":       _us_to_ms("Avg latency"),
+        "p50_ms":       _us_to_ms("p50 latency"),
+        "p95_ms":       _us_to_ms("p95 latency"),
+        "p99_ms":       _us_to_ms("p99 latency"),
+        "ok": True,
+    }]
+
+
 def _metric_value(metrics: dict[str, Any], key: str) -> float | None:
     """Pull `metrics.<key>.value` (AIPerf wraps every metric as {value, unit})."""
     m = metrics.get(key)
@@ -330,7 +379,13 @@ def _map_request_record(obj: dict[str, Any]) -> dict[str, Any] | None:
 
 def achieved_rps(records: list[dict[str, Any]]) -> float | None:
     """Completed requests per wall-clock second from the trace. Where this falls
-    below the tenant's offered rps, the tenant is past its envelope (§4.1)."""
+    below the tenant's offered rps, the tenant is past its envelope (§4.1).
+
+    CV tenants use perf_analyzer which reports aggregate throughput directly
+    (`measured_rps`). LLM/VLM tenants compute from per-request timestamps.
+    """
+    if records and records[0].get("measured_rps") is not None:
+        return records[0]["measured_rps"]
     stamps = [r["t_end_ms"] for r in records if r.get("t_end_ms") is not None]
     starts = [r["t_start_ms"] for r in records if r.get("t_start_ms") is not None]
     if len(stamps) < 2 or not starts:
@@ -366,6 +421,12 @@ class RunPaths:
 
     def tenant_artifact_dir(self, tenant_name: str) -> Path:
         return self.root / f"{tenant_name}.aiperf"
+
+    @property
+    def triton_repo_root(self) -> Path:
+        # Stable across runs: benchmarks/results/<gpu>/triton_repo/
+        # Two levels up from coloc/<run_id>/ lands at <gpu>/.
+        return self.root.parent.parent / "triton_repo"
 
     @property
     def gpu_ndjson(self) -> Path:
@@ -472,12 +533,16 @@ class ServerHandle:
     tenant: Tenant
     proc: subprocess.Popen | None
     reused: bool = False
+    container_name: str | None = None   # set when we launched a Docker container
 
 
 class ColocationOrchestrator:
-    """Runs one Colocation end to end. The HTTP (LLM/VLM) tenant path is live;
-    the Triton CV tenant server side is step 7 (its driver command is built, but
-    launching the model repo is deferred)."""
+    """Runs one Colocation end to end: launch servers, drive load, collect traces.
+
+    HTTP tenants (vLLM / SGLang / TRT-LLM) are launched as subprocesses;
+    Triton CV tenants are launched as a Docker container (step 7). Both paths
+    share a single wall-clock anchor (t0) and a single GPU sampler (§4.3).
+    """
 
     def __init__(self, gpu: str, *, gpu_index: int = 0, sampler_interval_ms: int = 50,
                  warmup: int = 3, seed: int = 0) -> None:
@@ -493,7 +558,14 @@ class ColocationOrchestrator:
             raise RuntimeError("VRAM pre-flight failed: " + "; ".join(issues))
 
         paths.root.mkdir(parents=True, exist_ok=True)
-        servers = [self._ensure_server(t) for t in coloc.tenants]
+
+        # Pre-pass: write all CV model configs before launching the container so
+        # Triton starts with a complete repo (avoids mid-startup model additions).
+        triton_tenants = [t for t in coloc.tenants if t.round.transport == "triton"]
+        if triton_tenants:
+            self._build_triton_repos(triton_tenants, paths)
+
+        servers = [self._ensure_server(t, paths) for t in coloc.tenants]
         try:
             for h in servers:
                 self._wait_ready(h.tenant)
@@ -508,7 +580,12 @@ class ColocationOrchestrator:
                 for name, p in procs.items():
                     p.wait()
                 for t in coloc.tenants:
-                    traces[t.name] = parse_aiperf_records(paths.tenant_artifact_dir(t.name))
+                    if t.driver == "perf_analyzer":
+                        traces[t.name] = parse_perf_analyzer_records(
+                            paths.tenant_artifact_dir(t.name)
+                        )
+                    else:
+                        traces[t.name] = parse_aiperf_records(paths.tenant_artifact_dir(t.name))
             sampler_summary = gs.summary
 
             achieved = {t.name: achieved_rps(traces.get(t.name, [])) for t in coloc.tenants}
@@ -527,7 +604,20 @@ class ColocationOrchestrator:
 
     # ---- server lifecycle --------------------------------------------------
 
-    def _ensure_server(self, tenant: Tenant) -> ServerHandle:
+    def _build_triton_repos(self, triton_tenants: list[Tenant], paths: RunPaths) -> None:
+        """Write config.pbtxt + create version dirs for all CV models in one pass.
+
+        Weights (model.onnx / model.plan) must be pre-exported via
+        scripts/build_triton_cv_repo.py — this only writes the Triton config.
+        Called before _ensure_server so the container starts with a full repo.
+        """
+        from benchmarks.triton_cv import resolve_spec, write_model_repo
+        for t in triton_tenants:
+            spec = resolve_spec(t.round.model_id)
+            bk = t.triton_backend or "tensorrt"
+            write_model_repo(paths.triton_repo_root, spec, bk)
+
+    def _ensure_server(self, tenant: Tenant, paths: RunPaths) -> ServerHandle:
         bk = tenant.round.backend
         cmd = build_server_cmd(
             tenant,
@@ -536,13 +626,48 @@ class ColocationOrchestrator:
             trtllm_bin=venv_bin(bk, "trtllm-serve"),
         )
         if cmd is None:
-            # Triton tenant — server launch is step 7. Assume an out-of-band
-            # Triton server is already up on the tenant's URL.
-            return ServerHandle(tenant=tenant, proc=None, reused=True)
+            # Triton tenant — _build_triton_repos has written config.pbtxt.
+            # One container serves all CV models in the colocation; use the
+            # container name as a mutex so we don't launch a second one.
+            container = "triton-cv"
+            if self._triton_container_running(container) or self._triton_ready(tenant.round.port):
+                return ServerHandle(tenant=tenant, proc=None, reused=True,
+                                    container_name=None)
+            from benchmarks.triton_cv import build_triton_serve_cmd
+            docker_cmd = build_triton_serve_cmd(
+                paths.triton_repo_root,
+                http_port=tenant.round.port,
+                grpc_port=tenant.round.port + 1,
+                metrics_port=tenant.round.port + 2,
+                container_name=container,
+            )
+            proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.STDOUT)
+            proc.wait()  # docker run -d exits immediately after spawning
+            return ServerHandle(tenant=tenant, proc=None, reused=False,
+                                container_name=container)
         if self._port_serving(tenant):
             return ServerHandle(tenant=tenant, proc=None, reused=True)
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         return ServerHandle(tenant=tenant, proc=proc, reused=False)
+
+    def _triton_ready(self, port: int) -> bool:
+        from benchmarks.triton_cv import triton_ready_url
+        try:
+            with urllib.request.urlopen(triton_ready_url(port), timeout=3) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _triton_container_running(self, name: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Running}}", name],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.returncode == 0 and result.stdout.strip() == "true"
+        except Exception:
+            return False
 
     def _port_serving(self, tenant: Tenant) -> bool:
         try:
@@ -553,7 +678,21 @@ class ColocationOrchestrator:
 
     def _wait_ready(self, tenant: Tenant, timeout_s: int | None = None) -> None:
         if tenant.round.transport == "triton":
-            return
+            from benchmarks.triton_cv import triton_ready_url
+            deadline = time.time() + (timeout_s or 300)
+            url = triton_ready_url(tenant.round.port)
+            while time.time() < deadline:
+                try:
+                    with urllib.request.urlopen(url, timeout=5) as r:
+                        if r.status == 200:
+                            return
+                except Exception:
+                    time.sleep(2.0)
+            raise RuntimeError(
+                f"Triton server not ready within {timeout_s or 300}s ({url}). "
+                "Ensure model weights are exported (scripts/build_triton_cv_repo.py) "
+                "and the Docker daemon is running."
+            )
         deadline = time.time() + (timeout_s or tenant.round.ready_timeout_s or 600)
         url = self._models_url(tenant)
         while time.time() < deadline:
@@ -566,20 +705,41 @@ class ColocationOrchestrator:
         raise RuntimeError(f"tenant {tenant.name!r} server not ready within budget ({url})")
 
     def _launch_drivers(self, coloc: Colocation, paths: RunPaths) -> dict[str, subprocess.Popen]:
+        from benchmarks.triton_cv import wrap_perf_analyzer_docker
         procs: dict[str, subprocess.Popen] = {}
         for t in coloc.tenants:
             art = paths.tenant_artifact_dir(t.name)
             art.mkdir(parents=True, exist_ok=True)
-            cmd = driver_command(
-                t, base_url=t.round.base_url, model=t.round.hf_id,
-                duration_s=coloc.duration_s, artifact_dir=art,
-                warmup=self.warmup, seed=self.seed,
-                aiperf_bin=venv_bin(t.round.backend, "aiperf"),
-            )
-            procs[t.name] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            if t.driver == "perf_analyzer":
+                # perf_analyzer runs inside the SDK container; mount the
+                # artifact dir at the same path so -f writes to the host.
+                inner = build_perf_analyzer_cmd(
+                    model=t.round.model_id,
+                    url=t.round.base_url,
+                    tenant=t,
+                    duration_s=coloc.duration_s,
+                    input_data=_workload_input_file(t),
+                    output_csv=art / "perf_analyzer.csv",
+                )
+                cmd = wrap_perf_analyzer_docker(inner, mounts=[(str(art), str(art))])
+            else:
+                cmd = driver_command(
+                    t, base_url=t.round.base_url, model=t.round.hf_id,
+                    duration_s=coloc.duration_s, artifact_dir=art,
+                    warmup=self.warmup, seed=self.seed,
+                    aiperf_bin=venv_bin(t.round.backend, "aiperf"),
+                )
+            procs[t.name] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.STDOUT)
         return procs
 
     def _stop_server(self, handle: ServerHandle) -> None:
+        if handle.container_name and not handle.reused:
+            subprocess.run(
+                ["docker", "stop", handle.container_name],
+                capture_output=True, timeout=30,
+            )
+            return
         if handle.proc is None:
             return
         handle.proc.terminate()

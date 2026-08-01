@@ -1,0 +1,17 @@
+# Contention study — CV tenant deps (build-plan §1.4).
+# Installed into a torch-capable venv (e.g. .venv-vllm) before a contention run.
+# NOT in requirements.txt / pyproject.toml: these are only for the multi-model
+# contention path, which is opt-in and hardware-heavy.
+#
+#   .venv-vllm/bin/pip install -r requirements-contention.txt
+#
+# System packages this does NOT cover (install separately):
+#   ffmpeg           — video transcode (workspace/contention/test_data/)
+#   Triton container — nvcr.io/nvidia/tritonserver:26.07-py3(+ -sdk for perf_analyzer)
+#                      pulled via docker; perf_analyzer runs from the -sdk image.
+
+ultralytics>=8.4        # YOLOv8 export → ONNX
+onnx>=1.16              # CV export graph
+onnxruntime-gpu         # portable CV baseline (ONNX backend parity check)
+tritonclient[grpc,http] # Triton readiness probe + optional client-side checks
+pillow>=10.2            # already present; CV input decode
