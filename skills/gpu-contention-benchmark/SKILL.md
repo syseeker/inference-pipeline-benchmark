@@ -38,7 +38,7 @@ read it first, update it as you complete a step, and commit the change.
 | 3 | Phase-0 concurrency probe + clock policy | ✅ built (`scripts/gpu_concurrency_probe.py` + unit tests). Validated on PRO 6000: MPS off → 0.28× (serialises, gate FAIL); MPS on → 1.94× (gate PASS); variance CoV 0.4% → 1 rep/scenario. Clock pinning itself stays a pre-flight step; the probe records clocks + fails on throttle |
 | 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
-| 6 | `bench coloc` orchestrator | 🟡 built + dry-run validated (`benchmarks/coloc.py`, `bench coloc --dry-run`, 24 unit tests). Enforces open-loop / one-sampler / shared-t0 / VRAM pre-flight; HTTP tenant path is live. **Pending:** one live vLLM+aiperf run to pin the per-request trace schema; Triton CV tenant server side is step 7 |
+| 6 | `bench coloc` orchestrator | ✅ HTTP path live-validated (`benchmarks/coloc.py`, `bench coloc`, 27 unit tests). End-to-end solo run on PRO 6000 via config: orchestrator launched the server, held t0, ran one DCGM sampler, aiperf-streamed 58 reqs → `llm.ndjson` (epoch ts + TTFT + ITL), achieved_rps 4.02 vs offered 4.0, no throttle. Pinned the real aiperf `{metadata,metrics}` schema. **Note:** contention tenants need `--streaming` (done) and a vllm backend **variant without the `--gpu-memory-utilization=0.90` pin** in `extra_args`, else per-tenant caps can't take effect. Triton CV tenant server side is step 7 |
 | 7 | Triton CV tenants | ⬜ not built |
 | 8 | Contention analysis (summary §10, `align_traces.py`) | ⬜ not built |
 

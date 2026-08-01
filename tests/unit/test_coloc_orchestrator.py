@@ -103,6 +103,18 @@ def test_server_cmd_triton_is_none():
     assert coloc.build_server_cmd(t) is None
 
 
+def test_server_cmd_injectable_executable():
+    # The orchestrator passes a venv-resolved path; the builder must use it.
+    cmd = coloc.build_server_cmd(_tenant(backend="vllm", frac=0.45),
+                                 vllm_bin="/repo/.venv-vllm/bin/vllm")
+    assert cmd[0] == "/repo/.venv-vllm/bin/vllm"
+
+
+def test_venv_bin_falls_back_to_bare_name():
+    # Unknown backend or missing venv ⇒ bare tool name (single-venv hosts).
+    assert coloc.venv_bin("nonexistent-backend", "vllm") == "vllm"
+
+
 # ── aiperf command builder (open-loop enforcement) ─────────────────────────
 
 def test_aiperf_is_open_loop(tmp_path):
@@ -114,6 +126,7 @@ def test_aiperf_is_open_loop(tmp_path):
     assert "--request-rate" in cmd and cmd[cmd.index("--request-rate") + 1] == "4.0"
     assert "--arrival-pattern" in cmd and cmd[cmd.index("--arrival-pattern") + 1] == "poisson"
     assert "--concurrency" not in cmd          # never closed-loop
+    assert "--streaming" in cmd                 # required for TTFT/ITL capture
     # --url must be the server root, /v1 stripped.
     assert cmd[cmd.index("--url") + 1] == "http://localhost:8001"
 
@@ -163,24 +176,65 @@ def test_driver_command_dispatch():
 
 # ── trace parsing / alignment ───────────────────────────────────────────────
 
-def test_parse_aiperf_records_maps_fields(tmp_path):
+def _aiperf_record(start_ns, end_ns, latency_ms, ttft_ms, tokens, *,
+                   cancelled=False, phase="profiling"):
+    """One AIPerf v0.11 {metadata, metrics} record, matching the live schema."""
+    return {
+        "metadata": {"request_start_ns": start_ns, "request_end_ns": end_ns,
+                     "was_cancelled": cancelled, "benchmark_phase": phase},
+        "metrics": {
+            "request_latency": {"value": latency_ms, "unit": "ms"},
+            "time_to_first_token": {"value": ttft_ms, "unit": "ms"},
+            "inter_token_latency": {"value": 5.0, "unit": "ms"},
+            "output_sequence_length": {"value": tokens, "unit": "tokens"},
+        },
+    }
+
+
+def test_parse_aiperf_records_maps_nested_schema(tmp_path):
     art = tmp_path / "llm.aiperf"
     art.mkdir()
-    # ns-since-epoch timestamps; latency in ns.
     rows = [
-        {"timestamp": 1_000_000_000_000_000, "request_latency": 50_000_000,
-         "time_to_first_token": 10_000_000, "output_tokens": 32},
-        {"timestamp": 1_000_000_100_000_000, "request_latency": 60_000_000,
-         "time_to_first_token": 12_000_000, "output_tokens": 30},
+        _aiperf_record(1_000_000_000_000_000, 1_000_000_050_000_000, 50.0, 10.0, 32),
+        _aiperf_record(1_000_000_100_000_000, 1_000_000_160_000_000, 60.0, 12.0, 30),
     ]
-    (art / "profile_export_aiperf.jsonl").write_text("\n".join(__import__("json").dumps(r) for r in rows))
+    (art / "profile_export.jsonl").write_text("\n".join(__import__("json").dumps(r) for r in rows))
     recs = coloc.parse_aiperf_records(art)
     assert len(recs) == 2
     assert recs[0]["t_start_ms"] == 1_000_000_000.0        # 1e15 ns → 1e9 ms
-    assert recs[0]["e2e_ms"] == 50.0
-    assert recs[0]["ttft_ms"] == 10.0
-    assert recs[0]["output_tokens"] == 32
     assert recs[0]["t_end_ms"] == 1_000_000_050.0
+    assert recs[0]["e2e_ms"] == 50.0                        # metrics.value already ms
+    assert recs[0]["ttft_ms"] == 10.0
+    assert recs[0]["itl_ms"] == 5.0
+    assert recs[0]["output_tokens"] == 32
+
+
+def test_parse_aiperf_drops_cancelled_and_warmup(tmp_path):
+    art = tmp_path / "llm.aiperf"
+    art.mkdir()
+    rows = [
+        _aiperf_record(1_000_000_000_000_000, 1_000_000_050_000_000, 50.0, 10.0, 32),
+        _aiperf_record(1_000_000_100_000_000, 1_000_000_160_000_000, 60.0, 12.0, 30, cancelled=True),
+        _aiperf_record(1_000_000_200_000_000, 1_000_000_260_000_000, 55.0, 11.0, 31, phase="warmup"),
+    ]
+    (art / "profile_export.jsonl").write_text("\n".join(__import__("json").dumps(r) for r in rows))
+    recs = coloc.parse_aiperf_records(art)
+    assert len(recs) == 1                                   # cancelled + warmup dropped
+    assert recs[0]["e2e_ms"] == 50.0
+
+
+def test_parse_aiperf_non_streaming_has_no_ttft(tmp_path):
+    art = tmp_path / "llm.aiperf"
+    art.mkdir()
+    rec = {"metadata": {"request_start_ns": 1_000_000_000_000_000,
+                        "request_end_ns": 1_000_000_050_000_000,
+                        "was_cancelled": False, "benchmark_phase": "profiling"},
+           "metrics": {"request_latency": {"value": 50.0, "unit": "ms"},
+                       "output_sequence_length": {"value": 32, "unit": "tokens"}}}
+    (art / "profile_export.jsonl").write_text(__import__("json").dumps(rec))
+    recs = coloc.parse_aiperf_records(art)
+    assert recs[0]["ttft_ms"] is None                       # no --streaming ⇒ no TTFT
+    assert recs[0]["e2e_ms"] == 50.0
 
 
 def test_parse_aiperf_records_empty_when_absent(tmp_path):

@@ -98,11 +98,31 @@ def preflight_vram(tenants: list[Tenant]) -> list[str]:
 
 # ─────────────────────────── command builders ──────────────────────────────
 
-def build_server_cmd(tenant: Tenant) -> list[str] | None:
+def venv_bin(backend: str, tool: str) -> str:
+    """Resolve a backend tool to its per-venv binary, e.g. vllm →
+    `.venv-vllm/bin/vllm`. The orchestrator's subprocesses don't inherit an
+    activated venv, so a bare name would hit a `FileNotFoundError` (or the wrong
+    binary). Falls back to the bare name for single-venv hosts, matching
+    gpu_probe.sh's convention."""
+    venvs = {"vllm": ".venv-vllm", "sglang": ".venv-sglang", "trtllm": ".venv-trtllm"}
+    venv = venvs.get(backend)
+    if venv:
+        p = REPO_ROOT / venv / "bin" / tool
+        if p.exists():
+            return str(p)
+    return tool
+
+
+def build_server_cmd(
+    tenant: Tenant, *, vllm_bin: str = "vllm", python_bin: str = "python",
+    trtllm_bin: str = "trtllm-serve",
+) -> list[str] | None:
     """Server launch command for an HTTP tenant, with its VRAM cap injected.
 
-    Returns None for Triton tenants — their server is a model repo, launched
-    out of band in step 7, not a per-tenant process here.
+    Executables are injectable so the orchestrator can pass venv-resolved paths
+    (the subprocess has no activated venv); the bare defaults keep unit tests
+    hermetic. Returns None for Triton tenants — their server is a model repo,
+    launched out of band in step 7, not a per-tenant process here.
     """
     r = tenant.round
     if r.transport == "triton":
@@ -110,13 +130,13 @@ def build_server_cmd(tenant: Tenant) -> list[str] | None:
 
     cap = tenant.gpu_memory_utilization
     if r.backend == "vllm":
-        cmd = ["vllm", "serve", r.hf_id, "--port", str(r.port), *r.launch_args]
+        cmd = [vllm_bin, "serve", r.hf_id, "--port", str(r.port), *r.launch_args]
         if cap is not None and not _has_flag(cmd, "--gpu-memory-utilization"):
             cmd += ["--gpu-memory-utilization", str(cap)]
         return cmd
     if r.backend == "sglang":
         cmd = [
-            "python", "-m", "sglang.launch_server",
+            python_bin, "-m", "sglang.launch_server",
             "--model-path", r.hf_id, "--port", str(r.port), *r.launch_args,
         ]
         if cap is not None and not _has_flag(cmd, "--mem-fraction-static"):
@@ -126,7 +146,7 @@ def build_server_cmd(tenant: Tenant) -> list[str] | None:
         trt_backend = r.trtllm_backend or "pytorch"
         trt_backend = "tensorrt" if trt_backend == "trtllm" else trt_backend
         return [
-            "trtllm-serve", r.hf_id, "--backend", trt_backend,
+            trtllm_bin, r.hf_id, "--backend", trt_backend,
             "--port", str(r.port), *r.launch_args,
         ]
     raise ValueError(f"tenant {tenant.name!r}: no server launcher for backend {r.backend!r}")
@@ -134,7 +154,7 @@ def build_server_cmd(tenant: Tenant) -> list[str] | None:
 
 def build_aiperf_cmd(
     *, base_url: str, model: str, tenant: Tenant, duration_s: int, artifact_dir: Path,
-    warmup: int = 3, seed: int = 0, endpoint_type: str = "chat",
+    warmup: int = 3, seed: int = 0, endpoint_type: str = "chat", aiperf_bin: str = "aiperf",
 ) -> list[str]:
     """AIPerf command for an open-loop HTTP tenant.
 
@@ -152,7 +172,7 @@ def build_aiperf_cmd(
     if root.endswith("/v1"):           # AIPerf --url is the server root, not /v1
         root = root[: -len("/v1")]
     cmd = [
-        "aiperf", "profile",
+        aiperf_bin, "profile",
         "--url", root,
         "--model", model,
         "--endpoint-type", endpoint_type,
@@ -163,9 +183,13 @@ def build_aiperf_cmd(
         "--random-seed", str(seed),
         "--output-artifact-dir", str(artifact_dir),
         "--ui", "none",
+        # Stream so per-request TTFT + ITL are recorded — without it AIPerf
+        # emits neither, and degradation_ratio_ttft_p95 cannot be computed.
+        "--streaming",
     ]
     if load.output_tokens is not None:
-        # Bound the decode length via the OpenAI request param.
+        # Bound the decode length via the OpenAI request param. Without a cap,
+        # requests don't finish inside --benchmark-duration and all cancel.
         cmd += ["--extra-inputs", f"max_tokens:{load.output_tokens}"]
     wl_input = _workload_input_file(tenant)
     if wl_input is not None:
@@ -206,13 +230,14 @@ def build_perf_analyzer_cmd(
 
 def driver_command(
     tenant: Tenant, *, base_url: str, model: str, duration_s: int, artifact_dir: Path,
-    warmup: int = 3, seed: int = 0, endpoint_type: str = "chat",
+    warmup: int = 3, seed: int = 0, endpoint_type: str = "chat", aiperf_bin: str = "aiperf",
 ) -> list[str]:
     """Dispatch a tenant to its load generator per the two-driver rule."""
     if tenant.driver == "aiperf":
         return build_aiperf_cmd(
             base_url=base_url, model=model, tenant=tenant, duration_s=duration_s,
             artifact_dir=artifact_dir, warmup=warmup, seed=seed, endpoint_type=endpoint_type,
+            aiperf_bin=aiperf_bin,
         )
     if tenant.driver == "perf_analyzer":
         return build_perf_analyzer_cmd(
@@ -228,55 +253,76 @@ def driver_command(
 # ─────────────────────────── trace parsing / alignment ─────────────────────
 
 def parse_aiperf_records(artifact_dir: Path) -> list[dict[str, Any]]:
-    """Best-effort per-request trace from an AIPerf artifact dir.
+    """Per-request trace from an AIPerf artifact dir's `profile_export.jsonl`.
 
-    AIPerf writes a per-request JSONL alongside the aggregate export; field
-    names vary by version, so we map defensively and skip records we can't read
-    rather than crash. Returns [] if no per-request file is found (the exact
-    schema is pinned in the first live run; the aggregate export still carries
-    achieved rate). Emits t_start_ms / t_end_ms on the shared epoch timeline.
+    Schema pinned against AIPerf v0.11 (live-validated): each line is
+    `{"metadata": {...}, "metrics": {...}}` where metadata carries epoch-ns
+    request_start_ns / request_end_ns + was_cancelled + benchmark_phase, and
+    each metric is `{"value": x, "unit": "ms"|"tokens"}` (latencies already in
+    ms, NOT ns). Warmup and cancelled records are dropped so only completed
+    profiling requests reach the trace. Emits t_start_ms / t_end_ms on the
+    shared epoch timeline. Returns [] if the file is absent.
     """
+    path = artifact_dir / "profile_export.jsonl"
+    if not path.exists():
+        # Fall back to any *.jsonl export if the canonical name changes.
+        alts = sorted(artifact_dir.glob("*export*.jsonl"))
+        if not alts:
+            return []
+        path = alts[0]
     records: list[dict[str, Any]] = []
-    candidates = sorted(artifact_dir.glob("*.jsonl")) + sorted(artifact_dir.glob("**/*.jsonl"))
-    for path in candidates:
-        if "aiperf" not in path.name and "export" not in path.name and "request" not in path.name:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
         try:
-            lines = path.read_text().splitlines()
-        except OSError:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
             continue
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            rec = _map_request_record(obj)
-            if rec is not None:
-                records.append(rec)
-        if records:
-            break
+        rec = _map_request_record(obj)
+        if rec is not None:
+            records.append(rec)
     return records
 
 
+def _metric_value(metrics: dict[str, Any], key: str) -> float | None:
+    """Pull `metrics.<key>.value` (AIPerf wraps every metric as {value, unit})."""
+    m = metrics.get(key)
+    if isinstance(m, dict) and m.get("value") is not None:
+        return float(m["value"])
+    return None
+
+
 def _map_request_record(obj: dict[str, Any]) -> dict[str, Any] | None:
-    """Map one AIPerf request object to the coloc ndjson row shape."""
-    start_ns = _first(obj, "timestamp", "start_ns", "request_start_ns", "start")
+    """Map one AIPerf `{metadata, metrics}` record to the coloc ndjson row.
+
+    Drops warmup and cancelled records — a cancelled request finished only
+    because the window closed, so counting it would inflate achieved_rps.
+    """
+    meta = obj.get("metadata") or {}
+    metrics = obj.get("metrics") or {}
+    if meta.get("was_cancelled"):
+        return None
+    if meta.get("benchmark_phase") not in (None, "profiling"):
+        return None
+    start_ns = meta.get("request_start_ns")
+    end_ns = meta.get("request_end_ns")
     if start_ns is None:
         return None
-    # AIPerf timestamps are ns since epoch; normalise to ms.
-    t_start_ms = float(start_ns) / 1e6
-    ttft_ns = _first(obj, "time_to_first_token", "ttft_ns", "ttft")
-    e2e_ns = _first(obj, "request_latency", "latency_ns", "e2e_ns", "latency")
-    t_end_ms = (t_start_ms + float(e2e_ns) / 1e6) if e2e_ns is not None else None
-    tokens = _first(obj, "output_tokens", "num_output_tokens", "output_token_count")
+    e2e_ms = _metric_value(metrics, "request_latency")               # already ms
+    tokens = _metric_value(metrics, "output_sequence_length")
+    if tokens is None:
+        tokens = _metric_value(metrics, "output_token_count")
     return {
-        "t_start_ms": t_start_ms,
-        "t_end_ms": t_end_ms,
-        "ttft_ms": (float(ttft_ns) / 1e6) if ttft_ns is not None else None,
-        "e2e_ms": (float(e2e_ns) / 1e6) if e2e_ns is not None else None,
+        "t_start_ms": float(start_ns) / 1e6,                         # epoch ns → ms
+        "t_end_ms": (float(end_ns) / 1e6) if end_ns is not None else None,
+        "ttft_ms": _metric_value(metrics, "time_to_first_token"),    # ms (streaming only)
+        "itl_ms": _metric_value(metrics, "inter_token_latency"),     # ms (streaming only)
+        "e2e_ms": e2e_ms,
         "output_tokens": int(tokens) if tokens is not None else None,
         "ok": True,
     }
@@ -482,7 +528,13 @@ class ColocationOrchestrator:
     # ---- server lifecycle --------------------------------------------------
 
     def _ensure_server(self, tenant: Tenant) -> ServerHandle:
-        cmd = build_server_cmd(tenant)
+        bk = tenant.round.backend
+        cmd = build_server_cmd(
+            tenant,
+            vllm_bin=venv_bin(bk, "vllm"),
+            python_bin=venv_bin(bk, "python"),
+            trtllm_bin=venv_bin(bk, "trtllm-serve"),
+        )
         if cmd is None:
             # Triton tenant — server launch is step 7. Assume an out-of-band
             # Triton server is already up on the tenant's URL.
@@ -522,6 +574,7 @@ class ColocationOrchestrator:
                 t, base_url=t.round.base_url, model=t.round.hf_id,
                 duration_s=coloc.duration_s, artifact_dir=art,
                 warmup=self.warmup, seed=self.seed,
+                aiperf_bin=venv_bin(t.round.backend, "aiperf"),
             )
             procs[t.name] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
         return procs
@@ -550,13 +603,6 @@ class ColocationOrchestrator:
 
 def _has_flag(cmd: list[str], flag: str) -> bool:
     return any(a == flag or a.startswith(flag + "=") for a in cmd)
-
-
-def _first(obj: dict[str, Any], *keys: str) -> Any:
-    for k in keys:
-        if k in obj and obj[k] is not None:
-            return obj[k]
-    return None
 
 
 def _workload_input_file(tenant: Tenant) -> Path | None:
