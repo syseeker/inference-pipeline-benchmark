@@ -1316,5 +1316,112 @@ def smoke(
     )
 
 
+@app.command(
+    help=(
+        "Run a co-residency (contention) window: launch N tenants on one GPU, "
+        "drive each open-loop, and merge their traces. --dry-run prints the run "
+        "plan (solo baselines first) without launching anything."
+    ),
+)
+def coloc(
+    gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
+    colocation: str = typer.Option(..., "--colocation", help="Name from the yaml `colocations:` block."),
+    solo_only: bool = typer.Option(False, "--solo-only", help="Run only the solo baselines (Phase 1)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the resolved plan; launch nothing."),
+    gpu_index: int = typer.Option(0, help="CUDA device index."),
+    seed: int = typer.Option(0, help="Load-generator random seed, for reproducibility."),
+    out: Path = typer.Option(None, help="Run root. Default: benchmarks/results/<gpu>/coloc/<colocation>/."),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    from benchmarks import coloc as coloc_mod
+    from benchmarks.scenario_config import load_gpu_config
+
+    try:
+        cfg = load_gpu_config(gpu)
+    except FileNotFoundError as e:
+        emit(command="coloc", status="error",
+             error={"code": EXIT_GENERIC, "remediation": str(e)},
+             json_out=json_out, exit_code=EXIT_GENERIC)
+
+    try:
+        runs = coloc_mod.plan_runs(cfg, [colocation], solo_only=solo_only)
+    except ValueError as e:
+        emit(command="coloc", status="error",
+             error={"code": EXIT_UNSUPPORTED, "remediation": str(e)},
+             json_out=json_out, exit_code=EXIT_UNSUPPORTED)
+
+    if not runs:
+        emit(command="coloc", status="skipped",
+             next_action=f"colocation {colocation!r} resolved to no runnable windows (all tenants skipped?).",
+             data={"gpu": gpu, "colocation": colocation}, json_out=json_out)
+
+    # Surface VRAM pre-flight issues in the plan so they're visible before a run.
+    plan = []
+    for c in runs:
+        issues = coloc_mod.preflight_vram(c.tenants)
+        plan.append({
+            "run_label": c.run_label,
+            "is_solo": c.is_solo,
+            "phase": c.phase,
+            "duration_s": c.duration_s,
+            "isolation": c.isolation,
+            "tenants": [
+                {"name": t.name, "backend": t.round.backend, "model": t.round.model_id,
+                 "driver": t.driver, "workload": t.workload,
+                 "offered_rps": t.load.rps, "arrival": t.load.pattern,
+                 "gpu_mem_frac": t.gpu_memory_utilization}
+                for t in c.tenants
+            ],
+            "preflight_issues": issues,
+        })
+
+    n_solo = sum(1 for p in plan if p["is_solo"])
+    n_coloc = len(plan) - n_solo
+
+    if dry_run:
+        emit(
+            command="coloc", status="ok",
+            next_action=(
+                f"plan: {n_solo} solo baseline(s) + {n_coloc} contention window(s). "
+                "Drop --dry-run to execute (needs the tenant servers / aiperf)."
+            ),
+            data={"gpu": gpu, "colocation": colocation, "n_solo": n_solo,
+                  "n_coloc": n_coloc, "plan": plan},
+            json_out=json_out,
+        )
+
+    # Live path — launch servers + drivers. Blocked cleanly if a pre-flight fails.
+    blocking = [p for p in plan if p["preflight_issues"]]
+    if blocking:
+        emit(
+            command="coloc", status="error",
+            error={"code": EXIT_GENERIC,
+                   "remediation": "VRAM pre-flight failed: "
+                                  + "; ".join(i for p in blocking for i in p["preflight_issues"])},
+            json_out=json_out, exit_code=EXIT_GENERIC,
+        )
+
+    run_root = out or (RESULTS_ROOT / gpu / "coloc" / colocation)
+    orch = coloc_mod.ColocationOrchestrator(gpu, gpu_index=gpu_index, seed=seed)
+    manifests: list[str] = []
+    try:
+        for i, c in enumerate(runs):
+            paths = coloc_mod.RunPaths(root=run_root / f"{c.run_label.replace(':', '-')}-{i}")
+            orch.run(c, paths)
+            manifests.append(str(paths.manifest))
+    except RuntimeError as e:
+        emit(command="coloc", status="error",
+             error={"code": EXIT_RUNTIME, "remediation": str(e)[:500]},
+             artifacts=manifests, json_out=json_out, exit_code=EXIT_RUNTIME)
+
+    emit(
+        command="coloc", status="ok",
+        artifacts=manifests,
+        next_action=f"ran {n_solo} baseline(s) + {n_coloc} window(s); re-run `bench summary --gpu {gpu}` for §10.",
+        data={"gpu": gpu, "colocation": colocation, "n_solo": n_solo, "n_coloc": n_coloc},
+        json_out=json_out,
+    )
+
+
 if __name__ == "__main__":
     app()
