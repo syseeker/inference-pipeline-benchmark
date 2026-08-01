@@ -1011,6 +1011,297 @@ def _extract_aiperf_row(data: Any, run_label: str, jpath: Path) -> dict[str, Any
 
 
 @app.command()
+# ──────────────────────────── §10 contention analysis ──────────────────────
+
+
+def _pct(vals: list[float], p: float) -> float | None:
+    if not vals:
+        return None
+    s = sorted(vals)
+    return s[min(int(len(s) * p / 100), len(s) - 1)]
+
+
+def _compute_trace_stats(records: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Latency percentiles from one tenant's .ndjson trace.
+
+    Handles both aiperf (per-request rows) and perf_analyzer (single aggregate
+    row with measured_rps + p50_ms/p95_ms).
+    """
+    if not records:
+        return {"e2e_p50": None, "e2e_p95": None, "ttft_p95": None, "achieved_rps": None}
+    if "measured_rps" in records[0]:
+        r = records[0]
+        return {
+            "e2e_p50": r.get("p50_ms"),
+            "e2e_p95": r.get("p95_ms"),
+            "ttft_p95": None,
+            "achieved_rps": r.get("measured_rps"),
+        }
+    e2e = [r["e2e_ms"] for r in records if r.get("e2e_ms") is not None]
+    ttft = [r["ttft_ms"] for r in records if r.get("ttft_ms") is not None]
+    return {
+        "e2e_p50": _pct(e2e, 50),
+        "e2e_p95": _pct(e2e, 95),
+        "ttft_p95": _pct(ttft, 95),
+        "achieved_rps": None,   # computed separately from achieved field in manifest
+    }
+
+
+def _load_coloc_runs(gpu_dir: Path) -> list[dict[str, Any]]:
+    """Load all coloc manifests + per-tenant trace stats under <gpu>/coloc/.
+
+    Returns a list of run dicts:
+      {
+        "manifest": {...},        # raw manifest.json
+        "run_dir": Path,
+        "tenant_stats": {         # keyed by tenant name
+          "<name>": {
+            "e2e_p50": float|None,
+            "e2e_p95": float|None,
+            "ttft_p95": float|None,
+            "achieved_rps": float|None,   # from trace stats (CV) or manifest
+            "offered_rps": float|None,    # from manifest tenant dict
+            "model_id": str,
+            "backend": str,
+          }
+        }
+      }
+    """
+    coloc_dir = gpu_dir / "coloc"
+    if not coloc_dir.is_dir():
+        return []
+    runs: list[dict[str, Any]] = []
+    for manifest_path in sorted(coloc_dir.rglob("manifest.json")):
+        run_dir = manifest_path.parent
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        tenant_stats: dict[str, Any] = {}
+        for t in manifest.get("tenants", []):
+            name = t["name"]
+            ndjson_path = run_dir / f"{name}.ndjson"
+            records: list[dict[str, Any]] = []
+            if ndjson_path.exists():
+                for line in ndjson_path.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+            stats = _compute_trace_stats(records)
+            # achieved_rps: prefer trace-reported (CV), else manifest value
+            if stats["achieved_rps"] is None:
+                stats["achieved_rps"] = t.get("achieved_rps")
+            stats["offered_rps"] = t.get("offered_rps")
+            stats["model_id"] = (t.get("round") or {}).get("model_id", "")
+            stats["backend"] = (t.get("round") or {}).get("backend", "")
+            tenant_stats[name] = stats
+        runs.append({"manifest": manifest, "run_dir": run_dir, "tenant_stats": tenant_stats})
+    return runs
+
+
+def _solo_key(tenant_stat: dict[str, Any]) -> tuple:
+    return (tenant_stat["backend"], tenant_stat["model_id"], tenant_stat["offered_rps"])
+
+
+def _build_solo_index(runs: list[dict[str, Any]]) -> dict[tuple, dict[str, Any]]:
+    """Map (backend, model_id, offered_rps) → tenant_stat for solo baselines."""
+    idx: dict[tuple, dict[str, Any]] = {}
+    for run in runs:
+        if not run["manifest"].get("is_solo"):
+            continue
+        for ts in run["tenant_stats"].values():
+            idx[_solo_key(ts)] = ts
+    return idx
+
+
+def _ratio(contention: float | None, solo: float | None) -> float | None:
+    if contention is None or solo is None or solo == 0:
+        return None
+    return contention / solo
+
+
+def _fmt_ratio(r: float | None) -> str:
+    if r is None:
+        return "  n/a"
+    arrow = "▲" if r > 1.05 else ("▼" if r < 0.95 else "≈")
+    return f"{arrow}{r:.2f}×"
+
+
+def _degradation_table(
+    runs: list[dict[str, Any]], solo_idx: dict[tuple, dict[str, Any]]
+) -> list[str]:
+    """§10a — one row per contention (colocation, tenant).
+
+    Columns: colocation | phase | tenant | model | backend | offered | achieved |
+             throughput_ret | e2e_p50_ratio | e2e_p95_ratio | ttft_p95_ratio
+    """
+    rows = []
+    for run in runs:
+        m = run["manifest"]
+        if m.get("is_solo"):
+            continue
+        coloc_id = m["colocation_id"]
+        phase = m.get("phase", "")
+        for tname, ts in run["tenant_stats"].items():
+            solo = solo_idx.get(_solo_key(ts))
+            thr_ret = _ratio(ts["achieved_rps"], (solo or {}).get("achieved_rps"))
+            e2e_p50_r = _ratio(ts["e2e_p50"], (solo or {}).get("e2e_p50"))
+            e2e_p95_r = _ratio(ts["e2e_p95"], (solo or {}).get("e2e_p95"))
+            ttft_p95_r = _ratio(ts["ttft_p95"], (solo or {}).get("ttft_p95"))
+            rows.append({
+                "coloc": coloc_id, "phase": phase, "tenant": tname,
+                "model": ts["model_id"], "backend": ts["backend"],
+                "offered": ts["offered_rps"], "achieved": ts["achieved_rps"],
+                "thr_ret": thr_ret,
+                "e2e_p50_r": e2e_p50_r, "e2e_p95_r": e2e_p95_r, "ttft_p95_r": ttft_p95_r,
+            })
+
+    if not rows:
+        return ["_No contention runs found — run `bench coloc` first._", ""]
+
+    def _v(v: float | None, suf: str = "") -> str:
+        return f"{v:.1f}{suf}" if v is not None else "n/a"
+
+    lines: list[str] = []
+    hdr = (
+        f"| {'Colocation':<22} | Ph | {'Tenant':<8} | {'Model':<24} | {'Bk':<6} "
+        f"| {'Off RPS':>7} | {'Ach RPS':>7} | {'Thr Ret':>8} "
+        f"| {'e2e p50':>8} | {'e2e p95':>8} | {'TTFT p95':>9} |"
+    )
+    sep = "|" + "|".join("-" * (len(c) - 1) + ":" for c in hdr.split("|")[1:-1]) + "|"
+    lines.append(hdr)
+    lines.append(sep)
+    for r in sorted(rows, key=lambda x: (x["phase"] or 0, x["coloc"], x["tenant"])):
+        lines.append(
+            f"| {r['coloc']:<22} | {str(r['phase'] or ''):<2} | {r['tenant']:<8} "
+            f"| {r['model']:<24} | {r['backend']:<6} "
+            f"| {_v(r['offered']):>7} | {_v(r['achieved']):>7} "
+            f"| {_fmt_ratio(r['thr_ret']):>8} "
+            f"| {_fmt_ratio(r['e2e_p50_r']):>8} | {_fmt_ratio(r['e2e_p95_r']):>8} "
+            f"| {_fmt_ratio(r['ttft_p95_r']):>9} |"
+        )
+    return lines
+
+
+def _contention_matrix(
+    runs: list[dict[str, Any]], solo_idx: dict[tuple, dict[str, Any]]
+) -> list[str]:
+    """§10b — e2e p95 degradation grouped by (victim model × aggressor model).
+
+    Only shown when ≥2 distinct model pairs exist across contention runs.
+    """
+    # Collect (victim_model, co_models_key) → [e2e_p95_ratio]
+    from collections import defaultdict
+    matrix: dict[tuple, list[float]] = defaultdict(list)
+    for run in runs:
+        m = run["manifest"]
+        if m.get("is_solo"):
+            continue
+        t_list = m.get("tenants", [])
+        co_models = sorted(set(
+            (t.get("round") or {}).get("model_id", "?") for t in t_list
+        ))
+        for tname, ts in run["tenant_stats"].items():
+            solo = solo_idx.get(_solo_key(ts))
+            r = _ratio(ts["e2e_p95"], (solo or {}).get("e2e_p95"))
+            if r is not None:
+                aggressor = tuple(m for m in co_models if m != ts["model_id"])
+                matrix[(ts["model_id"], aggressor)].append(r)
+
+    if len(matrix) < 2:
+        return []
+
+    lines = ["**e2e p95 degradation (victim × aggressors)**", ""]
+    lines.append("| Victim model | Aggressors | e2e p95 ratio (mean) |")
+    lines.append("|---|---|---|")
+    for (victim, aggressors), ratios in sorted(matrix.items()):
+        mean_r = sum(ratios) / len(ratios)
+        lines.append(
+            f"| {victim} | {', '.join(aggressors)} | {_fmt_ratio(mean_r)} |"
+        )
+    return lines
+
+
+def _envelope_section(runs: list[dict[str, Any]]) -> list[str]:
+    """§10c — colocations where achieved_rps < 0.95 × offered_rps (envelope crossings)."""
+    crossings = []
+    for run in runs:
+        m = run["manifest"]
+        if m.get("is_solo"):
+            continue
+        for tname, ts in run["tenant_stats"].items():
+            offered = ts["offered_rps"]
+            achieved = ts["achieved_rps"]
+            if offered and achieved and achieved < 0.95 * offered:
+                crossings.append({
+                    "coloc": m["colocation_id"],
+                    "tenant": tname,
+                    "model": ts["model_id"],
+                    "offered": offered,
+                    "achieved": achieved,
+                    "retention": achieved / offered,
+                })
+
+    if not crossings:
+        return ["_No envelope crossings detected (achieved_rps ≥ 0.95 × offered across all runs)._", ""]
+
+    lines = ["**Envelope crossings** — achieved_rps < 0.95 × offered_rps:", ""]
+    lines.append("| Colocation | Tenant | Model | Offered | Achieved | Retention |")
+    lines.append("|---|---|---|---|---|---|")
+    for c in sorted(crossings, key=lambda x: x["retention"]):
+        lines.append(
+            f"| {c['coloc']} | {c['tenant']} | {c['model']} "
+            f"| {c['offered']:.1f} | {c['achieved']:.1f} | {c['retention']:.2f}× |"
+        )
+    return lines
+
+
+def _coloc_section(gpu_dir: Path) -> list[str]:
+    """§10 — full contention-analysis section. Empty list if no coloc data."""
+    runs = _load_coloc_runs(gpu_dir)
+    if not runs:
+        return []
+
+    solo_idx = _build_solo_index(runs)
+    n_solo = sum(1 for r in runs if r["manifest"].get("is_solo"))
+    n_contention = len(runs) - n_solo
+
+    lines: list[str] = []
+    lines.append("## 10. Contention analysis")
+    lines.append("")
+    lines.append(
+        f"{n_solo} solo baseline(s), {n_contention} contention window(s). "
+        "Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%."
+    )
+    lines.append("")
+
+    lines.append("### 10a. Degradation table")
+    lines.append("")
+    lines.extend(_degradation_table(runs, solo_idx))
+    lines.append("")
+
+    matrix_lines = _contention_matrix(runs, solo_idx)
+    if matrix_lines:
+        lines.append("### 10b. Contention matrix")
+        lines.append("")
+        lines.extend(matrix_lines)
+        lines.append("")
+
+    lines.append("### 10c. Safe-operating envelope")
+    lines.append("")
+    lines.extend(_envelope_section(runs))
+    lines.append("")
+
+    return lines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def main(
     gpu: str = typer.Option(..., help="GPU profile name; reads benchmarks/results/<gpu>/"),
     results_dir: Path = typer.Option(Path("benchmarks/results"), help="Results root."),
@@ -1125,6 +1416,14 @@ def main(
     if aiperf_block:
         out.extend(aiperf_block)
         out.append("")
+
+    # Section 10: contention analysis — degradation table, matrix, envelope.
+    # No-op when no coloc/ results exist yet.
+    coloc_block = _coloc_section(gpu_dir)
+    if coloc_block:
+        out.append("---")
+        out.append("")
+        out.extend(coloc_block)
 
     summary_path = gpu_dir / "summary.md"
     summary_path.write_text("\n".join(out))
