@@ -356,7 +356,7 @@ read it first, update it as you complete a step, and commit the change.
 |---|---|---|
 | 1 | Customer brief + test data staged (`workspace/contention/`) | ✅ done |
 | 1b | Design decisions recorded (`reference/`) | ✅ done |
-| 2 | Video clips → H.264 at spec | ⏳ **run `workspace/contention/test_data/transcode_clips.sh` on the GPU instance** (needs ffmpeg) |
+| 2 | Video clips → H.264 at spec | ✅ done (`clip_3s_224.mp4` 224²/3f, `clip_10s_720p.mp4` 720p/40f, both H.264) |
 | 3 | Phase-0 concurrency probe + clock policy | ⬜ not built |
 | 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
