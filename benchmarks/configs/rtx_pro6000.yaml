@@ -916,29 +916,49 @@ colocations:
         workload: cv_detect_default
         load: {pattern: poisson, rps: 50}
 
+  # Tenants are spelled out rather than inherited from mix-llm-cv. `extends`
+  # merges tenants BY NAME, so overriding its `llm` tenant would have forced
+  # the name "llm" onto a VLM — and that label is what lands in the manifest
+  # and every summary row, where a reader would take it for a text model.
   mix-vlm-cv:
     phase: 3
-    extends: mix-llm-cv
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
     tenants:
-      - name: llm
+      - name: vlm
+        backend: vllm
         model: qwen2.5-vl-7b
         workload: vlm_video_long     # 40-frame encode = the prefill burst
         gpu_memory_utilization: 0.50
         load: {pattern: poisson, rps: 1}
       - name: cv
+        backend: triton
         model: dinov2-base           # bandwidth-bound neighbour
+        triton_backend: tensorrt
         workload: cv_embed
+        load: {pattern: poisson, rps: 50}
 
+  # Spelled out for the same reason as mix-vlm-cv: inheriting would have named
+  # a document model "llm".
   mix-ilm-cv:
     phase: 3
-    extends: mix-llm-cv
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
     tenants:
-      - name: llm
+      - name: ilm
         backend: triton              # kosmos-2.5 has no vLLM/SGLang support
         model: kosmos-2.5
         triton_backend: python
         workload: ilm_document
         load: {pattern: poisson, rps: 2}
+      - name: cv
+        backend: triton
+        model: yolov8-l
+        triton_backend: tensorrt
+        workload: cv_detect_default
+        load: {pattern: poisson, rps: 50}
 
   # Video VLM next to a document model — the two compute-heavy categories,
   # with no bandwidth-bound tenant between them to absorb the burst. §3

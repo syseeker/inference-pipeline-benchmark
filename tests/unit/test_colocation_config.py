@@ -122,13 +122,73 @@ def test_vary_on_model_covers_the_size_ladder(cfg):
 
 def test_extends_merges_tenants_by_name_not_by_position(cfg):
     """A child overriding one field of one tenant must inherit the rest —
-    positional merging would silently drop the parent's settings."""
-    coloc = next(r for r in _coloc_runs(cfg, "mix-vlm-cv") if not r.is_solo)
-    cv = next(t for t in coloc.tenants if t.name == "cv")
+    positional merging would silently drop the parent's settings.
 
-    assert cv.round.model_id == "dinov2-base", "child override applied"
-    assert cv.load.rps == 50.0, "parent load inherited"
-    assert cv.round.backend == "triton", "parent backend inherited"
+    cross-memory-pressure-kv13 is the sharpest case in the config: it extends
+    -kv03 and overrides nothing but the two caps, so every model, workload and
+    rate has to survive the merge untouched. That is also the invariant the
+    whole curve rests on — if a model changed between rungs, the curve would
+    be measuring the model rather than the KV cache.
+    """
+    coloc = next(r for r in _coloc_runs(cfg, "cross-memory-pressure-kv13")
+                 if not r.is_solo)
+    anchor = next(t for t in coloc.tenants if t.name == "anchor")
+    neighbour = next(t for t in coloc.tenants if t.name == "neighbour")
+
+    assert anchor.gpu_memory_utilization == 0.58, "child override applied"
+    assert anchor.round.model_id == "qwen2.5-72b", "parent model inherited"
+    assert anchor.load.rps == 2.0, "parent load inherited"
+    assert neighbour.gpu_memory_utilization == 0.22, "child override applied"
+    assert neighbour.round.model_id == "qwen2.5-7b", "parent model inherited"
+    assert neighbour.workload == "llm_short", "parent workload inherited"
+
+
+# ── tenant naming ────────────────────────────────────────────────────────────
+
+def test_tenant_names_match_what_they_actually_run(cfg):
+    """A tenant's name is its label in the manifest and in every summary row,
+    so a VLM called "llm" is a mislabel a reader cannot see through.
+
+    This regressed once: `extends` merges tenants BY NAME, so overriding
+    mix-llm-cv's `llm` tenant to hold kosmos-2.5 forced the name "llm" onto a
+    document model. Spelling the tenants out instead of inheriting is the fix,
+    and this test is what stops the shortcut being taken again.
+    """
+    CV = {"yolov8-l", "yolov8-n", "dinov2-base", "dinov2-large",
+          "rfdetr-medium", "paddleocr"}
+    ILM = {"kosmos-2.5"}
+    VLM = {"qwen2.5-vl-7b", "qwen2.5-vl-72b", "gemma-4-31b-it-fp8"}
+    # Role names that deliberately describe a position in the experiment
+    # rather than a model category.
+    ROLE_NAMES = {"anchor", "neighbour", "subject"}
+
+    def category(model_id):
+        if model_id in CV:
+            return "cv"
+        if model_id in ILM:
+            return "ilm"
+        if model_id in VLM:
+            return "vlm"
+        return "llm"
+
+    bad = []
+    for name in cfg["colocations"]:
+        for coloc in _coloc_runs(cfg, name):
+            if coloc.is_solo:
+                continue
+            for t in coloc.tenants:
+                stem = t.name.split("_")[0].rstrip("0123456789")
+                if stem in ROLE_NAMES:
+                    continue
+                expected = category(t.round.model_id)
+                # An image-language WORKLOAD on a video-capable VLM is a
+                # legitimate ILM role — judge by the job, not just the weights.
+                if expected == "vlm" and stem == "ilm" and t.workload == "ilm_document":
+                    continue
+                if stem != expected:
+                    bad.append(f"{name}: tenant {t.name!r} runs "
+                               f"{t.round.model_id} ({expected})")
+    assert not bad, "tenant names disagree with their models:\n  " + "\n  ".join(sorted(set(bad)))
 
 
 def test_rps_sweep_on_star_moves_every_tenant_together(cfg):
