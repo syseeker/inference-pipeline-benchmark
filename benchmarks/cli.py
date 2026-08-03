@@ -425,6 +425,13 @@ def sweep(
     variants: str = typer.Option(None, help="Variant set (e.g. 'baseline eager')."),
     scenarios_dir: Path = typer.Option(None, help="Override scenarios source dir."),
     nitrogen_ckpt_path: Path = typer.Option(None, help="Pre-downloaded ng.pt path (exports NITROGEN_CKPT_PATH for the run)."),
+    # Default ON, matching `bench coloc`. A sweep costs minutes to hours of GPU
+    # time and regenerating the summary costs seconds — and a stale summary.md
+    # is a silent trap: you read it, it does not contain the run you just paid
+    # for, and nothing tells you so.
+    summary_after: bool = typer.Option(
+        True, "--summary/--no-summary",
+        help="Regenerate benchmarks/results/<gpu>/summary.md when the sweep finishes (default: on)."),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     script = REPO_ROOT / "scripts" / "run_all_scenarios.sh"
@@ -458,12 +465,23 @@ def sweep(
             json_out=json_out,
             exit_code=EXIT_RUNTIME,
         )
+    # A summary failure must not mask a sweep that succeeded — the GPU time is
+    # already spent, and the runs are on disk either way.
+    summary_error = None
+    if summary_after:
+        sres = _regen_summary(gpu, capture=json_out)
+        if sres.returncode != 0:
+            summary_error = (sres.stderr or "summary regen failed").strip()[:400]
     emit(
         command="sweep",
         status="ok",
         artifacts=[str(summary_path)] if summary_path.exists() else [],
-        next_action=f"bench summary --gpu {gpu}   # or read {summary_path}",
-        data={"gpu": gpu, "sweep": sweep_name, "backends": backends},
+        next_action=(f"summary regen FAILED: {summary_error}; run `bench summary --gpu {gpu}`"
+                     if summary_error else
+                     (f"read {summary_path}" if summary_after
+                      else f"bench summary --gpu {gpu}   # or read {summary_path}")),
+        data={"gpu": gpu, "sweep": sweep_name, "backends": backends,
+              "summary_error": summary_error},
         json_out=json_out,
     )
 
@@ -1396,7 +1414,7 @@ def select_colocations(
         "benchmarks/results/<gpu>/coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/ "
         "and shared solo baselines in "
         "coloc/_baselines/solo-<backend>-<model>@<rps>-<hash>/. "
-        "For an overnight study: --all --continue-on-error --resume --summary."
+        "For an overnight study: --all --continue-on-error --resume."
     ),
 )
 def coloc(
@@ -1414,8 +1432,12 @@ def coloc(
         help="Record a failed run and keep going. Exits non-zero at the end if anything failed."),
     resume: bool = typer.Option(
         False, "--resume", help="Skip runs whose manifest.json already exists on disk."),
+    # Default ON. A run costs minutes to hours of GPU time; regenerating the
+    # summary costs seconds, and a stale summary.md is a silent trap — you read
+    # it, it does not contain the run you just paid for, and nothing says so.
     summary_after: bool = typer.Option(
-        False, "--summary", help="Regenerate benchmarks/results/<gpu>/summary.md when the plan finishes."),
+        True, "--summary/--no-summary",
+        help="Regenerate benchmarks/results/<gpu>/summary.md when the plan finishes (default: on)."),
     gpu_index: int = typer.Option(
         0, help="Fallback CUDA device index. Sampling follows each tenant's `device:`; "
                 "this is only used when a window declares no placement at all."),

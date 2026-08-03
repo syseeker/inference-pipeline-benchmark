@@ -478,7 +478,7 @@ bench coloc --gpu rtx_pro6000 --all --dry-run
 # dedupes solo baselines across all of them (~74 runs / ~3h of GPU saved).
 # --resume skips runs that already have a manifest.json; --continue-on-error
 # records a failure and keeps going, exiting non-zero at the end.
-bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume --summary
+bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 
 # Phase 1 — solo baselines, at the SAME offered rate as the contention runs
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --solo-only

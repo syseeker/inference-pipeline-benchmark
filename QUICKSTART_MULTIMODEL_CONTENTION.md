@@ -228,6 +228,30 @@ silently rather than loudly.
 
 ---
 
+## Before you start the long run — 15 minutes that de-risk the night
+
+Do **not** lead with `--all`. These four checks cost a quarter of an hour and
+each one fails in a way that would otherwise waste the whole study:
+
+```bash
+# 1. Does the plan resolve and does the setup hold? (no GPU used)
+bench coloc --gpu rtx_pro6000 --all --dry-run
+
+# 2. THE GATE. ~0.28x means MPS is not active — stop, fix, re-run.
+python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
+
+# 3. First live two-tenant window, with a real Triton container.
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
+
+# 4. Is the video actually being sent? input_sequence_length in the
+#    thousands, not ~30.
+bench coloc --gpu rtx_pro6000 --colocation cross-vlm-prefill-vs-llm --solo-only
+```
+
+Only then start the study below and leave it running.
+
+---
+
 ## Step 8 — Run the study
 
 **Prompt:**
@@ -239,11 +263,11 @@ silently rather than loudly.
 bench coloc --gpu rtx_pro6000 --all --dry-run
 
 # The whole study, one command. ~163 runs; budget several hours.
-bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume --summary
+bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 
 # Or phase by phase (--phase is repeatable, and composes):
-bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --resume --summary
-bench coloc --gpu rtx_pro6000 --phase 4 --resume --summary
+bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --resume
+bench coloc --gpu rtx_pro6000 --phase 4 --resume
 
 # Or name them explicitly (--colocation is repeatable):
 bench coloc --gpu rtx_pro6000 --colocation mix-full --colocation cross-size-scaling

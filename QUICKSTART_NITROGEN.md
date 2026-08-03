@@ -112,7 +112,9 @@ If this fails, **stop and fix the env** — the sweep won't recover.
    - First FP8 round triggers `ensure_artifact()` → downloads the calibrated ONNX from <https://huggingface.co/syseeker-at-nv/nitrogen-quant> (~488 MB, one-time per precision).
    - First TRT round triggers `_build_trt_plan_from_onnx()` → compiles a per-GPU `.plan` in ~10s, cached.
    - `nitrogen-tensorrt + nvfp4` row skipped: pinned out via `unsupported_backends` (TRT 10.16 missing FP4 plugin).
-3. Six rows populated; `bench summary --gpu rtx_pro6000 --json` regenerates `summary.md`.
+3. Six rows populated. `bench sweep` regenerates `summary.md` itself when it
+   finishes — pass `--no-summary` to skip, or `bench summary --gpu rtx_pro6000`
+   to rebuild it on demand.
 
 **What to expect — the headline (example numbers from RTX PRO 6000; yours will vary by GPU):**
 
@@ -182,7 +184,9 @@ sims per GPU?
 1. `bench setup --backend vllm` (one-time; pulls AIPerf alongside).
 2. Start a vLLM server (`bench smoke --backend vllm --model qwen3-vl-32b-fp8 ...` or your own launch).
 3. `bench load-test --gpu rtx_pro6000 --backend vllm --model Qwen/Qwen3-VL-32B-Instruct-FP8 --concurrency "1,4,16,32" --json`.
-4. `bench summary --gpu rtx_pro6000 --json` → section 9 (Concurrency profile) populates.
+4. `bench summary --gpu rtx_pro6000 --json` → section 9 (Concurrency profile)
+   populates. (`bench load-test` does not regenerate on its own; `sweep` and
+   `coloc` do.)
 
 **What to expect:**
 - AIPerf writes `profile_export_aiperf.json` under `benchmarks/results/<gpu>/aiperf/<run>/`.

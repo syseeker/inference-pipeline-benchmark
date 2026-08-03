@@ -81,7 +81,7 @@ the request rate each is driven at.
 ```bash
 python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000   # gate: do tenants really overlap?
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv       # one colocation
-bench coloc --gpu rtx_pro6000 --all --resume --summary      # the whole study, one command
+bench coloc --gpu rtx_pro6000 --all --resume      # the whole study, one command
 bench summary --gpu rtx_pro6000                             # §10 = contention
 ```
 

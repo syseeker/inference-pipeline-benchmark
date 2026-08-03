@@ -18,7 +18,7 @@ and the walkthrough tells you what to expect on disk.
 | Image+text | Screenshot + instruction | Schema-valid action sequence | Yes — 3 game scenarios | `tests/smoke/scenarios/` |
 | Video+text | Short video + question | Free-form analysis | You provide the videos | `tests/smoke/scenarios_video/` |
 
-Both use the same `bench setup → bench smoke → bench sweep → bench summary`
+Both use the same `bench setup → bench smoke → bench sweep`
 flow. The only difference is `--scenarios-dir`. You can run one or both.
 
 ---
@@ -243,8 +243,9 @@ so you can read the tradeoff directly from `summary.md`.
 > "Read summary.md and explain the winner and the surprises."
 
 **What the agent does:**
-1. `bench summary --gpu rtx_pro6000 --json` → regenerates
-   `benchmarks/results/rtx_pro6000/summary.md`.
+1. Reads `benchmarks/results/rtx_pro6000/summary.md`, which `bench sweep`
+   regenerated when it finished. `bench summary --gpu rtx_pro6000 --json`
+   rebuilds it on demand.
 2. Reads Core findings, §1 (Decision metrics), §5 (GPU resource).
 3. Applies the house style: winner first; under-performers get "why" + "how to improve."
 
@@ -274,7 +275,8 @@ For image backends with a running server:
 **What the agent does:**
 1. Starts vLLM (or confirms it is already running).
 2. `bench load-test --gpu rtx_pro6000 --backend vllm --model Qwen/Qwen3-VL-32B-Instruct-FP8 --concurrency "1,4,16,32" --json`.
-3. `bench summary --gpu rtx_pro6000 --json` → §9 (Concurrency profile) populates.
+3. `bench summary --gpu rtx_pro6000 --json` → §9 (Concurrency profile)
+   populates. (`bench load-test` does not regenerate on its own.)
 
 **What to expect:**
 - AIPerf writes `profile_export_aiperf.json` under
