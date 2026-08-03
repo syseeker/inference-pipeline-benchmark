@@ -62,32 +62,45 @@ degradation ratio can be built on. Full explanation in
 These two phases overlap in the original design, and we implement them as one
 family rather than two.
 
-| Their experiment | Status |
-|---|---|
-| Ph2 `concurrency-llm` — 2 LLMs, c1→16 | ⚠️ reframed as an **rps** sweep |
-| Ph2 `concurrency-cv` — 3 CV models, rps 1→200 | ✅ `same-cv`, already open-loop in their design |
-| Ph2 `concurrency-vlm` — 2 VLMs | ⚠️ reframed as rps |
-| Ph2 `concurrency-ilm` — 2 ILMs | ⚠️ reframed as rps |
-| Ph3 `mix-llm-only` — 3 LLMs at fixed c4 | ⚠️ folded into the Ph2 sweep |
-| Ph3 `mix-cv-only` — 4 CV models at fixed rps 50 | ⚠️ folded into the Ph2 sweep |
+Four colocations replace six of their experiments. `c4` below is their
+notation — `concurrency_llm: 4`, four requests in flight.
 
-**Why folded.** Phase 3's `*-only` entries are a single fixed-load point on
-the curve Phase 2 already sweeps:
+| Their experiment | Their load | Becomes | Our sweep |
+|---|---|---|---|
+| Ph2 `concurrency-llm` — 2 LLMs | c1→16 | `same-llm` | rps 1 / 4 / 16 / 64 |
+| Ph3 `mix-llm-only` — 3 LLMs | fixed c4 | `same-llm` | *(a point on the curve above)* |
+| Ph2 `concurrency-cv` — 3 CV models | rps 1→200 | `same-cv` | rps 1 / 10 / 50 / 200 |
+| Ph3 `mix-cv-only` — 4 CV models | fixed rps 50 | `same-cv` | *(the rps=50 row)* |
+| Ph2 `concurrency-vlm` — 2 VLMs | c1→8 | `same-vlm` | rps 0.5 / 1 / 2 / 4 |
+| Ph2 `concurrency-ilm` — 2 ILMs | c1→8 | `same-ilm` | rps 1 / 2 / 4 / 8 |
 
-| | Models | Load |
-|---|---|---|
-| Ph2 `concurrency-llm` | qwen2.5-7b, gemma2-9b | swept c1→16 |
-| Ph3 `mix-llm-only` | + qwen2.5-14b | fixed c4 |
+**Why folded.** Each Phase 3 `*-only` entry is a single fixed-load point on a
+curve Phase 2 already sweeps with the same models. Building both means running
+a colocation twice to get a point we already have.
 
-Implementing them separately means running the same colocation twice to get a
-point we already have. Instead there are four same-category colocations —
-`same-llm`, `same-cv`, `same-vlm`, `same-ilm` — each with an rps sweep. Phase
-2 is the whole curve; Phase 3's entry is the rps=50 row of it.
+**How exactly they fold, though, depends on which one.**
 
-**Why rps and not concurrency.** Phase 2 is looking for the saturation point.
-Under open-loop load that is exactly where `achieved_rps` falls below
-`offered_rps` — the same answer the customer wanted, from ratios that are
-still valid. It also comes free, with no extra experiment.
+- **CV folds exactly.** The customer specified CV load in **rps**, and
+  `same-cv` sweeps their exact values — so `mix-cv-only` at rps 50 is
+  literally the rps=50 row of `same-cv`. Nothing is lost.
+
+- **LLM, VLM and ILM do not fold to a specific row**, because the customer
+  specified those in **concurrency**, and concurrency has no fixed rps
+  equivalent. They are related by Little's law — `concurrency ≈ rps × latency`
+  — and latency is the thing under test, which changes with contention. So
+  "c4" does not pick out a point on an rps curve; it names a *moving* point
+  that slides as the GPU slows down.
+
+  That is not a translation problem, it is the actual reason closed-loop is
+  disqualified. Our sweep brackets the range their curve covered instead of
+  reproducing it point-for-point.
+
+**Why rps and not concurrency.** Phase 2 is hunting the saturation point. Under
+open-loop load that is exactly where `achieved_rps` falls below `offered_rps` —
+the same answer the customer wanted, from ratios that are still valid, and it
+comes free with no extra experiment. Under closed-loop it is not measurable at
+all: a client holding concurrency fixed slows its own send rate as the GPU
+slows, so it never saturates anything and the curve describes the client.
 
 ---
 
