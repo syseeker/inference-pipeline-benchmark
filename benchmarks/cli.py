@@ -1357,10 +1357,13 @@ def coloc(
              next_action=f"colocation {colocation!r} resolved to no runnable windows (all tenants skipped?).",
              data={"gpu": gpu, "colocation": colocation}, json_out=json_out)
 
-    # Surface VRAM pre-flight issues in the plan so they're visible before a run.
+    # Surface pre-flight issues in the plan so they're visible before a run —
+    # both the VRAM plan and the workload payloads, since a missing prompt file
+    # otherwise degrades silently to aiperf's synthetic dataset.
     plan = []
     for c in runs:
-        issues = coloc_mod.preflight_vram(c.tenants)
+        issues = coloc_mod.preflight_vram(c.tenants) + coloc_mod.preflight_workload_payloads(
+            c.tenants)
         plan.append({
             "run_label": c.run_label,
             "is_solo": c.is_solo,
@@ -1380,26 +1383,32 @@ def coloc(
     n_solo = sum(1 for p in plan if p["is_solo"])
     n_coloc = len(plan) - n_solo
 
+    # A dry run is how someone checks a plan before burning GPU time, so a
+    # blocking pre-flight has to be its headline, not a field buried in `plan`.
+    blocked = sorted({i for p in plan for i in p["preflight_issues"]})
+
     if dry_run:
         emit(
-            command="coloc", status="ok",
+            command="coloc", status="error" if blocked else "ok",
             next_action=(
                 f"plan: {n_solo} solo baseline(s) + {n_coloc} contention window(s). "
-                "Drop --dry-run to execute (needs the tenant servers / aiperf)."
+                + ("PRE-FLIGHT WOULD BLOCK THIS RUN: " + "; ".join(blocked) if blocked
+                   else "Drop --dry-run to execute (needs the tenant servers / aiperf).")
             ),
             data={"gpu": gpu, "colocation": colocation, "n_solo": n_solo,
-                  "n_coloc": n_coloc, "plan": plan},
+                  "n_coloc": n_coloc, "plan": plan, "preflight_issues": blocked},
+            error=({"code": EXIT_GENERIC,
+                    "remediation": "pre-flight failed: " + "; ".join(blocked)}
+                   if blocked else None),
             json_out=json_out,
+            exit_code=EXIT_GENERIC if blocked else EXIT_OK,
         )
 
     # Live path — launch servers + drivers. Blocked cleanly if a pre-flight fails.
-    blocking = [p for p in plan if p["preflight_issues"]]
-    if blocking:
+    if blocked:
         emit(
             command="coloc", status="error",
-            error={"code": EXIT_GENERIC,
-                   "remediation": "VRAM pre-flight failed: "
-                                  + "; ".join(i for p in blocking for i in p["preflight_issues"])},
+            error={"code": EXIT_GENERIC, "remediation": "pre-flight failed: " + "; ".join(blocked)},
             json_out=json_out, exit_code=EXIT_GENERIC,
         )
 

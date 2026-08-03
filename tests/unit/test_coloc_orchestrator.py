@@ -966,3 +966,161 @@ def test_run_writes_environment_and_mps_warning_to_manifest(tmp_path, monkeypatc
     assert on_disk["environment"]["mps"]["detected"] is False
     assert any("MPS" in w for w in on_disk["warnings"])
     assert manifest["warnings"] == on_disk["warnings"]
+
+
+# ── workload payloads ───────────────────────────────────────────────────────
+#
+# The bug these cover: nothing read a workload's `prompts:`/`data:`, so every
+# LLM/VLM tenant ran on aiperf's synthetic dataset and the video clips were
+# never sent — silently, with plausible numbers.
+
+import pathlib  # noqa: E402
+
+import pytest  # noqa: E402
+
+from benchmarks.scenario_config import load_gpu_config  # noqa: E402
+
+REPO_ROOT = pathlib.Path(coloc.__file__).resolve().parents[1]
+PROMPTS_DIR = REPO_ROOT / "workspace" / "contention" / "prompts"
+
+# The counts the rtx_pro6000.yaml comments assert, and the customer's
+# experiment_config.json actually contains.
+EXPECTED_PROMPT_COUNTS = {
+    "llm_short": 3, "llm_long": 2, "vlm_video": 2, "ilm_document": 2,
+}
+
+
+def _wl_tenant(name="vlm", workload="vlm_video_long", spec=None, driver="aiperf", **kw):
+    t = _tenant(name=name, workload=workload, driver=driver, **kw)
+    t.workload_spec = dict(spec or {})
+    return t
+
+
+@pytest.mark.parametrize("name,count", sorted(EXPECTED_PROMPT_COUNTS.items()))
+def test_generated_prompt_files_parse_with_the_documented_counts(name, count):
+    path = PROMPTS_DIR / f"{name}.jsonl"
+    assert path.exists(), f"{path} missing — run scripts/build_contention_prompts.py"
+    lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
+    assert len(lines) == count
+    for ln in lines:
+        obj = json.loads(ln)
+        # single_turn shape: text only in the checked-in file; media is paired
+        # per run, because two workloads share this file with different clips.
+        assert set(obj) == {"text"}
+        assert isinstance(obj["text"], str) and obj["text"].strip()
+
+
+def test_the_real_yaml_workloads_have_every_payload_on_disk():
+    """The pre-flight, run against the shipped config: if this fails, the box is
+    about to run a study whose prompts or clips are not there."""
+    cfg = load_gpu_config("rtx_pro6000")
+    tenants = []
+    for wl_name, spec in (cfg.get("workloads") or {}).items():
+        tenants.append(_wl_tenant(name=wl_name, workload=wl_name, spec=spec))
+    assert coloc.preflight_workload_payloads(tenants) == []
+
+
+def test_video_workload_materialises_absolute_video_paths(tmp_path):
+    clip = REPO_ROOT / "workspace/contention/test_data/vlm/clip_10s_720p.mp4"
+    t = _wl_tenant(spec={"prompts": ["workspace/contention/prompts/vlm_video.jsonl"],
+                         "data": [str(clip)]})
+    out = coloc.materialise_workload_input(t, tmp_path)
+    rows = [json.loads(ln) for ln in out.read_text().splitlines() if ln.strip()]
+    assert len(rows) == EXPECTED_PROMPT_COUNTS["vlm_video"]
+    for r in rows:
+        assert set(r) == {"text", "video"}
+        assert pathlib.Path(r["video"]).is_absolute()
+        assert r["video"] == str(clip.resolve())
+
+
+def test_image_workload_materialises_the_image_field(tmp_path):
+    t = _wl_tenant(name="ilm", workload="ilm_document", spec={
+        "prompts": ["workspace/contention/prompts/ilm_document.jsonl"],
+        "data": ["workspace/contention/test_data/cv/sample_document.png"],
+    })
+    out = coloc.materialise_workload_input(t, tmp_path)
+    rows = [json.loads(ln) for ln in out.read_text().splitlines() if ln.strip()]
+    assert rows and all(set(r) == {"text", "image"} for r in rows)
+    assert all(pathlib.Path(r["image"]).is_absolute() for r in rows)
+
+
+def test_shared_prompts_with_different_clips_give_different_files(tmp_path):
+    """vlm_video_short and vlm_video_long share one prompts file — the combined
+    file cannot be a static artifact, or one of them would send the wrong clip."""
+    prompts = ["workspace/contention/prompts/vlm_video.jsonl"]
+    short = _wl_tenant(name="vlm_s", workload="vlm_video_short", spec={
+        "prompts": prompts, "data": ["workspace/contention/test_data/vlm/clip_3s_224.mp4"]})
+    long_ = _wl_tenant(name="vlm_l", workload="vlm_video_long", spec={
+        "prompts": prompts, "data": ["workspace/contention/test_data/vlm/clip_10s_720p.mp4"]})
+    a = coloc.materialise_workload_input(short, tmp_path)
+    b = coloc.materialise_workload_input(long_, tmp_path)
+    assert a != b
+    assert a.read_text() != b.read_text()
+    assert "clip_3s_224.mp4" in a.read_text()
+    assert "clip_10s_720p.mp4" in b.read_text()
+
+
+def test_build_aiperf_cmd_emits_input_file_for_a_workload_with_prompts(tmp_path):
+    """The regression test for the bug: no --input-file ⇒ synthetic prompts."""
+    t = _wl_tenant(spec={"prompts": ["workspace/contention/prompts/vlm_video.jsonl"],
+                         "data": ["workspace/contention/test_data/vlm/clip_10s_720p.mp4"]})
+    path = coloc.materialise_workload_input(t, tmp_path)
+    cmd = coloc.build_aiperf_cmd(base_url="http://localhost:8001/v1", model="m", tenant=t,
+                                 duration_s=60, artifact_dir=tmp_path)
+    assert "--input-file" in cmd
+    assert cmd[cmd.index("--input-file") + 1] == str(path)
+    assert cmd[cmd.index("--custom-dataset-type") + 1] == "single_turn"
+
+
+def test_build_aiperf_cmd_has_no_input_file_without_prompts(tmp_path):
+    t = _wl_tenant(name="llm", workload="synthetic", spec={})
+    assert coloc.materialise_workload_input(t, tmp_path) is None
+    cmd = coloc.build_aiperf_cmd(base_url="http://localhost:8001/v1", model="m", tenant=t,
+                                 duration_s=60, artifact_dir=tmp_path)
+    assert "--input-file" not in cmd
+
+
+def test_preflight_names_the_workload_and_the_missing_prompt_file():
+    t = _wl_tenant(name="llm", workload="llm_short",
+                   spec={"prompts": ["workspace/contention/prompts/nope.jsonl"]})
+    issues = coloc.preflight_workload_payloads([t])
+    assert len(issues) == 1
+    assert "llm_short" in issues[0] and "nope.jsonl" in issues[0]
+    assert "build_contention_prompts.py" in issues[0]
+
+
+def test_preflight_flags_a_missing_data_clip():
+    t = _wl_tenant(spec={"prompts": ["workspace/contention/prompts/vlm_video.jsonl"],
+                         "data": ["workspace/contention/test_data/vlm/missing.mp4"]})
+    issues = coloc.preflight_workload_payloads([t])
+    assert len(issues) == 1
+    assert "vlm_video_long" in issues[0] and "missing.mp4" in issues[0]
+
+
+def test_preflight_passes_when_everything_is_present():
+    t = _wl_tenant(spec={"prompts": ["workspace/contention/prompts/vlm_video.jsonl"],
+                         "data": ["workspace/contention/test_data/vlm/clip_10s_720p.mp4"]})
+    assert coloc.preflight_workload_payloads([t]) == []
+
+
+def test_unknown_media_type_fails_loudly(tmp_path):
+    blob = tmp_path / "payload.bin"
+    blob.write_bytes(b"")
+    t = _wl_tenant(spec={"prompts": ["workspace/contention/prompts/vlm_video.jsonl"],
+                         "data": [str(blob)]})
+    with pytest.raises(ValueError, match="single_turn field"):
+        coloc.materialise_workload_input(t, tmp_path)
+
+
+def test_cv_tenant_is_untouched_by_the_materialiser(tmp_path):
+    """A CV workload declares `data:` and no `prompts:` — it is driven by
+    perf_analyzer, whose input format is not aiperf's single_turn JSONL."""
+    cv = _wl_tenant(name="cv", workload="cv_detect_default", driver="perf_analyzer",
+                    transport="triton", backend="triton", frac=None,
+                    spec={"data": ["workspace/contention/test_data/cv/sample_640x640.jpg"]})
+    assert coloc.materialise_workload_input(cv, tmp_path) is None
+    cmd = coloc.build_perf_analyzer_cmd(model="yolov8-n", url="localhost:8100",
+                                        tenant=cv, duration_s=60,
+                                        input_data=coloc._workload_input_file(cv))
+    assert "--input-data" not in cmd
+    assert coloc.preflight_workload_payloads([cv]) == []

@@ -403,6 +403,11 @@ class Tenant:
     driver: str                        # aiperf | perf_analyzer | zmq_client
     load: LoadSpec
     workload: str | None = None        # key into the yaml `workloads:` block
+    # The resolved `workloads:` entry itself (prompts / data / output_tokens),
+    # carried so the run-time layer can materialise the tenant's aiperf input
+    # file without re-loading the GPU yaml. Config only — nothing here touches
+    # the filesystem; coloc.materialise_workload_input owns that.
+    workload_spec: dict[str, Any] = field(default_factory=dict)
     gpu_memory_utilization: float | None = None
     # The KV budget this tenant's cap was derived from, recorded so a result
     # can prove the budget really was constant across the comparison set.
@@ -573,6 +578,7 @@ def _resolve_tenant(
         driver=driver,
         load=load,
         workload=wl_name,
+        workload_spec=dict(wl),
         gpu_memory_utilization=cap,
         kv_budget_gb=kv_used,
         triton_backend=tspec.get("triton_backend"),

@@ -677,17 +677,17 @@ sweeps:
 workloads:
   # Text-only. Output length is a study dimension: 32 vs 512 tokens.
   llm_short:
-    prompts: ["workspace/contention/prompts/llm_short.jsonl"]   # 3 prompts, ~50 tok
+    prompts: ["workspace/contention/prompts/llm_short.jsonl"]   # 3 prompts, ~3-10 tok each
     output_tokens: 32
   llm_long:
-    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~1000 tok
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~110-140 tok each
     output_tokens: 512
   # Long prompt, SHORT output. Exists so the prompt-length dimension can be
   # swept without dragging output length along with it: llm_short → llm_long
   # changes both at once, so it can only answer "does more work cost more",
   # never "is prefill or decode the thing that contends".
   llm_long_prompt:
-    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # ~1000 tok prefill
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # ~110-140 tok prefill
     output_tokens: 32
 
   # Video. Frame count IS the VLM input-size dimension — the 40-frame clip

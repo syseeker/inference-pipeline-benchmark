@@ -136,6 +136,149 @@ def preflight_vram(tenants: list[Tenant]) -> list[str]:
     return issues
 
 
+# ─────────────────────────── workload payloads ─────────────────────────────
+#
+# A workload's `prompts:` / `data:` are the experiment. Nothing read them until
+# now, so every LLM/VLM tenant silently ran on aiperf's built-in synthetic
+# prompts and the video clips were never sent — cross-vlm-prefill-vs-llm, whose
+# whole premise is a 40-frame prefill burst, would have measured a text workload
+# and produced plausible numbers for the wrong thing. Hence two pieces here: a
+# pre-flight that refuses to start when a payload is missing, and a materialiser
+# that pairs the prompts with the media at run time.
+
+# aiperf's `single_turn` loader (aiperf/dataset/loader/single_turn.py, model
+# `SingleTurn`) keys media by modality, not by extension — so the file type has
+# to be mapped to the field name here. Singular fields: one prompt, at most one
+# media file, per line.
+MEDIA_FIELD_BY_SUFFIX = {
+    ".mp4": "video", ".mov": "video", ".webm": "video",
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image",
+    ".wav": "audio", ".mp3": "audio", ".flac": "audio",
+}
+
+
+def _workload_files(spec: dict[str, Any], key: str) -> list[Path]:
+    """Absolute paths for a workload's `prompts:` / `data:` list.
+
+    The yaml writes them repo-relative ("workspace/contention/..."), but aiperf
+    runs with its own working directory, so everything that leaves this module —
+    the pre-flight message, and every media path inside the generated JSONL —
+    is absolute.
+    """
+    raw = spec.get(key) or []
+    if isinstance(raw, (str, Path)):
+        raw = [raw]
+    out = []
+    for p in raw:
+        path = Path(p)
+        out.append(path if path.is_absolute() else (REPO_ROOT / path))
+    return out
+
+
+def preflight_workload_payloads(tenants: list[Tenant]) -> list[str]:
+    """Return blocking issues (empty ⇒ OK) for missing prompt / data files.
+
+    Runs before any server launches, because the failure mode it guards is
+    silent: aiperf falls back to synthetic prompts when `--input-file` is absent,
+    so a missing payload costs a full GPU window and yields numbers that look
+    fine. A loud abort is strictly better.
+    """
+    issues: list[str] = []
+    for t in tenants:
+        spec = t.workload_spec or {}
+        for key in ("prompts", "data"):
+            for path in _workload_files(spec, key):
+                if not path.exists():
+                    issues.append(
+                        f"tenant {t.name!r} workload {t.workload!r}: {key} file not found: "
+                        f"{path} — regenerate prompts with "
+                        "`python3 scripts/build_contention_prompts.py` (test data: "
+                        "workspace/contention/test_data/prepare_data.py)."
+                    )
+    return issues
+
+
+def _media_field(path: Path, *, workload: str | None) -> str:
+    field_name = MEDIA_FIELD_BY_SUFFIX.get(path.suffix.lower())
+    if field_name is None:
+        raise ValueError(
+            f"workload {workload!r}: no aiperf single_turn field for media type "
+            f"{path.suffix!r} ({path}). Known: {sorted(set(MEDIA_FIELD_BY_SUFFIX))}."
+        )
+    return field_name
+
+
+def _read_prompt_texts(path: Path, *, workload: str | None) -> list[str]:
+    """The `text` of every line in a prompts .jsonl."""
+    texts: list[str] = []
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"workload {workload!r}: {path}:{lineno} is not JSON ({e}); "
+                "regenerate with `python3 scripts/build_contention_prompts.py`."
+            ) from None
+        text = obj.get("text") if isinstance(obj, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(
+                f"workload {workload!r}: {path}:{lineno} has no `text` field — "
+                "aiperf's single_turn loader needs one prompt per line."
+            )
+        texts.append(text)
+    if not texts:
+        raise ValueError(f"workload {workload!r}: {path} is empty.")
+    return texts
+
+
+def materialise_workload_input(tenant: Tenant, artifact_dir: Path) -> Path | None:
+    """Write this tenant's aiperf `--input-file` and hand it to the builders.
+
+    The prompts file carries text only; the media file is named separately by
+    the workload's `data:`. They are combined HERE, per run, rather than shipped
+    as a static artifact, because `vlm_video_short` and `vlm_video_long` share
+    one prompts file and differ only by the clip — a checked-in combined file
+    could only be correct for one of them.
+
+    Lands in the run's artifact dir, never in workspace/: it is run output, and
+    two windows using the same workload must not race on one path.
+
+    Returns None (and sets nothing) for a workload with no `prompts:` — a CV
+    workload declares `data:` only and is driven by perf_analyzer, which takes a
+    different input format entirely.
+    """
+    spec = tenant.workload_spec or {}
+    prompt_files = _workload_files(spec, "prompts")
+    if not prompt_files:
+        return None
+
+    texts: list[str] = []
+    for pf in prompt_files:
+        texts += _read_prompt_texts(pf, workload=tenant.workload)
+
+    media = _workload_files(spec, "data")
+    lines: list[str] = []
+    for i, text in enumerate(texts):
+        row: dict[str, Any] = {"text": text}
+        if media:
+            # Cycle when a workload names several files so each one is actually
+            # sent; with the single file every contention workload declares,
+            # this attaches it to every prompt.
+            path = media[i % len(media)]
+            row[_media_field(path, workload=tenant.workload)] = str(path.resolve())
+        lines.append(json.dumps(row, ensure_ascii=False))
+
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    # Keyed by tenant AND workload so the two vlm_video_* windows never collide.
+    out = artifact_dir / f"{tenant.name}.{tenant.workload or 'workload'}.input.jsonl"
+    out.write_text("\n".join(lines) + "\n")
+    tenant._workload_input_file = out          # what _workload_input_file reads
+    return out
+
+
 # ─────────────────────────── command builders ──────────────────────────────
 
 def venv_bin(backend: str, tool: str) -> str:
@@ -801,6 +944,9 @@ class ColocationOrchestrator:
         issues = preflight_vram(coloc.tenants)
         if issues:
             raise RuntimeError("VRAM pre-flight failed: " + "; ".join(issues))
+        payload_issues = preflight_workload_payloads(coloc.tenants)
+        if payload_issues:
+            raise RuntimeError("workload payload pre-flight failed: " + "; ".join(payload_issues))
 
         paths.root.mkdir(parents=True, exist_ok=True)
 
@@ -1000,6 +1146,10 @@ class ColocationOrchestrator:
         for t in coloc.tenants:
             art = paths.tenant_artifact_dir(t.name)
             art.mkdir(parents=True, exist_ok=True)
+            if t.driver == "aiperf":
+                # Per window, not per plan: the media file is workload-specific
+                # and the combined JSONL lives with this run's artifacts.
+                materialise_workload_input(t, art)
             if t.driver == "perf_analyzer":
                 # perf_analyzer runs inside the SDK container; mount the
                 # artifact dir at the same path so -f writes to the host.
@@ -1109,11 +1259,12 @@ def _override_flag(cmd: list[str], flag: str, value: str) -> list[str]:
 
 
 def _workload_input_file(tenant: Tenant) -> Path | None:
-    """Resolve the tenant's workload payload file (image/video) if any. The
-    workload→file mapping lives in the yaml `workloads:` block; here we only
-    surface a path the driver can pass through. Text-only workloads return None.
-    Full workload resolution is wired with the live run; this keeps the builder
-    honest about where the payload comes from."""
-    # Populated when the orchestrator is handed the resolved workloads block;
-    # kept None here so command builders stay pure and unit-testable.
+    """The tenant's materialised driver input file, or None.
+
+    Set by materialise_workload_input, which the orchestrator calls once per
+    tenant before building the driver command. Kept as an attribute lookup so
+    the command builders stay pure: they read a path, they never touch the
+    filesystem. None means "no prompts declared" ⇒ no `--input-file` ⇒ aiperf's
+    synthetic dataset, which is only ever correct for a workload that genuinely
+    declares none (preflight_workload_payloads guards the other case)."""
     return getattr(tenant, "_workload_input_file", None)
