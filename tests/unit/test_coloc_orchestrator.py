@@ -138,13 +138,40 @@ def test_server_cmd_vllm_injects_cap():
     assert cmd[cmd.index("--gpu-memory-utilization") + 1] == "0.45"
 
 
-def test_server_cmd_vllm_respects_explicit_flag():
+def test_server_cmd_tenant_cap_overrides_inherited_space_form():
     t = _tenant(backend="vllm", frac=0.45)
     t.round.launch_args = ["--gpu-memory-utilization", "0.30"]
     cmd = coloc.build_server_cmd(t)
-    # Explicit launch arg wins; we don't append a second one.
+    # The tenant cap is an override, not a fallback — and the stale value's
+    # orphaned argument must not survive as a positional.
     assert cmd.count("--gpu-memory-utilization") == 1
-    assert cmd[cmd.index("--gpu-memory-utilization") + 1] == "0.30"
+    assert "0.30" not in cmd
+    assert cmd[cmd.index("--gpu-memory-utilization") + 1] == "0.45"
+
+
+def test_server_cmd_tenant_cap_beats_backend_extra_args_default():
+    """Regression: `backends.vllm.extra_args` carries
+    `--gpu-memory-utilization=0.90`, which every tenant inherits through
+    launch_args. The builder used to see the flag was already present and
+    skip the tenant's cap, so both tenants launched at 0.90 and the second
+    OOMed — while preflight_vram, reading the caps rather than the command,
+    called the plan fine."""
+    t = _tenant(backend="vllm", frac=0.45)
+    t.round.launch_args = ["--gpu-memory-utilization=0.90", "--max-num-seqs=32"]
+    cmd = coloc.build_server_cmd(t)
+
+    assert "--gpu-memory-utilization=0.90" not in cmd
+    assert cmd.count("--gpu-memory-utilization") == 1
+    assert cmd[cmd.index("--gpu-memory-utilization") + 1] == "0.45"
+    assert "--max-num-seqs=32" in cmd, "unrelated backend defaults are untouched"
+
+
+def test_server_cmd_sglang_cap_beats_inherited_mem_fraction():
+    t = _tenant(backend="sglang", frac=0.5)
+    t.round.launch_args = ["--mem-fraction-static=0.90"]
+    cmd = coloc.build_server_cmd(t)
+    assert "--mem-fraction-static=0.90" not in cmd
+    assert cmd[cmd.index("--mem-fraction-static") + 1] == "0.5"
 
 
 def test_server_cmd_sglang_uses_mem_fraction_static():
@@ -379,6 +406,13 @@ def test_solo_key_separates_tenants_on_different_devices():
 def test_solo_key_separates_tensor_parallel_widths():
     """TP-2 is a different deployment from TP-1, not the same run on a card."""
     assert coloc._solo_key(_tenant(device=[0, 1])) != coloc._solo_key(_tenant(device=0))
+
+
+def test_solo_key_separates_tenants_at_different_vram_caps():
+    """The cap sets the KV cache size (§2b). Cache the 0.45 baseline under a
+    key that ignores it and the 0.70 window is scored against a run that
+    never happened."""
+    assert coloc._solo_key(_tenant(frac=0.45)) != coloc._solo_key(_tenant(frac=0.70))
 
 
 def test_solo_cache_ignores_non_solo():

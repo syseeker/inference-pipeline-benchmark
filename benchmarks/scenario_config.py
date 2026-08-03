@@ -267,6 +267,49 @@ def iter_sweep(cfg: dict[str, Any], sweep_name: str) -> Iterator[Round]:
 _DRIVER_FOR_TRANSPORT = {"http": "aiperf", "zmq": "zmq_client", "triton": "perf_analyzer"}
 
 
+# ─── VRAM cap sizing ──────────────────────────────────────────────────
+#
+# `kv_budget_gb` is a COLOCATION-level setting, not a per-tenant one, and
+# that placement is the whole point: it is the quantity that must not vary
+# across the comparison set. vLLM reserves `gpu_memory_utilization` × VRAM
+# and everything the weights don't take becomes KV cache, which is what
+# sets how many requests can be in flight — i.e. how fast the model runs
+# (docs/contention.md §2b). Size a tenant's cap proportionally to its
+# model and the size ladder measures memory allocation instead of
+# contention. So the budget is fixed once per colocation and each tenant's
+# cap absorbs only its own weights; the cap varies, the KV cache does not.
+DEFAULT_KV_BUDGET_GB = 20.0
+
+# CUDA context, activation buffers and allocator fragmentation live inside
+# the reservation too — without this term the KV cache silently eats the
+# difference and is no longer the constant we claimed it was.
+DEFAULT_CAP_OVERHEAD_GB = 2.0
+
+
+def derive_cap(
+    weights_gb: float, kv_budget_gb: float, vram_gb: float,
+    overhead_gb: float = DEFAULT_CAP_OVERHEAD_GB, *, model_id: str = "?",
+) -> float:
+    """`gpu_memory_utilization` for a model at a fixed KV budget.
+
+    Rounded to 2 dp because that is the precision the backends' flags are
+    written at, and a cap that reproduces exactly is a cap a reader can
+    check against the yaml.
+    """
+    total = weights_gb + kv_budget_gb + overhead_gb
+    cap = round(total / vram_gb, 2)
+    if cap > 1.0:
+        raise ValueError(
+            f"model {model_id!r} does not fit at kv_budget_gb={kv_budget_gb}: "
+            f"weights {weights_gb} + KV {kv_budget_gb} + overhead {overhead_gb} "
+            f"= {total} GB on a {vram_gb} GB card → cap {cap} > 1.0. Lower the "
+            "KV budget for the whole colocation (never for one tenant — the "
+            "budget must stay constant across the comparison), quantize the "
+            "model, or move it to more GPUs."
+        )
+    return cap
+
+
 @dataclass
 class LoadSpec:
     """Offered load for one tenant.
@@ -350,6 +393,10 @@ class Tenant:
     load: LoadSpec
     workload: str | None = None        # key into the yaml `workloads:` block
     gpu_memory_utilization: float | None = None
+    # The KV budget this tenant's cap was derived from, recorded so a result
+    # can prove the budget really was constant across the comparison set.
+    # None ⇒ the cap came from the yaml verbatim, not from a derivation.
+    kv_budget_gb: float | None = None
     triton_backend: str | None = None  # tensorrt | onnx | python
     # int → one card; list → tensor parallel across those cards; None → GPU 0,
     # which is what every pre-existing colocation means by saying nothing.
@@ -428,7 +475,10 @@ def _merge_extends(colos: dict[str, Any], name: str, _seen: set[str] | None = No
     return merged
 
 
-def _resolve_tenant(cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[str, Any]) -> Tenant:
+def _resolve_tenant(
+    cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[str, Any],
+    *, kv_budget_gb: float | None = None,
+) -> Tenant:
     backend = tspec["backend"]
     model_id = tspec.get("model")
     r = resolve_round(cfg, backend=backend, model_id=model_id, variant=tspec.get("variant"))
@@ -479,16 +529,35 @@ def _resolve_tenant(cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[
     elif len(device) == 1 and isinstance(tspec["device"], int):
         device = device[0]
 
+    # An explicit yaml cap always wins — it is the escape hatch, and every
+    # colocation written before derivation existed must keep its numbers.
+    # Derivation only fills the gap, and only where we know the weights:
+    # a Triton CV tenant has no GPU fraction to set, and a model with no
+    # `weights_gb` would have its KV budget guessed rather than held.
+    cap = (
+        float(tspec["gpu_memory_utilization"])
+        if tspec.get("gpu_memory_utilization") is not None else None
+    )
+    kv_used: float | None = None
+    weights_gb = (models.get(r.model_id, {}) or {}).get("weights_gb")
+    vram_gb = cfg.get("vram_gb")
+    if (
+        cap is None and kv_budget_gb is not None and transport != "triton"
+        and weights_gb is not None and vram_gb
+    ):
+        kv_used = float(kv_budget_gb)
+        cap = derive_cap(
+            float(weights_gb), kv_used, float(vram_gb), model_id=r.model_id,
+        )
+
     return Tenant(
         name=str(tspec["name"]),
         round=r,
         driver=driver,
         load=load,
         workload=wl_name,
-        gpu_memory_utilization=(
-            float(tspec["gpu_memory_utilization"])
-            if tspec.get("gpu_memory_utilization") is not None else None
-        ),
+        gpu_memory_utilization=cap,
+        kv_budget_gb=kv_used,
         triton_backend=tspec.get("triton_backend"),
         device=device,
     )
@@ -502,9 +571,15 @@ def _solo_key(t: Tenant) -> tuple:
 
     Placement is part of the identity too: a baseline taken on GPU 0 does not
     describe a tenant pinned to GPU 3 (different card, possibly different
-    clocks), and a TP-2 tenant is a different deployment from a TP-1 one."""
+    clocks), and a TP-2 tenant is a different deployment from a TP-1 one.
+
+    The VRAM cap is part of it for the same reason (§2b): the cap sets the
+    KV cache, so the same model at 0.45 and at 0.70 are two different
+    deployments. Leave it out and a 2-tenant window and a 4-tenant window
+    would share one baseline, and one of them would be compared against a
+    reference that never existed."""
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
-            tuple(t.devices))
+            tuple(t.devices), t.gpu_memory_utilization)
 
 
 def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
@@ -567,13 +642,21 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
     isolation = str(spec.get("isolation", "mps"))
     phase = int(spec["phase"]) if spec.get("phase") is not None else None
     want_solo = str(spec.get("solo_baselines", "auto")) == "auto"
+    # Read once per colocation, applied to every tenant that omits an
+    # explicit cap. Resolution happens BEFORE the solo baselines are cut,
+    # so a baseline is built from the same Tenant object as the contention
+    # run and therefore carries the same cap — which is the only way its
+    # KV cache matches (docs/contention.md §2b).
+    kv_budget_gb = float(spec.get("kv_budget_gb", DEFAULT_KV_BUDGET_GB))
 
     seen_solo: set[tuple] = set()
     pending: list[Colocation] = []
 
     for roster in rosters:
         try:
-            tenants = [_resolve_tenant(cfg, t, workloads) for t in roster]
+            tenants = [
+                _resolve_tenant(cfg, t, workloads, kv_budget_gb=kv_budget_gb) for t in roster
+            ]
         except ValueError as e:
             # Skip the whole window: a 2-tenant contention test cannot run
             # with one tenant missing, and a silently-degraded roster would

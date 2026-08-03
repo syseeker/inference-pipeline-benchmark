@@ -30,6 +30,7 @@ from benchmarks.scenario_config import (  # noqa: E402
     _merge_extends,
     _resolve_tenant,
     _solo_key,
+    derive_cap,
     iter_colocation,
     load_gpu_config,
 )
@@ -246,10 +247,12 @@ def test_output_tokens_come_from_the_workload(cfg):
 # --------------------------------------------------------------------------- #
 
 
-def _llm(cfg, **extra):
+def _llm(cfg, *, kv_budget_gb=None, **extra):
+    # kv_budget_gb is colocation-level, not a tenant field — it arrives as an
+    # argument, which is exactly how iter_colocation passes it down.
     return _resolve_tenant(
         cfg, {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b", **extra},
-        cfg["workloads"],
+        cfg["workloads"], kv_budget_gb=kv_budget_gb,
     )
 
 
@@ -312,6 +315,103 @@ def test_solo_baselines_are_not_shared_across_devices(cfg):
 
 def test_solo_baselines_are_not_shared_across_tp_widths(cfg):
     assert _solo_key(_llm(cfg, device=[0, 1])) != _solo_key(_llm(cfg, device=0))
+
+
+def test_solo_baselines_are_not_shared_across_vram_caps(cfg):
+    """The cap sets the KV cache, so the same model at 0.45 and 0.70 are two
+    deployments. Sharing one baseline would compare the 4-tenant window
+    against a reference taken at the 2-tenant window's cap."""
+    a = _llm(cfg, gpu_memory_utilization=0.45)
+    b = _llm(cfg, gpu_memory_utilization=0.70)
+    assert _solo_key(a) != _solo_key(b)
+
+
+# --------------------------------------------------------------------------- #
+# VRAM cap derivation (docs/contention.md §2b)
+# --------------------------------------------------------------------------- #
+
+
+def test_derive_cap_is_weights_plus_constant_kv_plus_overhead():
+    # (15.2 + 20 + 2) / 96 = 0.3875 → 0.39
+    assert derive_cap(15.2, 20.0, 96.0) == 0.39
+
+
+def test_derive_cap_overhead_is_adjustable():
+    assert derive_cap(15.2, 20.0, 96.0, overhead_gb=0.0) == 0.37
+
+
+def test_derive_cap_rejects_a_model_that_cannot_fit():
+    """A cap over 1.0 is not a rounding matter — the model plus that KV
+    budget does not exist on the card, and a silent clamp would hand the
+    ladder an unequal KV cache."""
+    with pytest.raises(ValueError, match=r"qwen2\.5-32b.*does not fit"):
+        derive_cap(65.5, 40.0, 96.0, model_id="qwen2.5-32b")
+
+
+def test_explicit_cap_wins_over_derivation(cfg):
+    """The yaml value is the escape hatch; derivation only fills gaps."""
+    t = _llm(cfg, gpu_memory_utilization=0.45, kv_budget_gb=20.0)
+    assert t.gpu_memory_utilization == 0.45
+    assert t.kv_budget_gb is None, "not derived, so nothing was held constant"
+
+
+def test_missing_cap_is_derived_from_the_colocation_budget(cfg):
+    t = _llm(cfg, kv_budget_gb=20.0)
+    weights = cfg["models"]["qwen2.5-7b"]["weights_gb"]
+    assert t.gpu_memory_utilization == derive_cap(weights, 20.0, cfg["vram_gb"])
+    assert t.kv_budget_gb == 20.0
+
+
+def test_size_ladder_varies_the_cap_but_not_the_kv_cache(cfg):
+    """The point of the sizing rule: only the weights move between rungs, so
+    a degradation ratio is attributable to the neighbour rather than to a
+    KV cache that shrank underneath it."""
+    runs = [r for r in _coloc_runs(cfg, "cross-size-scaling") if not r.is_solo]
+    llms = [next(t for t in r.tenants if t.name == "llm") for r in runs]
+    assert len(llms) == 4
+
+    caps = [t.gpu_memory_utilization for t in llms]
+    assert len(set(caps)) == len(caps), "weights differ, so the caps must"
+
+    assert {t.kv_budget_gb for t in llms} == {16.0}, "one budget for the whole ladder"
+
+    vram = cfg["vram_gb"]
+    kv = [
+        t.gpu_memory_utilization * vram - cfg["models"][t.round.model_id]["weights_gb"]
+        for t in llms
+    ]
+    # The cap is a 2-dp fraction, so the KV cache can only be held constant to
+    # within half of that last digit — 0.005 × 96 GB ≈ 0.5 GB, against a 16 GB
+    # budget. Anything wider means the sizing, not the rounding.
+    assert max(kv) - min(kv) <= 0.005 * vram * 2, f"KV drifted across the ladder: {kv}"
+
+
+def test_size_ladder_top_rung_can_actually_load_its_weights(cfg):
+    """The inherited 0.45 gave 43 GB to a 45 GB checkpoint — it never
+    started. Every rung's reservation must clear its own weights."""
+    for run in _coloc_runs(cfg, "cross-size-scaling"):
+        for t in run.tenants:
+            weights = (cfg["models"][t.round.model_id] or {}).get("weights_gb")
+            if weights is None or t.gpu_memory_utilization is None:
+                continue
+            assert t.gpu_memory_utilization * cfg["vram_gb"] > weights, t.round.model_id
+
+
+def test_solo_baseline_inherits_the_contention_cap(cfg):
+    """§2b: a baseline run at a bigger cap has a bigger KV cache, and the
+    ratio then reports our own memory allocation as contention."""
+    runs = _coloc_runs(cfg, "cross-size-scaling")
+    contention = {
+        t.round.model_id: t
+        for r in runs if not r.is_solo for t in r.tenants if t.name == "llm"
+    }
+    solos = [
+        r.tenants[0] for r in runs
+        if r.is_solo and r.tenants[0].round.model_id in contention
+    ]
+    assert solos
+    for s in solos:
+        assert s.gpu_memory_utilization == contention[s.round.model_id].gpu_memory_utilization
 
 
 # --------------------------------------------------------------------------- #

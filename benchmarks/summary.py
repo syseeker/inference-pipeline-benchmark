@@ -1098,13 +1098,38 @@ def _load_coloc_runs(gpu_dir: Path) -> list[dict[str, Any]]:
             stats["offered_rps"] = t.get("offered_rps")
             stats["model_id"] = (t.get("round") or {}).get("model_id", "")
             stats["backend"] = (t.get("round") or {}).get("backend", "")
+            # Everything below is baseline-identity, not a metric: it exists so
+            # _solo_key can tell two runs of the same model apart. Absent from
+            # manifests written before those fields existed, which is harmless —
+            # a consistently-missing field still groups consistently.
+            stats["workload"] = t.get("workload")
+            stats["gpu_memory_utilization"] = t.get("gpu_memory_utilization")
+            stats["arrival"] = (t.get("load") or {}).get("pattern")
+            stats["devices"] = tuple(t.get("devices") or ())
             tenant_stats[name] = stats
         runs.append({"manifest": manifest, "run_dir": run_dir, "tenant_stats": tenant_stats})
     return runs
 
 
 def _solo_key(tenant_stat: dict[str, Any]) -> tuple:
-    return (tenant_stat["backend"], tenant_stat["model_id"], tenant_stat["offered_rps"])
+    """Analysis-side twin of the planning-side `_solo_key` in scenario_config.
+
+    These must agree. The planners cut one baseline per distinct
+    (backend, model, workload, load, placement, cap); if this key is coarser,
+    two of those baselines collapse into one index entry and the last one
+    scanned silently wins — so a contention run gets its ratio against a
+    baseline with, say, a different KV cache. That is precisely the artifact
+    docs/contention.md §2b exists to prevent, reintroduced at analysis time.
+    """
+    return (
+        tenant_stat["backend"],
+        tenant_stat["model_id"],
+        tenant_stat.get("workload"),
+        tenant_stat.get("arrival"),
+        tenant_stat["offered_rps"],
+        tenant_stat.get("gpu_memory_utilization"),
+        tenant_stat.get("devices"),
+    )
 
 
 def _build_solo_index(runs: list[dict[str, Any]]) -> dict[tuple, dict[str, Any]]:

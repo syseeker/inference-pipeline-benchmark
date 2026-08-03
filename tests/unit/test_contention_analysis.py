@@ -79,8 +79,9 @@ def _write_manifest(run_dir, coloc_id, is_solo, tenants, achieved=None):
                 "achieved_rps": achieved.get(t["name"]),
                 "co_tenants": [x["model_id"] for x in tenants if x["name"] != t["name"]],
                 "driver": t.get("driver", "aiperf"),
-                "workload": "llm_short",
-                "gpu_memory_utilization": 0.45,
+                "workload": t.get("workload", "llm_short"),
+                "gpu_memory_utilization": t.get("cap", 0.45),
+                "devices": t.get("devices", [0]),
                 "triton_backend": None,
             }
             for t in tenants
@@ -144,7 +145,45 @@ def test_build_solo_index_keyed_correctly(tmp_path):
     _write_ndjson(solo_dir, "llm", _aiperf_records([40.0, 50.0]))
     runs = sm._load_coloc_runs(gpu_dir)
     idx = sm._build_solo_index(runs)
-    assert ("vllm", "qwen2.5-7b", 4.0) in idx
+    assert ("vllm", "qwen2.5-7b", "llm_short", "poisson", 4.0, 0.45, (0,)) in idx
+
+
+def test_solo_index_does_not_collapse_two_caps(tmp_path):
+    """Same model, same rate, different VRAM cap — two distinct baselines.
+
+    The cap sets the KV cache size, so these two runs are not interchangeable
+    references. Keying without it would let the last one scanned overwrite the
+    other, and one contention run would silently be rated against a baseline
+    with a different KV cache (docs/contention.md §2b).
+    """
+    gpu_dir = tmp_path
+    tight = {"name": "llm", "backend": "vllm", "model_id": "qwen2.5-7b",
+             "offered_rps": 4.0, "cap": 0.35}
+    roomy = {**tight, "cap": 0.45}
+
+    for label, tenant in (("solo-tight", tight), ("solo-roomy", roomy)):
+        d = gpu_dir / "coloc" / "cross-size-scaling" / label
+        _write_manifest(d, "cross-size-scaling", True, [tenant], achieved={"llm": 4.0})
+        _write_ndjson(d, "llm", _aiperf_records([40.0, 50.0]))
+
+    idx = sm._build_solo_index(sm._load_coloc_runs(gpu_dir))
+    assert len(idx) == 2, "baselines at different caps must not share an index entry"
+
+
+def test_solo_index_separates_placements(tmp_path):
+    """A GPU-0 baseline does not describe a tenant that ran tensor-parallel."""
+    gpu_dir = tmp_path
+    single = {"name": "llm", "backend": "vllm", "model_id": "qwen2.5-72b",
+              "offered_rps": 4.0, "devices": [0]}
+    tp2 = {**single, "devices": [0, 1]}
+
+    for label, tenant in (("solo-tp1", single), ("solo-tp2", tp2)):
+        d = gpu_dir / "coloc" / "scale-llm-cv" / label
+        _write_manifest(d, "scale-llm-cv", True, [tenant], achieved={"llm": 4.0})
+        _write_ndjson(d, "llm", _aiperf_records([40.0, 50.0]))
+
+    idx = sm._build_solo_index(sm._load_coloc_runs(gpu_dir))
+    assert len(idx) == 2, "baselines at different placements must not share an index entry"
 
 
 # ── _ratio ───────────────────────────────────────────────────────────────────

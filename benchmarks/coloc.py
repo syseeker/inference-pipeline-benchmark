@@ -140,16 +140,16 @@ def build_server_cmd(
     cap = tenant.gpu_memory_utilization
     if r.backend == "vllm":
         cmd = [vllm_bin, "serve", r.hf_id, "--port", str(r.port), *r.launch_args]
-        if cap is not None and not _has_flag(cmd, "--gpu-memory-utilization"):
-            cmd += ["--gpu-memory-utilization", str(cap)]
+        if cap is not None:
+            cmd = _override_flag(cmd, "--gpu-memory-utilization", str(cap))
         return cmd
     if r.backend == "sglang":
         cmd = [
             python_bin, "-m", "sglang.launch_server",
             "--model-path", r.hf_id, "--port", str(r.port), *r.launch_args,
         ]
-        if cap is not None and not _has_flag(cmd, "--mem-fraction-static"):
-            cmd += ["--mem-fraction-static", str(cap)]
+        if cap is not None:
+            cmd = _override_flag(cmd, "--mem-fraction-static", str(cap))
         return cmd
     if r.backend == "trtllm":
         trt_backend = r.trtllm_backend or "pytorch"
@@ -506,10 +506,12 @@ def _solo_key(tenant: Tenant) -> tuple:
     offered load, so load is part of the key. Lets a session skip re-running the
     ~40 duplicate baselines across a full study. Placement is part of it too —
     a GPU-0 baseline does not describe a tenant pinned elsewhere, nor a TP-2
-    one."""
+    one. So is the VRAM cap: it sets the KV cache size, so the same model at
+    two caps is two deployments, and sharing one baseline between them would
+    compare one of them against a reference that never ran (§2b)."""
     t = tenant
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
-            tuple(t.devices))
+            tuple(t.devices), t.gpu_memory_utilization)
 
 
 class SoloBaselineCache:
@@ -793,6 +795,33 @@ class ColocationOrchestrator:
 
 def _has_flag(cmd: list[str], flag: str) -> bool:
     return any(a == flag or a.startswith(flag + "=") for a in cmd)
+
+
+def _override_flag(cmd: list[str], flag: str, value: str) -> list[str]:
+    """Drop every occurrence of `flag` (both `--flag=v` and `--flag v`) and
+    append it once with `value`.
+
+    A tenant's VRAM cap has to win over whatever `launch_args` carried in.
+    `backends.<b>.extra_args` holds GPU-shape DEFAULTS — on this GPU that
+    includes `--gpu-memory-utilization=0.90` — and every tenant inherits
+    them. Merely checking "is the flag already there?" let that default
+    stand, so both tenants launched at 0.90 and the second OOMed, while the
+    VRAM pre-flight (which reads the tenant cap, not the command) reported
+    the plan as fine. A per-tenant cap is an override, not a fallback.
+    """
+    out: list[str] = []
+    skip_next = False
+    for a in cmd:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == flag:
+            skip_next = True           # `--flag value` — drop the value too
+            continue
+        if a.startswith(flag + "="):
+            continue
+        out.append(a)
+    return [*out, flag, value]
 
 
 def _workload_input_file(tenant: Tenant) -> Path | None:

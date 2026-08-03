@@ -249,12 +249,22 @@ models:
   #
   # This GPU (96 GB) carries the full ladder. The 32 GB profile omits
   # 32b/72b on VRAM grounds — that is scoping, not removal.
+  #
+  # `weights_gb` is the measured/estimated weight footprint of the
+  # checkpoint on the card (params × bytes-per-param, AWQ ≈ 0.3× BF16 —
+  # see skills/gpu-contention-benchmark/reference/model-catalogue.md
+  # "VRAM arithmetic"). It exists so a colocation can size each tenant's
+  # `gpu_memory_utilization` as weights + a KV budget held CONSTANT across
+  # the comparison set (docs/contention.md §2b) instead of by hand.
+  # It is an estimate: the runner records `vram_after_load_gb` per tenant,
+  # and that measurement is the ground truth to correct these against.
 
   qwen2.5-7b:
     hf_id: "Qwen/Qwen2.5-7B-Instruct"
     family: "qwen2.5"
     quantization: "bf16"
     role: "contention-llm-small"
+    weights_gb: 15.2            # 7.6B × 2 bytes (BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -263,6 +273,7 @@ models:
     family: "qwen2.5"
     quantization: "bf16"
     role: "contention-llm-size-scaling"
+    weights_gb: 29.5            # 14.7B × 2 bytes (BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -273,6 +284,7 @@ models:
     family: "qwen2.5"
     quantization: "bf16"
     role: "contention-llm-size-scaling"
+    weights_gb: 65.5            # 32.8B × 2 bytes (BF16) — heaviest of the ladder
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -282,6 +294,7 @@ models:
     quantization: "awq"
     role: "contention-memory-pressure-anchor"
     notes: "AWQ ~45 GB. BF16 (145 GB) needs >=2 GPUs. Anchors the VRAM-pressure curve."
+    weights_gb: 45.0            # from the note above (AWQ ≈ 0.3× BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -291,6 +304,7 @@ models:
     quantization: "bf16"
     role: "contention-llm-cross-arch"
     notes: "Gated repo — needs `hf auth login` with licence accepted."
+    weights_gb: 18.4            # 9.2B × 2 bytes (BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -300,6 +314,7 @@ models:
     quantization: "bf16"
     role: "contention-llm-cross-arch"
     notes: "Gated repo. Validates that contention behaviour generalises beyond Qwen."
+    weights_gb: 16.1            # 8.03B × 2 bytes (BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -308,6 +323,7 @@ models:
     family: "mistral"
     quantization: "bf16"
     role: "contention-llm-cross-arch"
+    weights_gb: 14.5            # 7.25B × 2 bytes (BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -317,6 +333,7 @@ models:
     quantization: "awq"
     role: "contention-vlm-video"
     notes: "Official AWQ. Native video input — carries the VLM prefill-burst dimension."
+    weights_gb: 7.0             # 8.3B AWQ ≈ 0.3× BF16, plus the FP16 vision tower
     backend_args:
       vllm: ["--max-model-len=16384"]
       sglang: ["--context-length=16384"]
@@ -789,9 +806,23 @@ colocations:
 
   # Same architecture, four sizes — is contention vulnerability a function
   # of model size? (Consumer tier keeps 7b/14b; 32b/72b need this GPU.)
+  #
+  # The inherited fixed 0.45 cap cannot answer that question. 0.45 × 96 GB
+  # = 43 GB, which qwen2.5-72b-AWQ (45 GB of weights) cannot even load —
+  # and where a rung does load, a fixed fraction hands each one a
+  # different KV cache, so the ladder would measure memory allocation, not
+  # size. Dropping the explicit cap derives it per rung from `kv_budget_gb`
+  # (docs/contention.md §2b): the KV cache is identical at every rung and
+  # only the weights move. 16 GB is what the heaviest rung permits —
+  # qwen2.5-32b at BF16 is 65.5 GB, more than the 72b at AWQ — and still
+  # leaves the CV tenant ~12 GB there.
   cross-size-scaling:
     phase: 4
     extends: mix-llm-cv
+    kv_budget_gb: 16.0
+    tenants:
+      - name: llm
+        gpu_memory_utilization: null   # derive per rung; see kv_budget_gb above
     vary:
       tenant: llm
       field: model
