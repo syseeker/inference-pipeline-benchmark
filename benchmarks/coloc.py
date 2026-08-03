@@ -28,8 +28,11 @@ so the split is structural, not a preference.
 `scripts/run_all_scenarios.sh` is deliberately untouched — its single-model
 invariants (kill the server every round, refuse <30 GB free) are correct for the
 serial sweep and wrong for co-residency. Contention gets this separate entry
-point. Triton CV tenants' *server* side (model repo + config.pbtxt) is step 7;
-this module builds their driver command but does not yet launch the Triton repo.
+point.
+
+Placement (Phase 5): HTTP tenants are pinned with CUDA_VISIBLE_DEVICES; Triton
+tenants are pinned by giving each GPU its own container — see the "Triton
+placement" section below for why the two mechanisms differ.
 """
 
 from __future__ import annotations
@@ -173,6 +176,44 @@ def build_server_env(tenant: Tenant) -> dict[str, str]:
     so the backend's local device 0..N-1 map onto exactly those cards.
     """
     return {"CUDA_VISIBLE_DEVICES": ",".join(str(d) for d in tenant.devices)}
+
+
+# ─────────────────────────── Triton placement ──────────────────────────────
+#
+# HTTP tenants are pinned with CUDA_VISIBLE_DEVICES (build_server_env). Triton
+# tenants cannot be: they are not our process — they are served by a container,
+# and several tenants can share one. So placement for them is expressed as "one
+# container per GPU that has Triton tenants on it", and everything that
+# addresses that container (name, ports, model repo, readiness URL, the
+# perf_analyzer `-u`) has to be derived from the tenant's device.
+
+def triton_device_of(tenant: Tenant) -> int:
+    """The single GPU index a Triton tenant is served on.
+
+    Raises if the tenant asks for several — see resolve_triton_device: the CV
+    models are not tensor-parallel, so a device list has no honest meaning here
+    and guessing the first index would silently mis-place the tenant.
+    """
+    from benchmarks.triton_cv import resolve_triton_device
+    try:
+        return resolve_triton_device(tenant.device)
+    except ValueError as e:
+        raise ValueError(f"tenant {tenant.name!r}: {e}") from None
+
+
+def triton_tenant_url(tenant: Tenant) -> str:
+    """`host:port` of the Triton container serving THIS tenant.
+
+    The yaml gives one `base_url` for the whole `triton:` backend, so every
+    Triton tenant inherits the same base port; the device offset is what
+    separates them. Returned scheme-less because that is what perf_analyzer's
+    `-u` wants.
+    """
+    from benchmarks.triton_cv import triton_ports
+    host = tenant.round.base_url.removeprefix("http://").removeprefix("https://")
+    host = host.split("/")[0].rsplit(":", 1)[0] or "localhost"
+    http_port, _, _ = triton_ports(tenant.round.port, triton_device_of(tenant))
+    return f"{host}:{http_port}"
 
 
 def build_aiperf_cmd(
@@ -449,7 +490,27 @@ class RunPaths:
     def triton_repo_root(self) -> Path:
         # Stable across runs: benchmarks/results/<gpu>/triton_repo/
         # Two levels up from coloc/<run_id>/ lands at <gpu>/.
+        #
+        # This is also the STAGING repo: scripts/build_triton_cv_repo.py exports
+        # every model's weights here once, and it is GPU 0's serving repo, so a
+        # config that never mentions `device:` sees exactly today's layout.
         return self.root.parent.parent / "triton_repo"
+
+    def triton_repo_root_for(self, device: int | list[int] | None = None) -> Path:
+        """The model repository the container on `device` serves.
+
+        Each GPU gets its own repo holding ONLY the models placed on it — one
+        shared repo would make every container load every CV model and burn VRAM
+        on cards that do not need it, perturbing the contention we are measuring.
+        GPU 0 keeps the historical path (it is also the staging repo, which is
+        where the weights physically live); other devices get a sibling dir whose
+        version dirs symlink back to those weights.
+        """
+        from benchmarks.triton_cv import resolve_triton_device
+        dev = resolve_triton_device(device)
+        if dev == 0:
+            return self.triton_repo_root
+        return self.root.parent.parent / f"triton_repo-gpu{dev}"
 
     @property
     def gpu_ndjson(self) -> Path:
@@ -593,8 +654,13 @@ class ColocationOrchestrator:
         if triton_tenants:
             self._build_triton_repos(triton_tenants, paths)
 
-        servers = [self._ensure_server(t, paths) for t in coloc.tenants]
+        # The launch loop is INSIDE the try: with one container per GPU there is
+        # more than one thing to leak, and a failure on the second must not
+        # leave the first running to poison the next colocation's numbers.
+        servers: list[ServerHandle] = []
         try:
+            for t in coloc.tenants:
+                servers.append(self._ensure_server(t, paths, triton_tenants=triton_tenants))
             for h in servers:
                 self._wait_ready(h.tenant)
 
@@ -633,19 +699,27 @@ class ColocationOrchestrator:
     # ---- server lifecycle --------------------------------------------------
 
     def _build_triton_repos(self, triton_tenants: list[Tenant], paths: RunPaths) -> None:
-        """Write config.pbtxt + create version dirs for all CV models in one pass.
+        """Write one model repository PER DEVICE, each holding only its models.
 
         Weights (model.onnx / model.plan) must be pre-exported via
-        scripts/build_triton_cv_repo.py — this only writes the Triton config.
-        Called before _ensure_server so the container starts with a full repo.
+        scripts/build_triton_cv_repo.py into the staging repo
+        (RunPaths.triton_repo_root); this writes the Triton config and, for the
+        non-staging devices, links the staged weights in. Called before
+        _ensure_server so every container starts with a complete repo.
         """
-        from benchmarks.triton_cv import resolve_spec, write_model_repo
+        from benchmarks.triton_cv import RepoLayout, resolve_spec, write_model_repo
+        staging = paths.triton_repo_root
         for t in triton_tenants:
             spec = resolve_spec(t.round.model_id)
             bk = t.triton_backend or "tensorrt"
-            write_model_repo(paths.triton_repo_root, spec, bk)
+            repo = paths.triton_repo_root_for(triton_device_of(t))
+            layout = write_model_repo(repo, spec, bk)
+            if repo != staging:
+                src = RepoLayout(repo_root=staging, name=spec.name, triton_backend=bk).weight_file
+                _link_staged_weight(src, layout.weight_file)
 
-    def _ensure_server(self, tenant: Tenant, paths: RunPaths) -> ServerHandle:
+    def _ensure_server(self, tenant: Tenant, paths: RunPaths,
+                       *, triton_tenants: list[Tenant] | None = None) -> ServerHandle:
         bk = tenant.round.backend
         cmd = build_server_cmd(
             tenant,
@@ -655,19 +729,28 @@ class ColocationOrchestrator:
         )
         if cmd is None:
             # Triton tenant — _build_triton_repos has written config.pbtxt.
-            # One container serves all CV models in the colocation; use the
-            # container name as a mutex so we don't launch a second one.
-            container = "triton-cv"
-            if self._triton_container_running(container) or self._triton_ready(tenant.round.port):
+            # One container per GPU serves every CV model placed on that GPU;
+            # the per-device container NAME is the mutex, so two tenants on one
+            # card reuse a container and two on different cards each get their
+            # own. Keying the mutex on a fixed name (as this did before per-GPU
+            # placement) would hand the second tenant a container on the wrong
+            # card, silently invalidating the placement.
+            from benchmarks.triton_cv import triton_container_name, triton_ports
+            device = triton_device_of(tenant)
+            container = triton_container_name(device)
+            http_port, grpc_port, metrics_port = triton_ports(tenant.round.port, device)
+            if self._triton_container_running(container) or self._triton_ready(http_port):
                 return ServerHandle(tenant=tenant, proc=None, reused=True,
                                     container_name=None)
             from benchmarks.triton_cv import build_triton_serve_cmd
             docker_cmd = build_triton_serve_cmd(
-                paths.triton_repo_root,
-                http_port=tenant.round.port,
-                grpc_port=tenant.round.port + 1,
-                metrics_port=tenant.round.port + 2,
+                paths.triton_repo_root_for(device),
+                device=device,
+                http_port=http_port,
+                grpc_port=grpc_port,
+                metrics_port=metrics_port,
                 container_name=container,
+                models=_triton_models_on(triton_tenants or [tenant], device),
             )
             proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.STDOUT)
@@ -710,9 +793,11 @@ class ColocationOrchestrator:
 
     def _wait_ready(self, tenant: Tenant, timeout_s: int | None = None) -> None:
         if tenant.round.transport == "triton":
-            from benchmarks.triton_cv import triton_ready_url
+            from benchmarks.triton_cv import triton_ports, triton_ready_url
             deadline = time.time() + (timeout_s or 300)
-            url = triton_ready_url(tenant.round.port)
+            # Poll the container on THIS tenant's card; a ready GPU-0 container
+            # says nothing about whether GPU 1's has loaded its models yet.
+            url = triton_ready_url(triton_ports(tenant.round.port, triton_device_of(tenant))[0])
             while time.time() < deadline:
                 try:
                     with urllib.request.urlopen(url, timeout=5) as r:
@@ -747,7 +832,9 @@ class ColocationOrchestrator:
                 # artifact dir at the same path so -f writes to the host.
                 inner = build_perf_analyzer_cmd(
                     model=t.round.model_id,
-                    url=t.round.base_url,
+                    # Not t.round.base_url: that is the backend-wide base, which
+                    # points every Triton tenant at GPU 0's container.
+                    url=triton_tenant_url(t),
                     tenant=t,
                     duration_s=coloc.duration_s,
                     input_data=_workload_input_file(t),
@@ -792,6 +879,30 @@ class ColocationOrchestrator:
 
 
 # ─────────────────────────── helpers ───────────────────────────────────────
+
+def _triton_models_on(tenants: list[Tenant], device: int) -> list[str]:
+    """Model ids of the Triton tenants placed on `device`, sorted for a stable
+    argv (the container command ends up in logs and in a manifest diff)."""
+    return sorted({t.round.model_id for t in tenants if triton_device_of(t) == device})
+
+
+def _link_staged_weight(src: Path, dest: Path) -> None:
+    """Point a per-device repo's version dir at the weights staged once on disk.
+
+    scripts/build_triton_cv_repo.py exports each model's weights ONE time, into
+    the staging repo (= GPU 0's repo). A second card's repo carries only its own
+    configs, so without this its version dir is empty and Triton refuses to load
+    the model. Symlink rather than copy: a TensorRT plan is hundreds of MB and
+    both containers only ever read it. Silent when the weights are not staged
+    yet — _wait_ready is where that surfaces, with the export instructions.
+    """
+    if dest.exists() or not src.exists():
+        return
+    try:
+        dest.symlink_to(src)
+    except OSError:
+        shutil.copyfile(src, dest)
+
 
 def _has_flag(cmd: list[str], flag: str) -> bool:
     return any(a == flag or a.startswith(flag + "=") for a in cmd)

@@ -206,27 +206,117 @@ def resolve_spec(model_id: str) -> CVModelSpec:
     return CV_MODELS[model_id]
 
 
+# ─────────────────────────── multi-GPU placement ───────────────────────────
+#
+# One Triton container per GPU that has CV tenants on it. A single shared
+# container would force every Triton-served model onto one card, which makes two
+# of the three four-tenant/two-GPU pairings in the Phase-5 placement study
+# (docs/contention-coverage.md) inexpressible.
+#
+# Ports: two containers cannot bind the same host port, so each device's block
+# is offset from the configured base by a fixed stride:
+#
+#     http    = base_http + STRIDE * device      # 8100, 8110, 8120, …
+#     grpc    = http + 1
+#     metrics = http + 2
+#
+# Device 0 therefore keeps EXACTLY the ports every existing single-GPU config
+# already uses (base, base+1, base+2), so nothing that omits `device:` moves.
+# The stride is 10, not 3: it leaves slack so one device's listeners can never
+# run into the next device's block if Triton ever grows a fourth port, and it
+# keeps the mapping readable at a glance (GPU n ⇒ …n0).
+TRITON_PORT_STRIDE_PER_DEVICE = 10
+
+# Device 0 keeps the historical bare name; other devices are suffixed. The name
+# is also the orchestrator's launch mutex, so it must be per-device or two
+# tenants on different cards would silently share one container.
+TRITON_CONTAINER_PREFIX = "triton-cv"
+
+# Placement is per-card, and a machine we would run this on tops out at 8.
+MAX_GPU_INDEX = 7
+
+
+def resolve_triton_device(device: int | list[int] | None) -> int:
+    """Normalise a Triton tenant's placement to the ONE GPU index it runs on.
+
+    A Triton tenant is single-GPU by construction: the CV models are exported as
+    whole-graph ONNX/TensorRT engines and placed with `instance_group
+    { kind: KIND_GPU }`, which replicates a model per card — it does not shard
+    one. A `device:` list means tensor parallelism, which none of these models
+    are built for, so it is rejected rather than half-honoured by picking the
+    first index. `None` is the pre-placement default: GPU 0.
+    """
+    if device is None:
+        return 0
+    if isinstance(device, bool):        # bool is an int subclass; `device: true` is a typo
+        raise ValueError(f"triton device must be an int, got {device!r}")
+    if isinstance(device, int):
+        dev = device
+    elif isinstance(device, (list, tuple)):
+        if len(device) != 1:
+            raise ValueError(
+                f"Triton tenants are single-GPU — device={list(device)} requests tensor "
+                "parallelism, which the CV models are not exported for. Give one index."
+            )
+        return resolve_triton_device(device[0])
+    else:
+        raise ValueError(f"triton device must be an int or a 1-element list, got {device!r}")
+    if not 0 <= dev <= MAX_GPU_INDEX:
+        raise ValueError(f"triton device index {dev} out of range (0..{MAX_GPU_INDEX})")
+    return dev
+
+
+def triton_ports(base_http_port: int = 8000, device: int | list[int] | None = None) -> tuple[int, int, int]:
+    """(http, grpc, metrics) for the container on `device`. See the stride note above."""
+    dev = resolve_triton_device(device)
+    http = base_http_port + TRITON_PORT_STRIDE_PER_DEVICE * dev
+    return http, http + 1, http + 2
+
+
+def triton_container_name(device: int | list[int] | None = None,
+                          *, prefix: str = TRITON_CONTAINER_PREFIX) -> str:
+    """Container name for the Triton server on `device` — `triton-cv` on GPU 0,
+    `triton-cv-gpu<N>` elsewhere. Doubles as the per-device launch mutex."""
+    dev = resolve_triton_device(device)
+    return prefix if dev == 0 else f"{prefix}-gpu{dev}"
+
+
 # ─────────────────────────── container commands ────────────────────────────
 
 def build_triton_serve_cmd(
-    repo_root: Path, *, http_port: int = 8000, grpc_port: int = 8001,
-    metrics_port: int = 8002, gpus: str = "all", shm_size: str = "1g",
-    container_name: str = "triton-cv", image: str = TRITON_IMAGE,
-    mps_pipe_dir: str | None = None,
+    repo_root: Path, *, device: int | list[int] | None = None,
+    http_port: int = 8000, grpc_port: int = 8001,
+    metrics_port: int = 8002, shm_size: str = "1g",
+    container_name: str = TRITON_CONTAINER_PREFIX, image: str = TRITON_IMAGE,
+    mps_pipe_dir: str | None = None, models: list[str] | None = None,
 ) -> list[str]:
-    """`docker run` for the Triton server hosting the CV model repo.
+    """`docker run` for the Triton server hosting the CV model repo on ONE GPU.
 
     Notes baked in:
+      - `--gpus device=<N>` pins the container to a single card. That is the
+        docker form for one index (`--gpus all` would expose every GPU and let
+        Triton place instances wherever it likes, which is exactly what the
+        placement study must control). `device` is the physical index; unlike
+        the HTTP tenants we do NOT use CUDA_VISIBLE_DEVICES, because Docker
+        already hides the other cards from the container.
       - `--allow-client-shm=true` — off by default since Triton 26.04; without
         it large CV tensors read as a model regression that is really
         serialization overhead (serving-topology.md gotcha).
       - MPS: the pipe dir is passed through so Triton's CUDA context joins the
         same MPS control the LLM tenants use (isolation is fixed MPS-on).
-      - `--gpus` + `--shm-size` are Docker's; the Triton flags follow the image.
+      - `models`: with per-GPU containers, a card must load ONLY the models
+        placed on it — a stray model costs VRAM on a card that does not need it
+        and perturbs the very contention we are measuring. The per-device repo
+        already holds only those models; `--model-control-mode=explicit` plus
+        one `--load-model` each makes that a server-side guarantee too, which
+        matters because GPU 0's repo is also the shared staging dir the weight
+        exporter writes into and may carry other devices' models on disk.
+      - `--shm-size` is Docker's; the Triton flags follow the image.
     """
+    dev = resolve_triton_device(device)
     cmd = [
         "docker", "run", "--rm", "-d", "--name", container_name,
-        "--gpus", gpus, "--shm-size", shm_size, "--network", "host",
+        "--gpus", f"device={dev}", "--shm-size", shm_size, "--network", "host",
         "-v", f"{Path(repo_root).resolve()}:/models",
     ]
     if mps_pipe_dir:
@@ -238,12 +328,18 @@ def build_triton_serve_cmd(
         f"--http-port={http_port}", f"--grpc-port={grpc_port}",
         f"--metrics-port={metrics_port}", "--allow-client-shm=true",
     ]
+    if models:
+        cmd.append("--model-control-mode=explicit")
+        cmd += [f"--load-model={m}" for m in models]
     return cmd
 
 
-def triton_ready_url(http_port: int = 8000) -> str:
-    """Triton's readiness endpoint — 200 once every model in the repo loads."""
-    return f"http://localhost:{http_port}/v2/health/ready"
+def triton_ready_url(http_port: int = 8000, host: str = "localhost") -> str:
+    """Triton's readiness endpoint — 200 once every model it was told to load has.
+
+    Per-device containers each expose their own; the caller passes the port for
+    the device it is waiting on (see triton_ports)."""
+    return f"http://{host}:{http_port}/v2/health/ready"
 
 
 def wrap_perf_analyzer_docker(

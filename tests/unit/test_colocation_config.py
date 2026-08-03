@@ -107,7 +107,7 @@ def test_rps_sweep_expands_only_the_named_tenant(cfg):
 
 
 def test_vary_changes_the_field_it_names(cfg):
-    colocs = [r for r in _coloc_runs(cfg, "secondary-backend-llm") if not r.is_solo]
+    colocs = [r for r in _coloc_runs(cfg, "secondary-backend-llm-a") if not r.is_solo]
     backends = [t.round.backend for c in colocs for t in c.tenants if t.name == "llm"]
     assert backends == ["vllm", "sglang"]
     cv = {t.round.backend for c in colocs for t in c.tenants if t.name == "cv"}
@@ -129,6 +129,77 @@ def test_extends_merges_tenants_by_name_not_by_position(cfg):
     assert cv.round.model_id == "dinov2-base", "child override applied"
     assert cv.load.rps == 50.0, "parent load inherited"
     assert cv.round.backend == "triton", "parent backend inherited"
+
+
+def test_rps_sweep_on_star_moves_every_tenant_together(cfg):
+    """A same-category colocation asks where the PAIR saturates the card,
+    which is a curve in AGGREGATE offered load. Sweeping one tenant against a
+    fixed neighbour would silently be a cross-* experiment instead."""
+    colocs = [r for r in _coloc_runs(cfg, "same-llm") if not r.is_solo]
+    assert len(colocs) == 4
+    for c in colocs:
+        rates = {t.load.rps for t in c.tenants}
+        assert len(rates) == 1, "both tenants move, and move together"
+    assert [c.tenants[0].load.rps for c in colocs] == [1.0, 4.0, 16.0, 64.0]
+
+
+def test_rps_sweep_names_an_unknown_tenant_loudly():
+    """A typo'd tenant name would otherwise sweep nothing and produce N
+    identical runs that look like a completed experiment."""
+    colos = {
+        "x": {
+            "tenants": [
+                {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b"},
+            ],
+            "rps_sweep": {"tenant": "lmm", "values": [1, 2]},
+        }
+    }
+    with pytest.raises(ValueError, match=r"not in this roster"):
+        list(iter_colocation({"vram_gb": 96, "colocations": colos,
+                              "models": {"qwen2.5-7b": {"hf_id": "x"}},
+                              "backends": {"vllm": {"base_url": "u", "port": 1}}}, "x"))
+
+
+# --------------------------------------------------------------------------- #
+# Repetitions
+# --------------------------------------------------------------------------- #
+
+
+def test_repetitions_emit_one_window_per_repeat(cfg):
+    """Near-OOM behaviour is bimodal — the model either fits or thrashes, and
+    the mean of those two states describes neither. The spread across repeats
+    is the finding, so the runs have to actually exist."""
+    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-84") if not r.is_solo]
+    assert len(colocs) == 3
+    assert [c.repetition for c in colocs] == [1, 2, 3]
+    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-84"}, (
+        "repeats are samples of one experiment, not three experiments"
+    )
+
+
+def test_repetitions_do_not_multiply_the_baselines(cfg):
+    """Baselines dedup by `_solo_key` here and are cached again per session by
+    the orchestrator, so a repeated baseline would be dropped anyway."""
+    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-84") if r.is_solo]
+    assert len(solos) == 2, "one per tenant, not one per tenant per repeat"
+
+
+def test_repetitions_default_to_one(cfg):
+    for r in _coloc_runs(cfg, "mix-llm-cv"):
+        assert r.repetition == 1
+
+
+def test_repetitions_below_one_is_rejected():
+    colos = {
+        "x": {
+            "tenants": [{"name": "llm", "backend": "vllm", "model": "qwen2.5-7b"}],
+            "repetitions": 0,
+        }
+    }
+    with pytest.raises(ValueError, match="repetitions must be >= 1"):
+        list(iter_colocation({"vram_gb": 96, "colocations": colos,
+                              "models": {"qwen2.5-7b": {"hf_id": "x"}},
+                              "backends": {"vllm": {"base_url": "u", "port": 1}}}, "x"))
 
 
 def test_extends_rejects_a_cycle():
@@ -432,6 +503,183 @@ def test_to_dict_is_json_serialisable_and_carries_identity(cfg):
     assert d["phase"] == 3
     assert {t["name"] for t in d["tenants"]} == {"llm", "cv"}
     assert d["tenants"][0]["round"]["hf_id"]
+
+
+# --------------------------------------------------------------------------- #
+# Experiment-design coverage (docs/contention-coverage.md)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "name,n_tenants,n_points",
+    [
+        ("same-llm", 2, 4),
+        ("same-cv", 2, 4),
+        ("same-vlm", 2, 4),
+        ("same-ilm", 2, 4),
+    ],
+)
+def test_same_category_family_is_a_saturation_curve(cfg, name, n_tenants, n_points):
+    """§3's "two models stressing the same resource fight hardest" has nothing
+    to be checked against while every colocation is cross-category."""
+    colocs = [r for r in _coloc_runs(cfg, name) if not r.is_solo]
+    assert len(colocs) == n_points
+    assert all(len(c.tenants) == n_tenants for c in colocs)
+    rates = [sorted(t.load.rps for t in c.tenants) for c in colocs]
+    assert rates == sorted(rates), "load must climb monotonically along the curve"
+
+
+def test_same_vlm_pairs_two_models_that_can_actually_serve_video(cfg):
+    """The customer's second VLM (paligemma2) is image-only, so a video pair
+    cannot be built from their picks. Whatever we substituted must not have
+    inherited the same defect."""
+    coloc = next(r for r in _coloc_runs(cfg, "same-vlm") if not r.is_solo)
+    for t in coloc.tenants:
+        assert t.workload == "vlm_video_long"
+        unsupported = cfg["models"][t.round.model_id].get("unsupported_workloads") or {}
+        assert "vlm_video_long" not in unsupported, t.round.model_id
+
+
+def test_mix_full_is_the_only_four_category_window(cfg):
+    """It is what makes multi-GPU placement a real decision — with four
+    tenants and two cards there are three pairings to rank."""
+    coloc = next(r for r in _coloc_runs(cfg, "mix-full") if not r.is_solo)
+    assert {t.name for t in coloc.tenants} == {"llm", "vlm", "ilm", "cv"}
+    assert len(coloc.tenants) == 4
+
+
+def test_mix_full_tenants_keep_the_two_tenant_kv_budget(cfg):
+    """§2b: if the caches shrink when the neighbours arrive, the 4-tenant
+    degradation is partly our own memory allocation."""
+    coloc = next(r for r in _coloc_runs(cfg, "mix-full") if not r.is_solo)
+    derived = [t.kv_budget_gb for t in coloc.tenants if t.kv_budget_gb is not None]
+    assert derived and set(derived) == {20.0}
+    caps = [t.gpu_memory_utilization or 0 for t in coloc.tenants]
+    assert sum(caps) < 1.0, "four tenants must still fit on one card"
+
+
+@pytest.mark.parametrize("name", ["cross-ilm-vs-cv", "cross-cv-vs-llm-rps"])
+def test_cross_sweeps_move_one_tenant_and_hold_the_subject(cfg, name):
+    """A cross-* experiment is only attributable if the subject's own load is
+    the one thing that did not move."""
+    colocs = [r for r in _coloc_runs(cfg, name) if not r.is_solo]
+    assert len(colocs) == 4
+    swept = "cv" if name == "cross-ilm-vs-cv" else "llm"
+    subject = {t.name for c in colocs for t in c.tenants} - {swept}
+    for held in subject:
+        assert len({
+            next(t.load.rps for t in c.tenants if t.name == held) for c in colocs
+        }) == 1, f"{held} drifted"
+    assert len({
+        next(t.load.rps for t in c.tenants if t.name == swept) for c in colocs
+    }) == 4
+
+
+MEMORY_PRESSURE_CURVE = [
+    "cross-memory-pressure-63",
+    "cross-memory-pressure-66",
+    "cross-memory-pressure-78",
+    "cross-memory-pressure-84",
+]
+
+
+def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
+    """Four points from comfortable to near-OOM. Non-monotone reservation
+    would mean the curve doubles back and the knee is unlocatable."""
+    reserved = []
+    for name in MEMORY_PRESSURE_CURVE:
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        assert len(c.tenants) == 2
+        reserved.append(sum(t.gpu_memory_utilization for t in c.tenants))
+    assert reserved == sorted(reserved), reserved
+    assert reserved[-1] > 0.95, "the top rung has to actually approach the ceiling"
+    assert reserved[-1] <= 1.0, "and must still be loadable"
+
+
+def test_memory_pressure_squeezes_the_kv_cache_not_just_the_weights(cfg):
+    """The mechanism under test is KV-cache eviction, so the cache has to be
+    the thing shrinking. Caps are explicit here for exactly this reason —
+    deriving them would pin the swept variable and flatten the curve."""
+    kv = []
+    for name in MEMORY_PRESSURE_CURVE:
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        t = next(t for t in c.tenants if t.name == "neighbour")
+        weights = cfg["models"][t.round.model_id]["weights_gb"]
+        kv.append(t.gpu_memory_utilization * cfg["vram_gb"] - weights)
+        assert t.kv_budget_gb is None, "explicit cap, not derived"
+    assert kv == sorted(kv, reverse=True), f"KV must shrink along the curve: {kv}"
+
+
+def test_memory_pressure_holds_the_offered_load_constant(cfg):
+    """The customer's config halves the rate at the extreme point. Ours loads,
+    so halving would confound the cliff with a load change."""
+    loads = []
+    for name in MEMORY_PRESSURE_CURVE:
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        loads.append({t.name: t.load.rps for t in c.tenants})
+    assert all(d == loads[0] for d in loads), loads
+
+
+def test_every_memory_pressure_rung_can_load_its_weights(cfg):
+    for name in MEMORY_PRESSURE_CURVE:
+        for run in _coloc_runs(cfg, name):
+            for t in run.tenants:
+                weights = cfg["models"][t.round.model_id]["weights_gb"]
+                assert t.gpu_memory_utilization * cfg["vram_gb"] > weights, (
+                    f"{name}/{t.round.model_id}"
+                )
+
+
+SECONDARY_DIMENSIONS = [
+    ("secondary-backend-llm", 2),
+    ("secondary-backend-cv", 3),
+    ("secondary-output-length", 2),
+    ("secondary-input-size-cv", 2),
+    ("secondary-input-size-llm", 2),
+    ("secondary-asymmetry", 3),
+    ("secondary-arrival", 2),
+]
+
+
+@pytest.mark.parametrize("stem,n_points", SECONDARY_DIMENSIONS)
+def test_every_secondary_dimension_runs_against_both_baselines(cfg, stem, n_points):
+    """The interaction is the finding — "backend choice matters 3x more under
+    memory pressure" is invisible with one baseline. A dimension that exists
+    only in `-a` answers half its question."""
+    for suffix, base in (("-a", "mix-llm-cv"), ("-b", "mix-memory-bound")):
+        colocs = [r for r in _coloc_runs(cfg, stem + suffix) if not r.is_solo]
+        assert len(colocs) == n_points, stem + suffix
+        assert cfg["colocations"][stem + suffix]["extends"] == base
+
+
+def test_the_two_baselines_actually_contrast_in_memory_pressure(cfg):
+    """A pair of baselines that reserve the same VRAM is one baseline run
+    twice."""
+    def reserved(name):
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        return sum(t.gpu_memory_utilization or 0 for t in c.tenants)
+
+    assert reserved("mix-llm-cv") < 0.6
+    assert reserved("mix-memory-bound") > 0.9
+
+
+def test_baseline_b_still_leaves_room_for_its_triton_tenant(cfg):
+    """The CV tenant has no `gpu_memory_utilization` to reserve with — it takes
+    whatever the vLLM tenants did not, so `sum < 1.0` is not a formality."""
+    c = next(r for r in _coloc_runs(cfg, "mix-memory-bound") if not r.is_solo)
+    vllm_caps = sum(t.gpu_memory_utilization for t in c.tenants
+                    if t.gpu_memory_utilization is not None)
+    assert vllm_caps <= 0.95
+    assert (1.0 - vllm_caps) * cfg["vram_gb"] > 4.0, "Triton needs a few GB"
+
+
+def test_input_size_llm_moves_prefill_without_moving_decode(cfg):
+    """A different question from output-length: llm_short → llm_long changes
+    both the prompt AND the output, so it can never separate the two."""
+    colocs = [r for r in _coloc_runs(cfg, "secondary-input-size-llm-a") if not r.is_solo]
+    outs = {next(t.load.output_tokens for t in c.tenants if t.name == "llm")
+            for c in colocs}
+    assert outs == {32}, "output length must be the constant here"
 
 
 def test_every_defined_colocation_resolves(cfg):

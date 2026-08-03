@@ -171,10 +171,14 @@ If the measured ranking matches, the customer gets a **placement rule they can
 apply to models we never tested** — worth considerably more than three
 benchmark numbers.
 
-> **Known blocker.** CV and ILM tenants share one Triton container, and the
-> launcher takes no GPU argument, so both must currently land on the same
-> card. That makes P1 expressible today but not P2 or P3. Per-GPU Triton
-> containers are required before the placement study can run.
+> **Blocker cleared (2026-08-03).** Per-GPU Triton containers landed: the
+> orchestrator now launches one container per card that has Triton tenants on
+> it, each with its own name (`triton-cv`, `triton-cv-gpu1`, …), its own port
+> block (base + 10 × device, so GPU 0 keeps 8100/8101/8102), its own model
+> repository holding only that card's models, and `--gpus device=<N>`. All
+> three pairings are now expressible; P2 and P3 no longer need CV and ILM on
+> the same card. A Triton tenant must still name exactly one device — the CV
+> models are not tensor-parallel, and a `device:` list is rejected.
 
 > **To verify on hardware.** The PRO 6000 config records `nvlink: false`, so
 > cross-GPU traffic goes over PCIe Gen5. Tensor-parallel results will likely
@@ -238,5 +242,5 @@ Ordered by value, not by phase number:
 3. **Phase 6 dual baseline** — structural, cheap, and it doubles the information in six colocations that already exist
 4. **`cross-memory-pressure`** — the KV-cache cliff curve
 5. **`mix-full`** — unblocks Phase 5
-6. **Per-GPU Triton containers** — prerequisite for two of the three placements
+6. ~~**Per-GPU Triton containers**~~ — done, see Phase 5
 7. **Phase 5 placement study** — the three pairings × {2, 4} GPUs

@@ -267,6 +267,17 @@ def iter_sweep(cfg: dict[str, Any], sweep_name: str) -> Iterator[Round]:
 _DRIVER_FOR_TRANSPORT = {"http": "aiperf", "zmq": "zmq_client", "triton": "perf_analyzer"}
 
 
+# `rps_sweep: {tenant: "*"}` — raise EVERY tenant's rate together.
+#
+# A cross-* experiment holds the subject's load fixed and sweeps the
+# neighbour's, so that the subject's latency curve is attributable to the
+# neighbour. A SAME-category experiment is asking a different question — where
+# does this pair saturate the card? — and that is a curve in aggregate offered
+# load. Sweeping one tenant there would quietly turn it into a cross-*
+# experiment against a fixed neighbour and answer neither question.
+ALL_TENANTS = "*"
+
+
 # ─── VRAM cap sizing ──────────────────────────────────────────────────
 #
 # `kv_budget_gb` is a COLOCATION-level setting, not a per-tenant one, and
@@ -428,11 +439,16 @@ class Colocation:
     isolation: str = "mps"             # none | mps | mig | separate-gpu
     phase: int | None = None
     is_solo: bool = False
+    # 1-based index within a `repetitions:` set. 1 for every colocation that
+    # does not ask for repeats, so the field is always meaningful on a result.
+    repetition: int = 1
 
     @property
     def run_label(self) -> str:
         """Pairs a contention row with its baseline in summary.py, which
-        keys cross-run deltas off `run_label`."""
+        keys cross-run deltas off `run_label`. Repetitions deliberately SHARE
+        one label: they are samples of the same experiment, and summary.py
+        should aggregate them rather than treat them as three experiments."""
         return "solo" if self.is_solo else f"coloc:{self.id}"
 
     def to_dict(self) -> dict[str, Any]:
@@ -442,6 +458,7 @@ class Colocation:
             "duration_s": self.duration_s,
             "isolation": self.isolation,
             "is_solo": self.is_solo,
+            "repetition": self.repetition,
             "run_label": self.run_label,
             "n_tenants": len(self.tenants),
             "tenants": [t.to_dict() for t in self.tenants],
@@ -587,9 +604,11 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
     co-resident window(s).
 
     Expansion rules, applied in order:
-      extends    — inherit a base colocation, merging tenants by name
-      rps_sweep  — one colocation per rate for the named tenant
-      vary       — one colocation per value of a named tenant field
+      extends     — inherit a base colocation, merging tenants by name
+      rps_sweep   — one colocation per rate for the named tenant, or for
+                    every tenant at once with `tenant: "*"`
+      vary        — one colocation per value of a named tenant field
+      repetitions — each resulting contention window emitted N times
 
     Baselines come first so that a partial run still produces the reference
     numbers the ratios need; a contention row without its baseline is
@@ -616,11 +635,18 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
     sweep = spec.get("rps_sweep")
     if sweep:
         target, values = str(sweep["tenant"]), list(sweep["values"])
+        names = {str(t["name"]) for t in base_tenants}
+        if target != ALL_TENANTS and target not in names:
+            raise ValueError(
+                f"colocation {name!r}: rps_sweep names tenant {target!r}, which is "
+                f"not in this roster ({sorted(names)}). Use {ALL_TENANTS!r} to sweep "
+                "every tenant together."
+            )
         expanded = []
         for v in values:
             roster = [dict(t) for t in base_tenants]
             for t in roster:
-                if t["name"] == target:
+                if target == ALL_TENANTS or t["name"] == target:
                     t["load"] = {**(t.get("load") or {}), "rps": v}
             expanded.append(roster)
         rosters = expanded
@@ -649,6 +675,19 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
     # KV cache matches (docs/contention.md §2b).
     kv_budget_gb = float(spec.get("kv_budget_gb", DEFAULT_KV_BUDGET_GB))
 
+    # `repetitions:` — run each contention window N times. Only ask for this
+    # where the quantity being measured is not unimodal: near the VRAM ceiling
+    # a model either fits or thrashes, and the mean of those two states
+    # describes neither, so the spread across repeats IS the finding.
+    # Baselines are NOT repeated: they are deduped by `_solo_key` here and
+    # cached again per session by the orchestrator, so a repeat would be
+    # dropped anyway — and the bimodality lives in the co-resident window.
+    repetitions = int(spec.get("repetitions", 1))
+    if repetitions < 1:
+        raise ValueError(
+            f"colocation {name!r}: repetitions must be >= 1, got {repetitions}"
+        )
+
     seen_solo: set[tuple] = set()
     pending: list[Colocation] = []
 
@@ -675,12 +714,14 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
                     isolation=isolation, phase=phase, is_solo=True,
                 )
 
-        pending.append(
-            Colocation(
-                id=name, tenants=tenants, duration_s=duration_s,
-                isolation=isolation, phase=phase, is_solo=False,
+        for rep in range(1, repetitions + 1):
+            pending.append(
+                Colocation(
+                    id=name, tenants=tenants, duration_s=duration_s,
+                    isolation=isolation, phase=phase, is_solo=False,
+                    repetition=rep,
+                )
             )
-        )
 
     yield from pending
 

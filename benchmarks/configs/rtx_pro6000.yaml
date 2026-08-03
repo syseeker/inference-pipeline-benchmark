@@ -469,6 +469,11 @@ backends:
   # Ports avoid vLLM's 8000. Triton's gRPC listener is port+1 (8101) and
   # metrics port+2 (8102); perf_analyzer talks gRPC by default.
   #
+  # `port` here is the GPU-0 base. With tenants placed across cards the
+  # orchestrator runs one container per GPU and offsets each one's port block
+  # by 10 × device (GPU 1 → 8110/8111/8112), because two containers cannot
+  # bind the same host port. Nothing changes for a config that omits `device:`.
+  #
   # ⚠ Launch with --allow-client-shm=true. Client shared memory has been
   # DISABLED by default since Triton 26.04, and without it large CV input
   # tensors carry serialization overhead that reads as a model regression.
@@ -677,6 +682,13 @@ workloads:
   llm_long:
     prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~1000 tok
     output_tokens: 512
+  # Long prompt, SHORT output. Exists so the prompt-length dimension can be
+  # swept without dragging output length along with it: llm_short → llm_long
+  # changes both at once, so it can only answer "does more work cost more",
+  # never "is prefill or decode the thing that contends".
+  llm_long_prompt:
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # ~1000 tok prefill
+    output_tokens: 32
 
   # Video. Frame count IS the VLM input-size dimension — the 40-frame clip
   # is the sustained prefill burst other tenants are measured against.
@@ -722,7 +734,9 @@ workloads:
 # envelope. See the design-decisions reference in the skill.
 #
 # Composition: `extends` inherits a base (tenants merge by name),
-# `rps_sweep` expands one tenant's rate, `vary` expands any tenant field.
+# `rps_sweep` expands one tenant's rate — or every tenant's together with
+# `tenant: "*"`, which is what a saturation curve needs — `vary` expands any
+# tenant field, and `repetitions` re-runs each window N times.
 # Phases match workspace/contention/experiment_design.md.
 #
 # Placement: a tenant may set `device: 0` (one card) or `device: [0, 1]`
@@ -730,6 +744,145 @@ workloads:
 # card, so nothing below sets it. The VRAM sum is enforced per GPU, and a
 # tensor-parallel tenant charges its fraction to every card it occupies.
 colocations:
+
+  # ── Phase 2 — same-category load sweeps ────────────────────────────
+  # docs/contention.md §3 predicts that two tenants leaning on the SAME
+  # resource fight hardest, and that two leaning on different ones can
+  # overlap almost for free. Every other colocation in this file is
+  # cross-category, so the prediction has nothing to be checked against —
+  # these four are the same-resource half of the comparison.
+  #
+  # The load is swept on `tenant: "*"` — every tenant together. The question
+  # here is where the PAIR saturates the card, which is a curve in aggregate
+  # offered load; sweeping one tenant against a fixed neighbour would be a
+  # cross-* experiment wearing this one's name. Where achieved_rps falls
+  # below offered_rps is the saturation point Phase 2 was looking for, and
+  # the rps=50 rung is the fixed-load point Phase 3's `*-only` mixes asked
+  # for — same run, so it is not run twice.
+
+  # Two text LLMs: both bandwidth-bound in decode, both streaming their whole
+  # weight matrix per token. Does a shared bottleneck cost more than a
+  # divided one?
+  same-llm:
+    phase: 2
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    # Both caps derived: 7b → 0.39, gemma2-9b → 0.42, so the pair reserves
+    # 0.81 of the card and each gets the same 20 GB of KV. A fixed fraction
+    # would have handed the larger model the smaller cache and the curve
+    # would have measured that instead.
+    kv_budget_gb: 20.0
+    tenants:
+      - name: llm_a
+        backend: vllm
+        model: qwen2.5-7b
+        workload: llm_short
+        load: {pattern: poisson, rps: 4}
+      - name: llm_b
+        backend: vllm
+        model: gemma2-9b        # different vendor, same resource profile
+        workload: llm_short
+        load: {pattern: poisson, rps: 4}
+    rps_sweep: {tenant: "*", values: [1, 4, 16, 64]}
+
+  # Two CV models on one Triton: a launch-bound detector next to a
+  # bandwidth-bound embedder. Both are millisecond-scale, so this is also
+  # where the §3 asymmetry bites hardest — a 5 ms model pushed to 15 ms is a
+  # 3x regression that an LLM at the same absolute interference would not
+  # notice. 200 rps is where Triton's own queueing should appear first.
+  same-cv:
+    phase: 2
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    tenants:
+      - name: cv_a
+        backend: triton
+        model: yolov8-l
+        triton_backend: tensorrt
+        workload: cv_detect_default
+        load: {pattern: poisson, rps: 50}
+      - name: cv_b
+        backend: triton
+        model: dinov2-base
+        triton_backend: tensorrt
+        workload: cv_embed
+        load: {pattern: poisson, rps: 50}
+    rps_sweep: {tenant: "*", values: [1, 10, 50, 200]}
+
+  # Two video VLMs — two periodic compute tsunamis on one card. The
+  # interesting case is when the two prefill bursts land on top of each
+  # other rather than interleaving.
+  #
+  # SUBSTITUTION: the customer's second VLM (`gemma-vlm-32b` →
+  # paligemma2-28b) is image-only and cannot serve a video workload at all
+  # (§9 of docs/contention-coverage.md), so it cannot be the second tenant
+  # of a *video* VLM pair. `qwen2.5-vl-7b` is the only video VLM in the
+  # contention roster, so the neighbour comes from the headline roster:
+  # `gemma-4-31b-it-fp8` is dense, video-capable, and from a different
+  # vendor — which keeps the cross-vendor check the customer's original
+  # pick was carrying.
+  #
+  # Rates are low because one 40-frame clip is several hundred ms of
+  # sustained prefill; 4 rps of that from two tenants already exceeds the
+  # card, which is the point of the top rung.
+  same-vlm:
+    phase: 2
+    duration_s: 180
+    isolation: mps
+    solo_baselines: auto
+    # 16 GB rather than the usual 20: the two video VLMs are 38 GB of weights
+    # between them, and a video request's KV is dominated by the several
+    # thousand tokens 40 frames expand into, not by the prompt.
+    kv_budget_gb: 16.0
+    tenants:
+      - name: vlm_a
+        backend: vllm
+        model: qwen2.5-vl-7b
+        workload: vlm_video_long
+        load: {pattern: poisson, rps: 1}   # cap derived → 0.26
+
+      - name: vlm_b
+        backend: vllm
+        model: gemma-4-31b-it-fp8
+        workload: vlm_video_long
+        # Explicit cap: this model sits outside the contention roster and so
+        # carries no `weights_gb`, which is what derivation needs. 0.51 =
+        # ~31 GB weights + the same 16 GB KV + overhead, so the pair still
+        # holds one KV budget between them even though only one is derived.
+        gpu_memory_utilization: 0.51
+        load: {pattern: poisson, rps: 1}
+    rps_sweep: {tenant: "*", values: [0.5, 1, 2, 4]}
+
+  # Two document/image models: high-resolution stills through a vision
+  # encoder, heavy but far steadier than video. If §3 is right, this pair
+  # should degrade more gracefully than same-vlm and less gracefully than a
+  # cross-category pair at the same offered load.
+  #
+  # kosmos-2.5 is on Triton's python backend because no vLLM or SGLang
+  # implementation exists — so its absolute latencies are a serving-path
+  # artifact, not a contention finding. Its RATIO is still valid; that is
+  # the whole reason the study reports ratios.
+  same-ilm:
+    phase: 2
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    kv_budget_gb: 20.0
+    tenants:
+      - name: ilm_a
+        backend: triton
+        model: kosmos-2.5
+        triton_backend: python
+        workload: ilm_document
+        load: {pattern: poisson, rps: 2}
+      - name: ilm_b
+        backend: vllm
+        model: qwen2.5-vl-7b       # serving images here, not video
+        workload: ilm_document
+        load: {pattern: poisson, rps: 2}
+    rps_sweep: {tenant: "*", values: [1, 2, 4, 8]}
 
   # ── Phase 3 — model type mix ───────────────────────────────────────
   mix-llm-cv:
@@ -777,6 +930,72 @@ colocations:
         workload: ilm_document
         load: {pattern: poisson, rps: 2}
 
+  # Video VLM next to a document model — the two compute-heavy categories,
+  # with no bandwidth-bound tenant between them to absorb the burst. §3
+  # predicts this is the pairing to avoid when packing GPUs, and Phase 5's
+  # predicted-worst placement (P2/P3) rests on that prediction being true.
+  # Same VLM substitution as `same-vlm`: paligemma2 cannot serve video.
+  mix-vlm-ilm:
+    phase: 3
+    duration_s: 180
+    isolation: mps
+    solo_baselines: auto
+    kv_budget_gb: 20.0
+    tenants:
+      - name: vlm
+        backend: vllm
+        model: qwen2.5-vl-7b
+        workload: vlm_video_long     # 40-frame encode = the prefill burst
+        load: {pattern: poisson, rps: 1}
+      - name: ilm
+        backend: triton              # kosmos-2.5 has no vLLM/SGLang support
+        model: kosmos-2.5
+        triton_backend: python
+        workload: ilm_document
+        load: {pattern: poisson, rps: 2}
+
+  # All four categories at once — the only 4-tenant window in the study.
+  # Every other colocation answers "do these two fit together"; this one
+  # answers "does the whole stack fit on one card", which is the question a
+  # customer actually has. It is also the prerequisite for Phase 5: with
+  # four tenants and two GPUs there are exactly three pairings to rank, and
+  # without this window there is no 1-GPU number to rank them against.
+  #
+  # Caps derived from a 20 GB KV budget: 0.39 (llm) + 0.30 (vlm) = 0.69,
+  # leaving ~30 GB for the two Triton tenants. The two LLM/VLM tenants keep
+  # the same 20 GB KV they get in the 2-tenant windows, which is the only
+  # way the 4-tenant degradation is attributable to the extra neighbours
+  # rather than to a cache that shrank underneath them (§2b).
+  mix-full:
+    phase: 3
+    duration_s: 180
+    isolation: mps
+    solo_baselines: auto
+    kv_budget_gb: 20.0
+    tenants:
+      - name: llm
+        backend: vllm
+        model: qwen2.5-7b
+        workload: llm_short
+        load: {pattern: poisson, rps: 4}
+      - name: vlm
+        backend: vllm
+        model: qwen2.5-vl-7b
+        workload: vlm_video_long
+        load: {pattern: poisson, rps: 1}
+      - name: ilm
+        backend: triton
+        model: kosmos-2.5
+        triton_backend: python
+        workload: ilm_document
+        load: {pattern: poisson, rps: 2}
+      - name: cv
+        backend: triton
+        model: yolov8-l
+        triton_backend: tensorrt
+        workload: cv_detect_default
+        load: {pattern: poisson, rps: 50}
+
   # ── Phase 4 — cross-type contention: sweep the neighbour's load ────
   # The knee in the subject's latency against CV rate is the disruption
   # threshold; where achieved_rps < offered_rps is the envelope boundary.
@@ -784,6 +1003,32 @@ colocations:
     phase: 4
     extends: mix-llm-cv
     rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}
+
+  # Same sweep, ILM as the subject. A document model holds its vision
+  # encoder busy for far longer per request than a text LLM does, so the
+  # question is whether the CV knee arrives at the same rate or earlier —
+  # i.e. whether the disruption threshold is a property of the card or of
+  # the tenant being disrupted.
+  cross-ilm-vs-cv:
+    phase: 4
+    extends: mix-ilm-cv
+    rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}
+
+  # CV as the SUBJECT for once. Everywhere else CV is the aggressor, which
+  # only ever answers half of §3's asymmetry claim: a 5 ms detector pushed
+  # to 15 ms is a 3x regression while the LLM beside it barely moves, and
+  # that direction is invisible until the detector is the one being watched.
+  #
+  # REFRAMED: the customer specified this as an LLM *concurrency* sweep. A
+  # closed-loop neighbour throttles itself in proportion to the slowdown it
+  # is causing, so the aggression level would have been set by the harness
+  # rather than by us — the ratio would describe the load generator. Swept
+  # as offered rate instead; the intent (turn the LLM's pressure up in four
+  # steps) is unchanged.
+  cross-cv-vs-llm-rps:
+    phase: 4
+    extends: mix-llm-cv
+    rps_sweep: {tenant: llm, values: [1, 4, 16, 64]}
 
   cross-vlm-prefill-vs-llm:
     phase: 4
@@ -838,37 +1083,252 @@ colocations:
       field: model
       values: [qwen2.5-7b, llama3.1-8b, mistral-7b]
 
+  # ── Phase 4 — the KV-cache cliff ───────────────────────────────────
+  # Four points walking VRAM from comfortable to near-OOM. Where does the
+  # KV cache get small enough that vLLM starts evicting and preempting
+  # rather than batching? Below that point co-residency costs a little
+  # throughput; above it, requests queue and the latency curve turns
+  # vertical. The customer wants the location of that knee, because it is
+  # the number that decides whether a second tenant is affordable at all.
+  #
+  # Read as ONE curve, in this order:
+  #   cross-memory-pressure-63 → -66 → -78 → -84
+  # The suffix is the share of the card taken by WEIGHTS alone. Held
+  # against it, the two tenants' KV caches shrink 9.7 → 8.4 → 5.0 → 3.9 GB
+  # (neighbour) and 5.8 → 5.8 → 5.8 → 3.5 GB (anchor).
+  #
+  # WHY EXPLICIT CAPS HERE, against the derive-from-kv_budget_gb rule used
+  # everywhere else: the rule exists to hold the KV cache CONSTANT so that
+  # a comparison isolates the neighbour. Here the KV cache is the swept
+  # variable. Deriving the caps would pin the exact quantity the experiment
+  # is about and every rung would come out the same. The caps are written
+  # out per point, and the resulting KV is written next to each one so a
+  # reader can check the arithmetic rather than trust it.
+  #
+  # WHY FOUR NAMES instead of one entry with a sweep: both tenants change
+  # per point (model AND cap), and `vary` moves one field of one tenant.
+  # Four explicit entries are honest about that; contorting the schema to
+  # emit them would hide which knobs actually moved.
+  #
+  # SUBSTITUTIONS from the customer's (72b,7b) / (72b,14b) / (72b,32b) /
+  # (vl-72b,72b) ladder, both forced by this card:
+  #   · (72b, 32b) is 45 + 65.5 = 110.5 GB of weights and does not load on
+  #     a 96 GB card at all — nor does any pair reaching their 86% top rung
+  #     with a 72B anchor. `qwen2.5-32b` becomes the ANCHOR at the top rung
+  #     instead, beside the 7b: 80.7 GB of weights, 84% — one point under
+  #     their 86%, and it is the heaviest loadable pair in the roster.
+  #   · `qwen2.5-vl-72b` has no entry in this yaml (and at BF16 needs two
+  #     cards), so it cannot serve the top rung either.
+  #   · The Qwen2.5 ladder has nothing between 7B and 14B, so their second
+  #     rung is filled by `gemma2-9b`. It changes vendor mid-curve, which
+  #     `cross-arch-validation` exists to bound: if the three architectures
+  #     agree there within ~20%, this rung is comparable to its neighbours.
+  #
+  # repetitions: 3 — near-OOM behaviour is bimodal. The model either fits
+  # or it thrashes, and the mean of those two states describes neither, so
+  # the SPREAD across the three runs is the finding at the top rungs. Kept
+  # at 3 for the comfortable rungs too, so the spread has something to be
+  # compared against.
+  #
+  # The offered rate is deliberately IDENTICAL at all four points. The
+  # customer's config halves it at the extreme point to avoid OOM; our top
+  # rung loads (92 GB reserved of 96), so halving would only confound the
+  # cliff with a load change.
+  cross-memory-pressure-63:
+    phase: 4
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    repetitions: 3
+    tenants:
+      - name: anchor
+        backend: vllm
+        model: qwen2.5-72b           # AWQ, 45.0 GB
+        workload: llm_short
+        gpu_memory_utilization: 0.55  # 52.8 GB → 45.0 weights + 2 oh + 5.8 KV
+        load: {pattern: poisson, rps: 2}
+      - name: neighbour
+        backend: vllm
+        model: qwen2.5-7b            # 15.2 GB
+        workload: llm_short
+        gpu_memory_utilization: 0.28  # 26.9 GB → 15.2 weights + 2 oh + 9.7 KV
+        load: {pattern: poisson, rps: 4}
+
+  cross-memory-pressure-66:
+    phase: 4
+    extends: cross-memory-pressure-63
+    tenants:
+      - name: neighbour
+        model: gemma2-9b             # 18.4 GB — fills the gap in the Qwen ladder
+        gpu_memory_utilization: 0.30  # 28.8 GB → 18.4 weights + 2 oh + 8.4 KV
+
+  cross-memory-pressure-78:
+    phase: 4
+    extends: cross-memory-pressure-63
+    tenants:
+      - name: neighbour
+        model: qwen2.5-14b           # 29.5 GB
+        gpu_memory_utilization: 0.38  # 36.5 GB → 29.5 weights + 2 oh + 5.0 KV
+
+  # Top rung: 92 of 96 GB reserved, and both caches under 4 GB. If the
+  # cliff exists anywhere in this study it is here.
+  cross-memory-pressure-84:
+    phase: 4
+    extends: cross-memory-pressure-63
+    tenants:
+      - name: anchor
+        model: qwen2.5-32b           # BF16, 65.5 GB — heaviest in the roster
+        gpu_memory_utilization: 0.74  # 71.0 GB → 65.5 weights + 2 oh + 3.5 KV
+      - name: neighbour
+        model: qwen2.5-7b
+        gpu_memory_utilization: 0.22  # 21.1 GB → 15.2 weights + 2 oh + 3.9 KV
+
   # ── Phase 6 — secondary dimensions ─────────────────────────────────
-  secondary-backend-llm:
+  # Every dimension below runs against TWO contrasting baselines, `-a` and
+  # `-b`. That is the customer's design and it is the point of the phase: a
+  # secondary dimension measured against one baseline gives a main effect,
+  # and the thing worth knowing is the INTERACTION. "TensorRT beats the
+  # python backend by 1.4x" is a fact about Triton; "it beats it by 1.4x
+  # normally and by 4x once the card is memory-bound" is a deployment rule,
+  # and only the pair can produce it.
+  #
+  #   -a  extends mix-llm-cv       — COMPUTE-bound: small models, high rate,
+  #                                  ~35 GB reserved, cache room to spare.
+  #   -b  extends mix-memory-bound — MEMORY-bound: 72B + 14B + a detector at
+  #                                  moderate rate, ~90 GB reserved.
+  #
+  # A dimension that behaves the same in both is a safe generalisation; one
+  # that flips between them is a finding, and the flip is invisible with a
+  # single baseline.
+
+  # Baseline B. `mix-llm-cv` above is baseline A — same three resource
+  # roles (a driving LLM, a second LLM, a detector), pushed against VRAM
+  # instead of against the clock.
+  #
+  # kv_budget_gb: 6.0, well under the 20 GB the compute-bound colocations
+  # get, because that is what memory-bound MEANS here: 45.0 + 29.5 = 74.5
+  # GB of weights leaves 21.5 GB for two caches, two overheads and the CV
+  # tenant. Derived: 0.55 (72b) + 0.39 (14b) = 0.94, ~5.8 GB left for
+  # Triton. Held constant across every `-b` run, so the pair of baselines
+  # differ in memory pressure and in nothing else that we chose.
+  mix-memory-bound:
+    phase: 6
+    duration_s: 120
+    isolation: mps
+    solo_baselines: auto
+    kv_budget_gb: 6.0
+    tenants:
+      - name: llm
+        backend: vllm
+        model: qwen2.5-72b           # AWQ 45.0 GB — the memory anchor
+        workload: llm_short
+        load: {pattern: poisson, rps: 2}
+      - name: llm2
+        backend: vllm
+        model: qwen2.5-14b
+        workload: llm_short
+        load: {pattern: poisson, rps: 2}
+      - name: cv
+        backend: triton
+        model: yolov8-l
+        triton_backend: tensorrt
+        workload: cv_detect_default
+        load: {pattern: poisson, rps: 50}
+
+  # Does the serving backend matter more when memory is tight? vLLM and
+  # SGLang size and evict their KV caches differently, and that difference
+  # has nothing to lean on until the cache is the scarce resource.
+  secondary-backend-llm-a:
     phase: 6
     extends: mix-llm-cv
     vary: {tenant: llm, field: backend, values: [vllm, sglang]}
 
-  secondary-backend-cv:
+  secondary-backend-llm-b:
+    phase: 6
+    extends: mix-memory-bound
+    vary: {tenant: llm, field: backend, values: [vllm, sglang]}
+
+  # Is an optimised CV execution path worth more, or less, when its
+  # neighbour is starving the card? TensorRT buys its speed partly by
+  # holding more workspace — which is cheap on baseline A and may not be
+  # on baseline B.
+  secondary-backend-cv-a:
     phase: 6
     extends: mix-llm-cv
     vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
 
-  secondary-output-length:
+  secondary-backend-cv-b:
+    phase: 6
+    extends: mix-memory-bound
+    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+
+  # Long outputs hold KV entries alive for longer. Under baseline A that is
+  # free; under B it is the difference between batching and preempting.
+  secondary-output-length-a:
     phase: 6
     extends: mix-llm-cv
     vary: {tenant: llm, field: workload, values: [llm_short, llm_long]}
 
-  secondary-input-size-cv:
+  secondary-output-length-b:
+    phase: 6
+    extends: mix-memory-bound
+    vary: {tenant: llm, field: workload, values: [llm_short, llm_long]}
+
+  secondary-input-size-cv-a:
     phase: 6
     extends: mix-llm-cv
     vary: {tenant: cv, field: workload, values: [cv_detect_small, cv_detect_large]}
 
+  secondary-input-size-cv-b:
+    phase: 6
+    extends: mix-memory-bound
+    vary: {tenant: cv, field: workload, values: [cv_detect_small, cv_detect_large]}
+
+  # The LLM-side twin of the CV input-size dimension, and a different
+  # question from `secondary-output-length`: a 20x longer PROMPT is a
+  # bigger prefill burst — a compute spike — while a longer output is more
+  # bandwidth-bound decode. Same tenant, opposite resource. It is the
+  # cheapest available approximation of what makes a video VLM the worst
+  # neighbour in the study, using a text model where the burst can be
+  # turned up on its own.
+  # Both rungs emit 32 tokens (see `llm_long_prompt`), so only the prefill
+  # moves; sweeping llm_short → llm_long would move both at once.
+  secondary-input-size-llm-a:
+    phase: 6
+    extends: mix-llm-cv
+    vary: {tenant: llm, field: workload, values: [llm_short, llm_long_prompt]}
+
+  secondary-input-size-llm-b:
+    phase: 6
+    extends: mix-memory-bound
+    vary: {tenant: llm, field: workload, values: [llm_short, llm_long_prompt]}
+
   # Noisy-neighbour fairness: does the heavy user starve the light one?
   # 1:1 / 4:1 / 16:1 against a fixed LLM rate of 4 rps.
-  secondary-asymmetry:
+  secondary-asymmetry-a:
     phase: 6
     extends: mix-llm-cv
     rps_sweep: {tenant: cv, values: [4, 16, 64]}
 
-  secondary-arrival:
+  # Against baseline B the ratios are 2:1 / 8:1 / 32:1 — the LLM anchor
+  # runs at 2 rps, not 4 — so the fairness question is asked of a tenant
+  # that has no cache headroom to absorb a burst with.
+  secondary-asymmetry-b:
+    phase: 6
+    extends: mix-memory-bound
+    rps_sweep: {tenant: cv, values: [4, 16, 64]}
+
+  # Bursty arrivals need somewhere to queue. Under baseline A that is a
+  # scheduling question; under B the queue competes with the weights for
+  # the same VRAM.
+  secondary-arrival-a:
     phase: 6
     extends: mix-llm-cv
+    vary: {tenant: cv, field: load, values: [{pattern: poisson, rps: 50}, {pattern: constant, rps: 50}]}
+
+  secondary-arrival-b:
+    phase: 6
+    extends: mix-memory-bound
     vary: {tenant: cv, field: load, values: [{pattern: poisson, rps: 50}, {pattern: constant, rps: 50}]}
 
 # ─── Aux ───────────────────────────────────────────────────────────────

@@ -537,3 +537,197 @@ def test_build_perf_analyzer_passthrough_bare_url():
         model="yolov8-l", url="localhost:8100", tenant=_cv_tenant(), duration_s=120,
     )
     assert cmd[cmd.index("-u") + 1] == "localhost:8100"
+
+
+# ── Triton multi-GPU placement ───────────────────────────────────────────────
+#
+# Triton tenants are the one class that cannot be pinned with
+# CUDA_VISIBLE_DEVICES: their server is a shared container, so placement lives in
+# the container's name, ports, repo and `--gpus` flag. These check that a
+# tenant's card determines all four, and — the load-bearing one — that a config
+# which never mentions `device:` still gets exactly the single-GPU setup it had
+# before placement existed.
+
+def _triton_paths(tmp_path):
+    return coloc.RunPaths(root=tmp_path / "coloc" / "run-1")
+
+
+def _fake_docker(monkeypatch, orch):
+    """Record `docker run` argv and pretend the named container is then up.
+
+    No Docker daemon involved: _ensure_server's only observable effects are the
+    argv it builds and the name it registers as its launch mutex.
+    """
+    launched: list[list[str]] = []
+    running: set[str] = set()
+
+    def fake_popen(cmd, **kw):
+        launched.append(list(cmd))
+        if "--name" in cmd:
+            running.add(cmd[cmd.index("--name") + 1])
+        return types.SimpleNamespace(wait=lambda *a, **k: 0)
+
+    monkeypatch.setattr(coloc.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(orch, "_triton_container_running", lambda name: name in running)
+    monkeypatch.setattr(orch, "_triton_ready", lambda port: False)
+    return launched
+
+
+def _launched_named(launched, name):
+    return [c for c in launched if "--name" in c and c[c.index("--name") + 1] == name]
+
+
+def test_triton_device_of_defaults_to_gpu0():
+    assert coloc.triton_device_of(_cv_tenant()) == 0
+    assert coloc.triton_device_of(_cv_tenant(device=1)) == 1
+
+
+def test_triton_device_of_rejects_tensor_parallel():
+    import pytest
+    with pytest.raises(ValueError, match="single-GPU"):
+        coloc.triton_device_of(_cv_tenant(name="cv", device=[0, 1]))
+
+
+def test_run_paths_triton_repo_root_per_device(tmp_path):
+    paths = _triton_paths(tmp_path)
+    # GPU 0 keeps the historical path — it is also the weight-staging repo.
+    assert paths.triton_repo_root_for(0) == paths.triton_repo_root
+    assert paths.triton_repo_root_for(None) == tmp_path / "triton_repo"
+    assert paths.triton_repo_root_for(1) == tmp_path / "triton_repo-gpu1"
+    assert paths.triton_repo_root_for(1) != paths.triton_repo_root_for(0)
+
+
+def test_triton_tenant_url_follows_the_device_port():
+    assert coloc.triton_tenant_url(_cv_tenant(port=8100)) == "localhost:8100"
+    assert coloc.triton_tenant_url(_cv_tenant(port=8100, device=1)) == "localhost:8110"
+
+
+def test_build_triton_repos_writes_only_each_devices_models(tmp_path):
+    paths = _triton_paths(tmp_path)
+    tenants = [
+        _cv_tenant(name="cv", model="yolov8-l", port=8100),
+        _cv_tenant(name="ilm", model="dinov2-base", port=8100, device=1),
+    ]
+    coloc.ColocationOrchestrator(gpu="rtx_pro6000")._build_triton_repos(tenants, paths)
+
+    gpu0 = paths.triton_repo_root_for(0)
+    gpu1 = paths.triton_repo_root_for(1)
+    assert sorted(p.name for p in gpu0.iterdir()) == ["yolov8-l"]
+    assert sorted(p.name for p in gpu1.iterdir()) == ["dinov2-base"]
+    # Each repo carries a real config, not just an empty dir.
+    assert "yolov8-l" in (gpu0 / "yolov8-l" / "config.pbtxt").read_text()
+    assert "dinov2-base" in (gpu1 / "dinov2-base" / "config.pbtxt").read_text()
+
+
+def test_build_triton_repos_single_gpu_is_the_old_single_repo(tmp_path):
+    paths = _triton_paths(tmp_path)
+    tenants = [
+        _cv_tenant(name="cv", model="yolov8-l", port=8100),
+        _cv_tenant(name="ilm", model="dinov2-base", port=8100),
+    ]
+    coloc.ColocationOrchestrator(gpu="rtx_pro6000")._build_triton_repos(tenants, paths)
+    repo = paths.triton_repo_root
+    assert sorted(p.name for p in repo.iterdir()) == ["dinov2-base", "yolov8-l"]
+    assert not (tmp_path / "triton_repo-gpu1").exists()
+
+
+def test_build_triton_repos_links_staged_weights_into_other_devices(tmp_path):
+    """Weights are exported once into the staging repo; a second card's repo has
+    to reach them or Triton will not load the model there."""
+    paths = _triton_paths(tmp_path)
+    staged = paths.triton_repo_root / "dinov2-base" / "1"
+    staged.mkdir(parents=True)
+    (staged / "model.plan").write_bytes(b"PLAN")
+
+    t = _cv_tenant(name="ilm", model="dinov2-base", port=8100, device=1)
+    coloc.ColocationOrchestrator(gpu="rtx_pro6000")._build_triton_repos([t], paths)
+
+    linked = paths.triton_repo_root_for(1) / "dinov2-base" / "1" / "model.plan"
+    assert linked.read_bytes() == b"PLAN"
+
+
+def test_ensure_server_single_gpu_default_matches_pre_placement_behaviour(tmp_path, monkeypatch):
+    """The compatibility assertion: nothing in the existing configs sets
+    `device:`, so they must still get the `triton-cv` container on the base
+    ports, serving the same repo path."""
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    t = _cv_tenant(name="cv", model="yolov8-l", port=8100)
+    handle = orch._ensure_server(t, paths, triton_tenants=[t])
+
+    assert handle.container_name == "triton-cv"
+    cmd = launched[0]
+    assert cmd[cmd.index("--name") + 1] == "triton-cv"
+    assert "--http-port=8100" in cmd
+    assert "--grpc-port=8101" in cmd
+    assert "--metrics-port=8102" in cmd
+    assert f"{paths.triton_repo_root.resolve()}:/models" in cmd
+    assert cmd[cmd.index("--gpus") + 1] == "device=0"
+
+
+def test_ensure_server_shares_one_container_per_device(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    tenants = [
+        _cv_tenant(name="cv", model="yolov8-l", port=8100),
+        _cv_tenant(name="ilm", model="dinov2-base", port=8100),
+    ]
+    handles = [orch._ensure_server(t, paths, triton_tenants=tenants) for t in tenants]
+
+    assert len(launched) == 1                      # the name is the mutex
+    assert handles[1].reused is True
+    assert handles[1].container_name is None       # only the launcher stops it
+    # One container, both models — and it is told to load exactly those two.
+    assert "--load-model=yolov8-l" in launched[0]
+    assert "--load-model=dinov2-base" in launched[0]
+
+
+def test_ensure_server_launches_one_container_per_distinct_device(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    tenants = [
+        _cv_tenant(name="cv", model="yolov8-l", port=8100),
+        _cv_tenant(name="ilm", model="dinov2-base", port=8100, device=1),
+    ]
+    handles = [orch._ensure_server(t, paths, triton_tenants=tenants) for t in tenants]
+
+    assert [h.container_name for h in handles] == ["triton-cv", "triton-cv-gpu1"]
+    assert not any(h.reused for h in handles)
+    assert len(launched) == 2
+
+    gpu0, = _launched_named(launched, "triton-cv")
+    gpu1, = _launched_named(launched, "triton-cv-gpu1")
+    assert gpu0[gpu0.index("--gpus") + 1] == "device=0"
+    assert gpu1[gpu1.index("--gpus") + 1] == "device=1"
+    # Distinct ports — two containers cannot bind the same ones.
+    assert "--http-port=8100" in gpu0 and "--http-port=8110" in gpu1
+    assert "--grpc-port=8101" in gpu0 and "--grpc-port=8111" in gpu1
+    assert "--metrics-port=8102" in gpu0 and "--metrics-port=8112" in gpu1
+    # Distinct repos, each loading only its own model.
+    assert f"{paths.triton_repo_root_for(0).resolve()}:/models" in gpu0
+    assert f"{paths.triton_repo_root_for(1).resolve()}:/models" in gpu1
+    assert "--load-model=yolov8-l" in gpu0 and "--load-model=dinov2-base" not in gpu0
+    assert "--load-model=dinov2-base" in gpu1 and "--load-model=yolov8-l" not in gpu1
+
+
+def test_launch_drivers_target_each_tenants_own_container(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    tenants = [
+        _cv_tenant(name="cv", model="yolov8-l", port=8100),
+        _cv_tenant(name="ilm", model="dinov2-base", port=8100, device=1),
+    ]
+    c = Colocation(id="mix-cv-ilm", tenants=tenants, duration_s=60,
+                   isolation="mps", phase=5, is_solo=False)
+    orch._launch_drivers(c, paths)
+
+    urls = [cmd[cmd.index("-u") + 1] for cmd in launched if "-u" in cmd]
+    assert urls == ["localhost:8100", "localhost:8110"]

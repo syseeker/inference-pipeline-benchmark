@@ -737,9 +737,14 @@ colocations:
     rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}
 
   # ---- Phase 6: secondary dimensions, dual baseline -----------------------
-  secondary-backend-llm:
+  secondary-backend-llm-a:
     phase: 6
-    extends: mix-llm-cv
+    extends: mix-llm-cv          # baseline A — compute-bound
+    vary: {tenant: llm, field: backend, values: [vllm, sglang, trtllm]}
+
+  secondary-backend-llm-b:
+    phase: 6
+    extends: mix-memory-bound    # baseline B — memory-bound
     vary: {tenant: llm, field: backend, values: [vllm, sglang, trtllm]}
 ```
 

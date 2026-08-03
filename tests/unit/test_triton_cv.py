@@ -7,6 +7,10 @@ backend name or filename makes Triton refuse to load the model. Tested here.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from benchmarks import triton_cv as tc
 
 
@@ -103,6 +107,88 @@ def test_triton_serve_cmd_passes_mps_pipe(tmp_path):
 
 def test_triton_ready_url():
     assert tc.triton_ready_url(8000) == "http://localhost:8000/v2/health/ready"
+
+
+# ── per-GPU placement ────────────────────────────────────────────────────────
+#
+# One container per card. What must hold: device 0 is byte-for-byte the
+# single-GPU behaviour these configs already have, and two devices never
+# collide on a name or a port.
+
+def test_default_device_is_gpu0_everywhere():
+    """No `device:` anywhere in the existing colocations, so the unspecified
+    case has to resolve to the historical container name and ports."""
+    assert tc.resolve_triton_device(None) == 0
+    assert tc.triton_container_name() == "triton-cv"
+    assert tc.triton_ports(8100) == (8100, 8101, 8102)
+
+
+def test_triton_serve_cmd_default_is_todays_single_gpu_layout(tmp_path):
+    cmd = tc.build_triton_serve_cmd(
+        tmp_path, http_port=8100, grpc_port=8101, metrics_port=8102,
+        container_name=tc.triton_container_name(0),
+    )
+    assert cmd[cmd.index("--name") + 1] == "triton-cv"
+    assert "--http-port=8100" in cmd
+    assert "--grpc-port=8101" in cmd
+    assert "--metrics-port=8102" in cmd
+    assert any(a == f"{tmp_path.resolve()}:/models" for a in cmd)
+    assert cmd[cmd.index("--gpus") + 1] == "device=0"
+    # No model list ⇒ no explicit control; the container loads the whole repo,
+    # exactly as the single-GPU path always did.
+    assert not any(a.startswith("--load-model") for a in cmd)
+    assert "--model-control-mode=explicit" not in cmd
+
+
+def test_ports_are_offset_per_device():
+    assert tc.triton_ports(8100, 0) == (8100, 8101, 8102)
+    assert tc.triton_ports(8100, 1) == (8110, 8111, 8112)
+    assert tc.triton_ports(8100, 3) == (8130, 8131, 8132)
+    # No two devices' blocks may overlap, or the second container fails to bind.
+    blocks = [p for d in range(8) for p in tc.triton_ports(8100, d)]
+    assert len(set(blocks)) == len(blocks)
+
+
+def test_container_names_are_distinct_per_device():
+    names = {tc.triton_container_name(d) for d in range(8)}
+    assert len(names) == 8
+    assert tc.triton_container_name(0) == "triton-cv"
+    assert tc.triton_container_name(1) == "triton-cv-gpu1"
+
+
+def test_serve_cmd_pins_a_single_gpu(tmp_path):
+    cmd = tc.build_triton_serve_cmd(tmp_path, device=1)
+    assert cmd[cmd.index("--gpus") + 1] == "device=1"
+    assert "all" not in cmd
+
+
+def test_serve_cmd_loads_only_its_own_models(tmp_path):
+    cmd = tc.build_triton_serve_cmd(tmp_path, device=1, models=["yolov8-l", "dinov2-base"])
+    assert "--model-control-mode=explicit" in cmd
+    assert "--load-model=yolov8-l" in cmd
+    assert "--load-model=dinov2-base" in cmd
+
+
+def test_multi_device_triton_tenant_is_rejected():
+    """CV models are not tensor-parallel; a device list must fail loudly rather
+    than be half-honoured by taking the first index."""
+    with pytest.raises(ValueError, match="single-GPU"):
+        tc.resolve_triton_device([0, 1])
+    with pytest.raises(ValueError, match="single-GPU"):
+        tc.build_triton_serve_cmd(Path("/repo"), device=[0, 1])
+    # A one-element list is just that one card.
+    assert tc.resolve_triton_device([2]) == 2
+
+
+def test_device_index_out_of_range_is_rejected():
+    with pytest.raises(ValueError, match="out of range"):
+        tc.resolve_triton_device(8)
+
+
+def test_ready_url_follows_the_device_port():
+    assert tc.triton_ready_url(tc.triton_ports(8100, 1)[0]) == (
+        "http://localhost:8110/v2/health/ready"
+    )
 
 
 def test_wrap_perf_analyzer_docker():
