@@ -13,7 +13,7 @@ First useful number in about 20 minutes. The full study is hours.
 > the contention run, the neighbour must be the only thing that changed.
 
 > **Nothing in this study has run on a GPU yet.** It is built and unit-tested
-> (264 tests) but every hardware assumption is unverified. Work through
+> (272 tests) but every hardware assumption is unverified. Work through
 > [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
 > as you go — it is ordered by how much work each assumption invalidates.
 
@@ -124,12 +124,16 @@ pre-flight without launching anything.
 
 **CLI:**
 ```bash
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run
+bench coloc --gpu rtx_pro6000 --all --dry-run          # the whole study
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run   # just one
 ```
 
-**What to expect:** `[ok] coloc: plan: 2 solo baseline(s) + 1 contention
-window(s)`. A non-zero exit with `PRE-FLIGHT WOULD BLOCK THIS RUN` means a
-VRAM budget that cannot fit or a missing payload — fix it before proceeding.
+**What to expect:** `[ok] coloc: plan: 39 colocation(s) → 163 run(s) (72 solo
+baseline(s) + 91 contention window(s))` for the whole study; `1 colocation(s) →
+3 run(s) (2 solo baseline(s) + 1 contention window(s))` for `mix-llm-cv`. A
+non-zero exit with `PRE-FLIGHT WOULD BLOCK THIS RUN` means a VRAM budget that
+cannot fit or a missing payload — fix it before proceeding. `--json` gives the
+per-run plan, including the directory each run will land in.
 
 All 39 colocations were dry-run clean on a GPU-less box as of 2026-08-03, so a
 failure here is a local setup problem, not a config problem.
@@ -178,14 +182,20 @@ bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
 | solo | yolov8-l @50 rps, alone |
 | contention | both together |
 
-**What to expect on disk**, under
-`benchmarks/results/rtx_pro6000/coloc/mix-llm-cv/`:
+**What to expect on disk**, under `benchmarks/results/rtx_pro6000/coloc/`:
 
 ```
-solo-0/          manifest.json  llm.ndjson
-solo-1/          manifest.json  cv.ndjson
-coloc-...-2/     manifest.json  llm.ndjson  cv.ndjson
+_baselines/solo-vllm-qwen2.5-7b@4-43d07607/   manifest.json  llm.ndjson
+_baselines/solo-triton-yolov8-l@50-d2b34069/  manifest.json  cv.ndjson
+mix-llm-cv/coloc-llm@4-cv@50-8a1c39f2/        manifest.json  llm.ndjson  cv.ndjson
 ```
+
+Contention windows live under their colocation id. Solo baselines live in the
+shared `_baselines/` directory, because a baseline belongs to the study rather
+than to whichever colocation asked for it first — that is what lets one
+baseline serve many colocations and what lets `--resume` recognise it. The
+directory name is `<tenant>@<rps>` plus a short hash of the run's identity, so
+`rps_sweep` / `vary` windows never collide; repetitions add `-r2`, `-r3`.
 
 Check in the manifest: `achieved_rps` close to `offered_rps` (if not, the load
 generator was the bottleneck, not the GPU), `gpu_sampler` with a `"0"` key, and
@@ -225,28 +235,30 @@ silently rather than loudly.
 
 **CLI:**
 ```bash
-# Phase 2/3 — same-category saturation
-bench coloc --gpu rtx_pro6000 --colocation same-llm
-bench coloc --gpu rtx_pro6000 --colocation same-cv
+# Check the whole study first — no GPU needed, prints every pre-flight issue.
+bench coloc --gpu rtx_pro6000 --all --dry-run
 
-# Phase 3 — model type mixes
-bench coloc --gpu rtx_pro6000 --colocation mix-vlm-cv
-bench coloc --gpu rtx_pro6000 --colocation mix-full        # all 4 categories
+# The whole study, one command. ~163 runs; budget several hours.
+bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume --summary
 
-# Phase 4 — cross-type, the characterisation curves
-bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv
-bench coloc --gpu rtx_pro6000 --colocation cross-vlm-prefill-vs-llm
-bench coloc --gpu rtx_pro6000 --colocation cross-size-scaling
-bench coloc --gpu rtx_pro6000 --colocation cross-memory-pressure-kv03
+# Or phase by phase (--phase is repeatable, and composes):
+bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --resume --summary
+bench coloc --gpu rtx_pro6000 --phase 4 --resume --summary
 
-# Phase 6 — secondary dimensions, against BOTH baselines
-bench coloc --gpu rtx_pro6000 --colocation secondary-backend-llm-a
-bench coloc --gpu rtx_pro6000 --colocation secondary-backend-llm-b
+# Or name them explicitly (--colocation is repeatable):
+bench coloc --gpu rtx_pro6000 --colocation mix-full --colocation cross-size-scaling
 ```
 
-`bench coloc` accepts one colocation at a time; loop in your shell, or let the
-agent drive it. Solo baselines are deduped across a session, so running many
-colocations does not re-run the same baseline repeatedly.
+Selecting several colocations builds **one** plan, and solo baselines are
+deduped across the whole plan: all 39 colocations emit 163 runs (72 baselines +
+91 contention windows) instead of the 237 you get by running them as 39
+separate commands. Selection order is fixed (phase, then yaml order), so a
+re-run is comparable to the previous one.
+
+`--resume` skips any run whose `manifest.json` already exists, so a job that
+dies at hour 5 restarts where it stopped. `--continue-on-error` records a
+failed run and carries on, then exits non-zero with the failure list — one bad
+colocation at run 50 must not cost you the other 113.
 
 ---
 

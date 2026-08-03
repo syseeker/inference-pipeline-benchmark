@@ -80,12 +80,13 @@ the request rate each is driven at.
 
 ```bash
 python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000   # gate: do tenants really overlap?
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv       # one colocation
+bench coloc --gpu rtx_pro6000 --all --resume --summary      # the whole study, one command
 bench summary --gpu rtx_pro6000                             # §10 = contention
 ```
 
 > **Built, not yet run on hardware.** 39 colocations covering all seven phases
-> of the study, under 264 unit tests — but nothing has executed on a GPU yet.
+> of the study, under 272 unit tests — but nothing has executed on a GPU yet.
 > Work through
 > [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
 > on first hardware contact.
@@ -284,7 +285,7 @@ and Nsight profiling.
 
 **Built, awaiting hardware validation.** The multi-model contention benchmark —
 orchestrator, per-GPU Triton containers, VRAM cap derivation, contention
-analysis, and 39 colocations covering all seven phases of the study. 264 unit
+analysis, and 39 colocations covering all seven phases of the study. 272 unit
 tests pass, but none of it has run on a GPU. Start at
 [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md).
 

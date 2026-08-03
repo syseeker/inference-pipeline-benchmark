@@ -41,6 +41,7 @@ placement" section below for why the two mechanisms differ.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -766,14 +767,32 @@ class RunPaths:
         return self.root / f"{tenant_name}.aiperf"
 
     @property
+    def gpu_root(self) -> Path:
+        """benchmarks/results/<gpu>/ — the anchor for everything shared between
+        runs (today: the Triton staging repo).
+
+        Found by walking up to the `coloc/` ancestor rather than counting
+        directory levels. Level-counting was already wrong: the CLI has always
+        nested runs one deeper than this class assumed
+        (coloc/<colocation>/<run_id>), which put the staging repo at
+        <gpu>/coloc/triton_repo while build_triton_cv_repo.py exports to
+        <gpu>/triton_repo — so Triton mounted an empty repo and never went
+        ready. A multi-colocation plan nests deeper still, so the depth has to
+        stop being load-bearing.
+        """
+        for p in self.root.parents:
+            if p.name == "coloc":
+                return p.parent
+        return self.root.parent.parent
+
+    @property
     def triton_repo_root(self) -> Path:
         # Stable across runs: benchmarks/results/<gpu>/triton_repo/
-        # Two levels up from coloc/<run_id>/ lands at <gpu>/.
         #
         # This is also the STAGING repo: scripts/build_triton_cv_repo.py exports
         # every model's weights here once, and it is GPU 0's serving repo, so a
         # config that never mentions `device:` sees exactly today's layout.
-        return self.root.parent.parent / "triton_repo"
+        return self.gpu_root / "triton_repo"
 
     def triton_repo_root_for(self, device: int | list[int] | None = None) -> Path:
         """The model repository the container on `device` serves.
@@ -789,7 +808,7 @@ class RunPaths:
         dev = resolve_triton_device(device)
         if dev == 0:
             return self.triton_repo_root
-        return self.root.parent.parent / f"triton_repo-gpu{dev}"
+        return self.gpu_root / f"triton_repo-gpu{dev}"
 
     @property
     def gpu_ndjson(self) -> Path:
@@ -907,6 +926,71 @@ def plan_runs(cfg: dict[str, Any], names: list[str], *, solo_only: bool = False)
                 continue
             out.append(coloc)
     return out
+
+
+# ─────────────────────────── run directory layout ──────────────────────────
+
+SOLO_DIR = "_baselines"
+
+
+def _slug(text: str) -> str:
+    """Filesystem-safe, still readable. Model ids carry '/' and '.'."""
+    keep = [ch if (ch.isalnum() or ch in "-.") else "-" for ch in str(text).strip().lower()]
+    return "".join(keep).strip("-") or "x"
+
+
+def _identity_hash(parts: Any) -> str:
+    """8 hex chars over a run's identity. Short enough to type, wide enough
+    that two distinct windows in a 163-run study will not collide."""
+    blob = json.dumps(parts, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode()).hexdigest()[:8]  # noqa: S324 — naming, not security
+
+
+def run_dir_for(root: Path, coloc: Colocation) -> Path:
+    """Where one run of `coloc` lands under the plan's run root.
+
+        <root>/_baselines/solo-<tenant><rps>-<model>-<h8>/
+        <root>/<colocation-id>/coloc-<tenant><rps>…[-r<N>]-<h8>/
+
+    Three properties this has to hold, now that one plan spans 39 colocations
+    and the run index is global:
+
+    1. Findable. Contention windows sit under their colocation id, so
+       `coloc/mix-llm-cv/` is still the answer to "where did mix-llm-cv go".
+    2. Baselines are not duplicated on disk. plan_runs dedupes solo runs
+       across the plan, but a baseline belongs to the STUDY, not to whichever
+       colocation happened to name it first — filing it under that colocation
+       would re-run it under a different path the next time a different phase
+       is selected. `_baselines/` is shared, and the name is a pure function
+       of `_solo_key`, so the same baseline always maps to the same directory
+       and `--resume` can see it.
+    3. No collisions. rps_sweep / vary windows differ only in tenant fields,
+       and `repetitions:` emits the same window N times. The `-h8` identity
+       hash separates the former, `-r<N>` the latter — and neither depends on
+       the run's position in the plan, so `--phase 3` and `--all` agree on the
+       path for the same run.
+    """
+    # `@` separates name from rate so `llm2` at 2 rps reads as `llm2@2`
+    # rather than the unparseable `llm22`.
+    load_tag = "-".join(f"{_slug(t.name)}@{t.load.rps:g}" for t in coloc.tenants)
+    if coloc.is_solo:
+        # Every part of a baseline's name comes from `_solo_key` — deliberately
+        # NOT the tenant name. The same baseline is labelled `llm` in one
+        # colocation and `llm-a` in another; naming the directory after the
+        # label would give one baseline two paths depending on which phase you
+        # selected, which defeats both the on-disk dedup and --resume.
+        t = coloc.tenants[0]
+        h = _identity_hash(_solo_key(t))
+        name = f"solo-{_slug(t.round.backend)}-{_slug(t.round.model_id)}@{t.load.rps:g}-{h}"
+        return root / SOLO_DIR / name
+    # The FULL tenant spec, not _solo_key: `vary:` can move a field that no
+    # baseline distinguishes (secondary-backend-cv varies the Triton backend at
+    # identical model/load), and hashing only the baseline key made those two
+    # windows overwrite each other.
+    h = _identity_hash([coloc.id, coloc.isolation, coloc.duration_s,
+                        [t.to_dict() for t in coloc.tenants]])
+    rep = f"-r{coloc.repetition}" if coloc.repetition > 1 else ""
+    return root / _slug(coloc.id) / f"coloc-{load_tag}{rep}-{h}"
 
 
 # ─────────────────────────── orchestration (live path) ─────────────────────

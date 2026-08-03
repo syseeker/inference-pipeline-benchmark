@@ -629,8 +629,83 @@ def test_achieved_rps_falls_back_to_timestamps_when_no_measured_rps():
 
 def test_run_paths_triton_repo_root(tmp_path):
     paths = coloc.RunPaths(root=tmp_path / "coloc" / "run-1")
-    # Two levels up from coloc/run-1/ → tmp_path/, then triton_repo/.
+    # Anchored on the `coloc/` ancestor → tmp_path/, then triton_repo/.
     assert paths.triton_repo_root == tmp_path / "triton_repo"
+
+
+def test_run_paths_triton_repo_root_survives_a_nested_run_tree(tmp_path):
+    """The staging repo must not move when runs are nested by colocation id.
+    The old two-levels-up arithmetic put it inside coloc/, where
+    build_triton_cv_repo.py never exports anything — Triton would mount an
+    empty repo and never go ready."""
+    nested = coloc.RunPaths(root=tmp_path / "coloc" / "mix-llm-cv" / "coloc-llm@4-abc12345")
+    assert nested.triton_repo_root == tmp_path / "triton_repo"
+    assert nested.triton_repo_root_for(1) == tmp_path / "triton_repo-gpu1"
+    baseline = coloc.RunPaths(root=tmp_path / "coloc" / "_baselines" / "solo-vllm-qwen@4-abc12345")
+    assert baseline.triton_repo_root == tmp_path / "triton_repo"
+
+
+# ── run_dir_for (multi-colocation run layout) ────────────────────────────────
+
+def _window(id="mix-llm-cv", tenants=None, **kw):
+    tenants = tenants or [_tenant("llm"), _tenant("cv", backend="triton", port=8100,
+                                                  transport="triton", rps=50.0, frac=None)]
+    return Colocation(id=id, tenants=tenants, duration_s=120, isolation="mps", **kw)
+
+
+def test_solo_baselines_share_one_directory_outside_any_colocation(tmp_path):
+    """A baseline belongs to the study, not to whichever colocation named it
+    first — otherwise selecting a different phase re-runs it under a new path."""
+    t = _tenant("llm")
+    a = coloc.run_dir_for(tmp_path, Colocation(id="mix-llm-cv", tenants=[t], is_solo=True))
+    b = coloc.run_dir_for(tmp_path, Colocation(id="cross-size-scaling", tenants=[t], is_solo=True))
+    assert a == b
+    assert a.parent == tmp_path / "_baselines"
+
+
+def test_solo_directory_ignores_the_tenant_label(tmp_path):
+    """Same deployment at the same load, labelled `llm` in one colocation and
+    `llm-a` in another: one baseline, one directory."""
+    one = Colocation(id="c1", tenants=[_tenant("llm")], is_solo=True)
+    two = Colocation(id="c2", tenants=[_tenant("llm-a")], is_solo=True)
+    assert coloc.run_dir_for(tmp_path, one) == coloc.run_dir_for(tmp_path, two)
+
+
+def test_solo_directory_splits_when_the_baseline_key_differs(tmp_path):
+    base = Colocation(id="c", tenants=[_tenant("llm", rps=4.0)], is_solo=True)
+    faster = Colocation(id="c", tenants=[_tenant("llm", rps=16.0)], is_solo=True)
+    assert coloc.run_dir_for(tmp_path, base) != coloc.run_dir_for(tmp_path, faster)
+
+
+def test_contention_runs_sit_under_their_colocation_id(tmp_path):
+    d = coloc.run_dir_for(tmp_path, _window())
+    assert d.parent == tmp_path / "mix-llm-cv"
+    assert d.name.startswith("coloc-")
+
+
+def test_repetitions_of_one_window_do_not_collide(tmp_path):
+    dirs = {coloc.run_dir_for(tmp_path, _window(repetition=r)) for r in (1, 2, 3)}
+    assert len(dirs) == 3
+    assert any("-r2-" in d.name for d in dirs)     # repetition is visible, not just hashed
+    assert any("-r3-" in d.name for d in dirs)
+
+
+def test_windows_differing_only_in_a_varied_field_do_not_collide(tmp_path):
+    """`vary:` can move a field no baseline distinguishes (Triton backend at
+    identical model + load). Hashing only the baseline key overwrote one run
+    with the other."""
+    a = _window(tenants=[_tenant("cv", backend="triton", transport="triton", rps=50.0, frac=None)])
+    b = _window(tenants=[_tenant("cv", backend="triton", transport="triton", rps=50.0, frac=None)])
+    b.tenants[0].triton_backend = "onnxruntime"
+    assert coloc.run_dir_for(tmp_path, a) != coloc.run_dir_for(tmp_path, b)
+
+
+def test_run_dir_is_stable_across_invocations(tmp_path):
+    """--resume compares paths on disk, so the name must be a function of the
+    run's identity and never of its index in the plan."""
+    w = _window()
+    assert coloc.run_dir_for(tmp_path, w) == coloc.run_dir_for(tmp_path, _window())
+    assert "/" not in coloc.run_dir_for(tmp_path, w).name
 
 
 # ── build_perf_analyzer_cmd additions ────────────────────────────────────────

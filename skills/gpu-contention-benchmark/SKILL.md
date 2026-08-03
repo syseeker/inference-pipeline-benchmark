@@ -28,7 +28,7 @@ specifically about **two or more models resident at the same time**.
 ## Build status
 
 **Built, never run on hardware.** All eight build steps are complete: 39
-colocations covering all seven phases of the study, 264 unit tests, no
+colocations covering all seven phases of the study, 272 unit tests, no
 VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
 at [reference/gpu-validation.md](reference/gpu-validation.md).
 
@@ -150,12 +150,19 @@ python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 # Non-zero exit + "PRE-FLIGHT WOULD BLOCK THIS RUN" means fix it first.
 # NEEDS NO GPU — worth running on any machine before you rent one. All 39
 # colocations were dry-run clean as of 2026-08-03.
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run
+bench coloc --gpu rtx_pro6000 --all --dry-run
+
+# The whole study as ONE plan: 163 runs, not 237 — selecting many colocations
+# dedupes solo baselines across all of them (~74 runs / ~3h of GPU saved).
+# --resume skips runs that already have a manifest.json; --continue-on-error
+# records a failure and keeps going, exiting non-zero at the end.
+bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume --summary
 
 # Phase 1 — solo baselines, at the SAME offered rate as the contention runs
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --solo-only
 
-# Phases 2-6 — named colocations from the GPU yaml (39 defined)
+# Phases 2-6 — by phase, or by name (both flags repeatable)
+bench coloc --gpu rtx_pro6000 --phase 3 --phase 4
 bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv     # rate sweep
 bench coloc --gpu rtx_pro6000 --colocation mix-full            # all 4 categories
 
@@ -164,7 +171,9 @@ bench coloc --gpu rtx_pro6000 --colocation place-isolated      # null test: rati
 bench coloc --gpu rtx_pro6000 --colocation place-p1
 
 bench summary --gpu rtx_pro6000                                # §10 = contention
-python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
+# Runs land in coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/, shared
+# solo baselines in coloc/_baselines/solo-<backend>-<model>@<rps>-<hash>/.
+python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>/<run_dir>/
 ```
 
 ## Pre-flight checks (do not skip)

@@ -778,7 +778,8 @@ than bespoke bookkeeping.
 ### Output layout
 
 ```
-benchmarks/results/<gpu>/coloc/<run_id>/
+benchmarks/results/<gpu>/coloc/<colocation>/<run_id>/     # contention windows
+benchmarks/results/<gpu>/coloc/_baselines/<run_id>/       # solo, shared study-wide
   <tenant>.ndjson   # per request: t_start_ms, t_end_ms, ttft_ms, e2e_ms, tokens, ok
   gpu.ndjson        # timestamped sampler rows (50 ms for alignment runs)
   manifest.json     # tenant set, load specs, isolation mode, clock policy

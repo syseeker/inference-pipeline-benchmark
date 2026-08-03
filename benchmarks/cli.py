@@ -468,13 +468,19 @@ def sweep(
     )
 
 
+def _regen_summary(gpu: str, *, capture: bool) -> subprocess.CompletedProcess[str]:
+    """The one way summary.md gets rebuilt. Shared by `bench summary` and by
+    `bench coloc --summary` so the study-in-one-command path cannot drift from
+    the standalone command."""
+    return _run([sys.executable, "-m", "benchmarks.summary", "--gpu", gpu], capture=capture)
+
+
 @app.command(help="Regenerate summary.md for a GPU from existing per-backend result JSONs.")
 def summary(
     gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    cmd = [sys.executable, "-m", "benchmarks.summary", "--gpu", gpu]
-    res = _run(cmd, capture=json_out)
+    res = _regen_summary(gpu, capture=json_out)
     summary_path = RESULTS_ROOT / gpu / "summary.md"
     if res.returncode != 0:
         emit(
@@ -1316,23 +1322,105 @@ def smoke(
     )
 
 
+def select_colocations(
+    cfg: dict[str, Any],
+    *,
+    names: list[str] | None = None,
+    all_: bool = False,
+    phases: list[int] | None = None,
+) -> list[str]:
+    """Resolve the {--colocation, --all, --phase} selectors to an ordered list
+    of colocation names.
+
+    Ordering is (phase, position in the yaml). A study is compared against a
+    previous run of the same study, so the order must not depend on how the
+    selectors were typed or on set iteration; an unphased colocation sorts last
+    rather than crashing the key.
+
+    Raises ValueError with the alternatives named — this runs before hours of
+    GPU time, so an unclear selector error is expensive.
+    """
+    declared = list((cfg.get("colocations") or {}).keys())
+    order = {name: i for i, name in enumerate(declared)}
+    phases = phases or []
+    names = names or []
+
+    chosen = [bool(names), all_, bool(phases)]
+    if sum(chosen) == 0:
+        raise ValueError(
+            "no colocation selected. Pass one of: --colocation <name> (repeatable), "
+            f"--phase <N> (repeatable), or --all. Defined: {declared}"
+        )
+    if all_ and (names or phases):
+        raise ValueError(
+            "--all already selects every colocation; drop --colocation/--phase "
+            "or drop --all."
+        )
+    if names and phases:
+        raise ValueError(
+            "pick one selector: --colocation names them explicitly, --phase selects "
+            "by the yaml `phase:` field. Use several --colocation flags for a set."
+        )
+
+    if all_:
+        selected = set(declared)
+    elif phases:
+        wanted = set(phases)
+        selected = {n for n in declared
+                    if (cfg["colocations"][n] or {}).get("phase") in wanted}
+        if not selected:
+            known = sorted({p for n in declared
+                            if (p := (cfg["colocations"][n] or {}).get("phase")) is not None})
+            raise ValueError(f"no colocation has phase in {sorted(wanted)}; defined phases: {known}")
+    else:
+        unknown = [n for n in names if n not in order]
+        if unknown:
+            raise ValueError(f"unknown colocation(s) {unknown}; defined: {declared}")
+        selected = set(names)
+
+    def key(name: str) -> tuple[int, int]:
+        ph = (cfg["colocations"][name] or {}).get("phase")
+        return (ph if isinstance(ph, int) else 10**6, order[name])
+
+    return sorted(selected, key=key)
+
+
 @app.command(
     help=(
-        "Run a co-residency (contention) window: launch N tenants on one GPU, "
-        "drive each open-loop, and merge their traces. --dry-run prints the run "
-        "plan (solo baselines first) without launching anything."
+        "Run a co-residency (contention) study: launch N tenants on one GPU, "
+        "drive each open-loop, and merge their traces. Select with --colocation "
+        "(repeatable), --phase N (repeatable) or --all; ONE plan is built for the "
+        "whole selection so solo baselines dedupe across colocations (39 "
+        "colocations = 163 runs, not 237). --dry-run prints the plan (baselines "
+        "first) without launching anything. Runs land in "
+        "benchmarks/results/<gpu>/coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/ "
+        "and shared solo baselines in "
+        "coloc/_baselines/solo-<backend>-<model>@<rps>-<hash>/. "
+        "For an overnight study: --all --continue-on-error --resume --summary."
     ),
 )
 def coloc(
     gpu: str = typer.Option(..., help="GPU profile under benchmarks/configs/."),
-    colocation: str = typer.Option(..., "--colocation", help="Name from the yaml `colocations:` block."),
+    colocation: list[str] = typer.Option(
+        None, "--colocation", help="Name from the yaml `colocations:` block. Repeatable."),
+    all_: bool = typer.Option(
+        False, "--all", help="Every colocation in the yaml. Cannot be combined with the other selectors."),
+    phase: list[int] = typer.Option(
+        None, "--phase", help="Every colocation whose `phase:` equals N. Repeatable."),
     solo_only: bool = typer.Option(False, "--solo-only", help="Run only the solo baselines (Phase 1)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the resolved plan; launch nothing."),
+    continue_on_error: bool = typer.Option(
+        False, "--continue-on-error",
+        help="Record a failed run and keep going. Exits non-zero at the end if anything failed."),
+    resume: bool = typer.Option(
+        False, "--resume", help="Skip runs whose manifest.json already exists on disk."),
+    summary_after: bool = typer.Option(
+        False, "--summary", help="Regenerate benchmarks/results/<gpu>/summary.md when the plan finishes."),
     gpu_index: int = typer.Option(
         0, help="Fallback CUDA device index. Sampling follows each tenant's `device:`; "
                 "this is only used when a window declares no placement at all."),
     seed: int = typer.Option(0, help="Load-generator random seed, for reproducibility."),
-    out: Path = typer.Option(None, help="Run root. Default: benchmarks/results/<gpu>/coloc/<colocation>/."),
+    out: Path = typer.Option(None, help="Run root. Default: benchmarks/results/<gpu>/coloc/."),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     from benchmarks import coloc as coloc_mod
@@ -1346,27 +1434,46 @@ def coloc(
              json_out=json_out, exit_code=EXIT_GENERIC)
 
     try:
-        runs = coloc_mod.plan_runs(cfg, [colocation], solo_only=solo_only)
+        names = select_colocations(cfg, names=list(colocation or []), all_=all_,
+                                   phases=list(phase or []))
+    except ValueError as e:
+        emit(command="coloc", status="error",
+             error={"code": EXIT_GENERIC, "remediation": str(e)},
+             json_out=json_out, exit_code=EXIT_GENERIC)
+
+    # ONE plan_runs call for the whole selection: that is what dedupes solo
+    # baselines across colocations. Looping the single-colocation path instead
+    # would re-run ~74 identical baselines (≈3h of GPU time) in a full study.
+    try:
+        runs = coloc_mod.plan_runs(cfg, names, solo_only=solo_only)
     except ValueError as e:
         emit(command="coloc", status="error",
              error={"code": EXIT_UNSUPPORTED, "remediation": str(e)},
              json_out=json_out, exit_code=EXIT_UNSUPPORTED)
 
+    # `colocation` stays singular in `data` for the one-name case so existing
+    # agent parsers keep working; `colocations` is the multi-select truth.
+    sel = {"colocation": names[0] if len(names) == 1 else None, "colocations": names}
+
     if not runs:
         emit(command="coloc", status="skipped",
-             next_action=f"colocation {colocation!r} resolved to no runnable windows (all tenants skipped?).",
-             data={"gpu": gpu, "colocation": colocation}, json_out=json_out)
+             next_action=f"{names} resolved to no runnable windows (all tenants skipped?).",
+             data={"gpu": gpu, **sel}, json_out=json_out)
 
     # Surface pre-flight issues in the plan so they're visible before a run —
     # both the VRAM plan and the workload payloads, since a missing prompt file
     # otherwise degrades silently to aiperf's synthetic dataset.
+    run_root = out or (RESULTS_ROOT / gpu / "coloc")
     plan = []
     for c in runs:
         issues = coloc_mod.preflight_vram(c.tenants) + coloc_mod.preflight_workload_payloads(
             c.tenants)
         plan.append({
             "run_label": c.run_label,
+            "colocation": c.id,
+            "run_dir": str(coloc_mod.run_dir_for(run_root, c)),
             "is_solo": c.is_solo,
+            "repetition": c.repetition,
             "phase": c.phase,
             "duration_s": c.duration_s,
             "isolation": c.isolation,
@@ -1391,11 +1498,12 @@ def coloc(
         emit(
             command="coloc", status="error" if blocked else "ok",
             next_action=(
-                f"plan: {n_solo} solo baseline(s) + {n_coloc} contention window(s). "
+                f"plan: {len(names)} colocation(s) → {len(plan)} run(s) "
+                f"({n_solo} solo baseline(s) + {n_coloc} contention window(s)). "
                 + ("PRE-FLIGHT WOULD BLOCK THIS RUN: " + "; ".join(blocked) if blocked
                    else "Drop --dry-run to execute (needs the tenant servers / aiperf).")
             ),
-            data={"gpu": gpu, "colocation": colocation, "n_solo": n_solo,
+            data={"gpu": gpu, **sel, "n_runs": len(plan), "n_solo": n_solo,
                   "n_coloc": n_coloc, "plan": plan, "preflight_issues": blocked},
             error=({"code": EXIT_GENERIC,
                     "remediation": "pre-flight failed: " + "; ".join(blocked)}
@@ -1412,24 +1520,86 @@ def coloc(
             json_out=json_out, exit_code=EXIT_GENERIC,
         )
 
-    run_root = out or (RESULTS_ROOT / gpu / "coloc" / colocation)
     orch = coloc_mod.ColocationOrchestrator(gpu, gpu_index=gpu_index, seed=seed)
     manifests: list[str] = []
-    try:
-        for i, c in enumerate(runs):
-            paths = coloc_mod.RunPaths(root=run_root / f"{c.run_label.replace(':', '-')}-{i}")
+    failures: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    total = len(runs)
+
+    for i, c in enumerate(runs, start=1):
+        paths = coloc_mod.RunPaths(root=coloc_mod.run_dir_for(run_root, c))
+        tenants = " ".join(f"{t.name}={t.round.model_id}@{t.load.rps:g}rps" for t in c.tenants)
+        kind = "solo      " if c.is_solo else "contention"
+
+        # Progress goes to stderr in EVERY mode: hours of silence is
+        # indistinguishable from a hang, and --json keeps stdout to the single
+        # status line (see emit's contract).
+        if resume and paths.manifest.exists():
+            typer.echo(f"[{i:>4}/{total}] {c.id:<28} {kind} SKIP (resume) {paths.root}", err=True)
+            skipped.append(str(paths.manifest))
+            continue
+        typer.echo(f"[{i:>4}/{total}] {c.id:<28} {kind} {tenants}", err=True)
+
+        try:
             orch.run(c, paths)
             manifests.append(str(paths.manifest))
-    except RuntimeError as e:
-        emit(command="coloc", status="error",
-             error={"code": EXIT_RUNTIME, "remediation": str(e)[:500]},
-             artifacts=manifests, json_out=json_out, exit_code=EXIT_RUNTIME)
+        except Exception as e:  # noqa: BLE001
+            # Fail-fast stays the default. Under --continue-on-error we catch
+            # broadly, not just RuntimeError: an overnight study must survive a
+            # dead port or an OSError from one tenant, and the run either wrote
+            # a manifest or it did not — there is no half state to protect.
+            if not continue_on_error:
+                if not isinstance(e, RuntimeError):
+                    raise
+                emit(command="coloc", status="error",
+                     error={"code": EXIT_RUNTIME, "remediation": str(e)[:500]},
+                     artifacts=manifests, json_out=json_out, exit_code=EXIT_RUNTIME)
+            failures.append({"colocation": c.id, "run_label": c.run_label,
+                             "run_dir": str(paths.root), "error": str(e)[:500]})
+            typer.echo(f"         └─ FAILED {c.id}: {str(e)[:300]}", err=True)
+
+    # Regenerated even when runs failed: a partial study is exactly when you
+    # want to see what you got. A summary failure is reported but does not
+    # discard the run outcome — the GPU time is the expensive part.
+    summary_path = RESULTS_ROOT / gpu / "summary.md"
+    summary_error = None
+    if summary_after:
+        res = _regen_summary(gpu, capture=json_out)
+        if res.returncode != 0:
+            summary_error = (res.stderr or "summary regen failed").strip()[:400]
+
+    n_ok, n_failed, n_skipped = len(manifests), len(failures), len(skipped)
+    data = {
+        "gpu": gpu, **sel, "n_runs": total, "n_solo": n_solo, "n_coloc": n_coloc,
+        "n_succeeded": n_ok, "n_failed": n_failed, "n_skipped": n_skipped,
+        "failures": failures, "skipped": skipped,
+        "summary_path": str(summary_path) if summary_after else None,
+        "summary_error": summary_error,
+    }
+    tail = (f"; summary regen FAILED: {summary_error}" if summary_error
+            else (f"; see {summary_path}" if summary_after
+                  else f"; run `bench summary --gpu {gpu}` for §10."))
+    wrote_summary = summary_after and not summary_error
+    artifacts = manifests + skipped + ([str(summary_path)] if wrote_summary else [])
+
+    if failures:
+        detail = "; ".join(f"{f['colocation']} ({f['error'][:120]})" for f in failures[:5])
+        more = f" … +{n_failed - 5} more" if n_failed > 5 else ""
+        emit(
+            command="coloc", status="error",
+            error={"code": EXIT_RUNTIME,
+                   "remediation": (f"{n_failed}/{total} run(s) failed: {detail}{more}. "
+                                   f"{n_ok} succeeded, {n_skipped} skipped (resume). "
+                                   f"Re-run with --resume to retry only the failures.")},
+            artifacts=artifacts, data=data, json_out=json_out, exit_code=EXIT_RUNTIME,
+        )
 
     emit(
         command="coloc", status="ok",
-        artifacts=manifests,
-        next_action=f"ran {n_solo} baseline(s) + {n_coloc} window(s); re-run `bench summary --gpu {gpu}` for §10.",
-        data={"gpu": gpu, "colocation": colocation, "n_solo": n_solo, "n_coloc": n_coloc},
+        artifacts=artifacts,
+        next_action=(f"ran {n_ok}/{total} run(s) ({n_solo} baseline(s) + {n_coloc} window(s)"
+                     + (f", {n_skipped} skipped by --resume" if n_skipped else "") + ")" + tail),
+        data=data,
         json_out=json_out,
     )
 
