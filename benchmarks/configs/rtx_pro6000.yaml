@@ -352,6 +352,16 @@ models:
     unsupported_backends:
       sglang: "no PaliGemma implementation in SGLang"
     unsupported_workloads:
+  # Prompt token counts below are measured with cl100k_base, not estimated.
+  #
+  # llm_long is NOT the customer's text. Theirs measured 142/109 tokens against
+  # a "~1000 tok" label, which would have made the long arm of the prompt-length
+  # dimension barely longer than the short one, and would have pitted a
+  # ~140-token LLM prefill against the VLM's 40-frame burst in the one
+  # experiment built to contrast prefill lengths. Replaced with the same two
+  # questions asked at the depth the label implied; the originals are preserved
+  # verbatim in scripts/build_contention_prompts.py, which regenerates these
+  # files. Delete the override there to go back.
       vlm_video_short: "paligemma2 is image-only — vLLM raises 'Only image modality is supported'; use a video VLM (qwen2.5-vl-7b)"
       vlm_video_long: "paligemma2 is image-only — vLLM raises 'Only image modality is supported'; use a video VLM (qwen2.5-vl-7b)"
 
@@ -677,17 +687,17 @@ sweeps:
 workloads:
   # Text-only. Output length is a study dimension: 32 vs 512 tokens.
   llm_short:
-    prompts: ["workspace/contention/prompts/llm_short.jsonl"]   # 3 prompts, ~3-10 tok each
+    prompts: ["workspace/contention/prompts/llm_short.jsonl"]   # 3 prompts, 4-8 tok each
     output_tokens: 32
   llm_long:
-    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~110-140 tok each
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # 2 prompts, ~970-990 tok each
     output_tokens: 512
   # Long prompt, SHORT output. Exists so the prompt-length dimension can be
   # swept without dragging output length along with it: llm_short → llm_long
   # changes both at once, so it can only answer "does more work cost more",
   # never "is prefill or decode the thing that contends".
   llm_long_prompt:
-    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # ~110-140 tok prefill
+    prompts: ["workspace/contention/prompts/llm_long.jsonl"]    # ~970-990 tok prefill
     output_tokens: 32
 
   # Video. Frame count IS the VLM input-size dimension — the 40-frame clip
