@@ -52,7 +52,7 @@ EXIT_MISSING_DEP = 4
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Inference-pipeline-benchmark CLI. Subcommands: probe, setup, scenarios, smoke, sweep, summary.",
+    help="Inference-pipeline-benchmark CLI. Subcommands: probe, setup, scenarios, smoke, sweep, coloc, summary, load-test, profile, install-skill.",
 )
 scenarios_app = typer.Typer(
     add_completion=False,

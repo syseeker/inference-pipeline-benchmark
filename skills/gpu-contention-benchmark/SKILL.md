@@ -111,6 +111,12 @@ Skipping these does not fail early. The Triton one fails at the first CV
 tenant, several minutes into a window you paid GPU time for.
 
 ```bash
+# 0. The CLI itself. `bench` is not on the system path — it lives in a venv you
+#    own, separate from the per-backend venvs below. Without this you get
+#    "Command 'bench' not found".
+python3 -m venv ~/venv && ~/venv/bin/pip install -e .
+export PATH="$HOME/venv/bin:$PATH"
+
 # 1. Backend venvs. Each backend gets its own; the orchestrator activates them.
 bench setup --backend vllm
 bench setup --backend sglang        # only if a colocation names sglang
@@ -140,6 +146,8 @@ python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 
 # Resolve a plan and run every pre-flight WITHOUT launching anything.
 # Non-zero exit + "PRE-FLIGHT WOULD BLOCK THIS RUN" means fix it first.
+# NEEDS NO GPU — worth running on any machine before you rent one. All 39
+# colocations were dry-run clean as of 2026-08-03.
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run
 
 # Phase 1 — solo baselines, at the SAME offered rate as the contention runs
