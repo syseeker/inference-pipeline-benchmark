@@ -39,7 +39,7 @@ interchangeable. Pick the one that matches your question.
 | | Question | Input | Start here |
 |---|---|---|---|
 | **1. Single-model** | How fast is this model on this GPU, and on which backend? | scenarios | [QUICKSTART_VLM.md](QUICKSTART_VLM.md) |
-| **2. Multi-model contention** | How much do these models slow each other down when they share a card? | workloads | [docs/contention.md](docs/contention.md) |
+| **2. Multi-model contention** | How much do these models slow each other down when they share a card? | workloads | [QUICKSTART_MULTIMODEL_CONTENTION.md](QUICKSTART_MULTIMODEL_CONTENTION.md) |
 | **3. NitroGen policy** | Which execution engine and precision for a diffusion policy model? | scenarios | [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) |
 
 ### 1. Single-model
@@ -88,8 +88,7 @@ bench summary --gpu rtx_pro6000                             # §10 = contention
 > of the study, under 264 unit tests — but nothing has executed on a GPU yet.
 > Work through
 > [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
-> on first hardware contact. `QUICKSTART_MULTIMODEL_CONTENTION.md` follows once
-> that is done.
+> on first hardware contact.
 
 ### 3. NitroGen policy
 
@@ -115,7 +114,7 @@ Everything about it: **[QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md)** and
 | What you want to do | Go to |
 |---|---|
 | Benchmark a **VLM** on image or video scenarios | **[QUICKSTART_VLM.md](QUICKSTART_VLM.md)** |
-| Measure **models contending** on one GPU | **[docs/contention.md](docs/contention.md)** |
+| Measure **models contending** on one or two GPUs | **[QUICKSTART_MULTIMODEL_CONTENTION.md](QUICKSTART_MULTIMODEL_CONTENTION.md)** |
 | Benchmark the **NitroGen policy model** across execution engines | **[QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md)** |
 | Understand *why* any of this matters before running it | **[docs/why-this-matters.md](docs/why-this-matters.md)** |
 | Evaluate this for a game-AI or simulation team | **[docs/for-game-sim-teams.md](docs/for-game-sim-teams.md)** |
@@ -229,6 +228,7 @@ see [docs/gpu-strategy.md](docs/gpu-strategy.md).
 |---|---|
 | [QUICKSTART_VLM.md](QUICKSTART_VLM.md) | VLM benchmarks end-to-end — image+text and video+text, across vLLM / SGLang / TRT-LLM |
 | [QUICKSTART_NITROGEN.md](QUICKSTART_NITROGEN.md) | NitroGen policy sweep end-to-end — 5 execution engines × precision × denoise steps |
+| [QUICKSTART_MULTIMODEL_CONTENTION.md](QUICKSTART_MULTIMODEL_CONTENTION.md) | Contention study end-to-end — install, the Phase 0 gate, all seven phases, one GPU and two |
 | [docs/why-this-matters.md](docs/why-this-matters.md) | Engineer-friendly intro: the four budgets (latency / throughput / energy / precision) and why backend choice isn't free |
 | [docs/for-game-sim-teams.md](docs/for-game-sim-teams.md) | For game-AI teams: player-vs-world-model choice, the bandwidth reality, per-genre accuracy workflow |
 

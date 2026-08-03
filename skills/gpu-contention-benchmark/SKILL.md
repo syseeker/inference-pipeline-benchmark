@@ -96,6 +96,8 @@ Hybrid, and deliberately so — see [reference/serving-topology.md](reference/se
 
 ## Recipe
 
+Step-by-step walkthrough with agent prompts: [QUICKSTART_MULTIMODEL_CONTENTION.md](../../QUICKSTART_MULTIMODEL_CONTENTION.md).
+
 Phases follow the structure in `workspace/contention/experiment_design.md`.
 
 > **First session on real hardware?** The harness was built and unit-tested
