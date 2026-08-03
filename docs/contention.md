@@ -1,7 +1,6 @@
 # GPU contention benchmarking — the concept, and the architecture
 
-For anyone asking "what is this study actually measuring, and how is it laid
-out on the hardware?" — including the customer.
+For anyone asking "what is this study actually measuring, and how is it laid out on the hardware?".
 
 This is the conceptual document. The methodology decisions and their reasoning
 live in
@@ -43,6 +42,8 @@ generators, the orchestrator — exists to make that one fraction trustworthy.
 
 ---
 
+
+
 ## 2. The baseline is the hard part
 
 The denominator is where contention studies go wrong, so it's worth being
@@ -66,7 +67,7 @@ A closed-loop client ("keep 4 requests in flight") slows itself down when the
 GPU slows down, because it waits for replies before sending more. It hides
 the exact damage you're trying to measure. Real workloads — game engines,
 camera feeds, video pipelines — push at their own rate and don't wait for
-you. Full reasoning in design-decisions §1.
+you. Full reasoning in design-decisions §1, *Open-loop load, not concurrency*.
 
 ### 2b. Same memory allocation — the KV cache trap
 
@@ -84,10 +85,12 @@ runs.
 Now watch what happens if you leave it at the default for the solo run. A 7B
 model on a 96 GB card:
 
-| | cap | reserved | weights | **KV cache** |
-|---|---|---|---|---|
-| Solo baseline at vLLM's default | 0.90 | 86 GB | 15 GB | **71 GB** |
-| Contention run, sharing with CV | 0.45 | 43 GB | 15 GB | **28 GB** |
+
+|                                 | cap  | reserved | weights | **KV cache** |
+| ------------------------------- | ---- | -------- | ------- | ------------ |
+| Solo baseline at vLLM's default | 0.90 | 86 GB    | 15 GB   | **71 GB**    |
+| Contention run, sharing with CV | 0.45 | 43 GB    | 15 GB   | **28 GB**    |
+
 
 The contention run is now slower for **two** reasons, thoroughly mixed:
 
@@ -122,9 +125,11 @@ under equivalent load.
 
 So: pin the power limit and lock clocks at 60–80% of max boost, record the
 achieved clocks with every result, and throw the run away if a throttle
-reason fired. Detail in design-decisions §2.
+reason fired. Detail in design-decisions §2, *Clock throttling is not contention*.
 
 ---
+
+
 
 ## 3. Why the four model types contend differently
 
@@ -132,12 +137,14 @@ A GPU isn't one resource, it's several — and each workload leans on a
 different mix. This is the whole reason a *matrix* of results is needed
 rather than one number.
 
-| Resource | What exhausts it |
-|---|---|
-| SM compute (FLOPs) | Big matmuls — prefill, vision encoders |
-| Memory bandwidth | Streaming weights from VRAM — token-by-token decode |
-| VRAM capacity | Weights + KV cache |
-| NVDEC (video decode) | Separate silicon — video tenants only |
+
+| Resource             | What exhausts it                                    |
+| -------------------- | --------------------------------------------------- |
+| SM compute (FLOPs)   | Big matmuls — prefill, vision encoders              |
+| Memory bandwidth     | Streaming weights from VRAM — token-by-token decode |
+| VRAM capacity        | Weights + KV cache                                  |
+| NVDEC (video decode) | Separate silicon — video tenants only               |
+
 
 Now the four categories:
 
@@ -175,10 +182,10 @@ consequence.
 Pairing matters, and it matters in both directions:
 
 - A bandwidth-bound LLM next to a compute-bound CV model can overlap
-  surprisingly well — they're competing for different things.
+surprisingly well — they're competing for different things.
 - Two bandwidth-bound models fight badly.
 - A small fast model next to a bursty one gets wrecked, while the bursty one
-  hardly notices.
+hardly notices.
 
 So "model A and model B contend" is not one number — it's two, and they're
 often very different. That's why `summary.py` reports a **victim × aggressor
@@ -186,7 +193,12 @@ matrix** rather than a single score per pair.
 
 ---
 
+
+
 ## 4. Architecture — one GPU
+
+Using `mix-llm-cv` as the worked example — a text LLM beside an object
+detector, which is the simplest real colocation:
 
 ```
                      ┌──────────── one timed window ────────────┐
@@ -240,16 +252,39 @@ The rule on one GPU:
 sum(tenant gpu_memory_utilization) + CV footprint  ≤  1.0
 ```
 
-vLLM's default of 0.90 takes essentially the whole card, so the second tenant
-OOMs at startup. Every tenant needs an explicit cap — and, per §2b, the same
-cap in its solo baseline.
+vLLM's default is 0.90 — essentially the whole card. Leave two tenants at the
+default and the second one OOMs at startup, so each tenant needs its own cap.
+
+Those caps are **derived, not hand-written**:
+
+```
+cap = (model weights + KV budget + overhead) / total VRAM
+```
+
+The KV budget is set once per colocation and is identical for every tenant in
+it. So the cap comes out *different* per model — heavier weights need a bigger
+slice — while the KV cache, the thing that actually sets speed, stays *equal*.
+
+That is the same rule as the KV cache trap in section 2b: hold the cache
+constant, and the neighbour is the only thing left that can explain a
+difference. It also means the solo baseline inherits its cap from the
+contention run automatically, rather than anyone having to remember to copy it.
+
+Sizing caps *proportional to model size* is the obvious move and it would be
+wrong — KV need follows request rate and context length, not parameter count.
+
+You can still write an explicit cap when you mean to, and it wins. One
+experiment does exactly that: the memory-pressure curve sweeps the cap on
+purpose, because there the KV cache is the thing under test rather than the
+thing held fixed.
 
 ---
 
-## 5. Architecture — 2 and 4 GPUs
 
-The customer's Phase 5 asks the right question: *does adding GPUs eliminate
-contention, or just move it?* The answer depends entirely on **placement**,
+
+## 5. Architecture — more than one GPU
+
+*Does adding GPUs eliminate contention, or just move it?* The answer depends entirely on **placement**,
 and there are three genuinely different modes. They answer different
 questions and should not be blended.
 
@@ -290,6 +325,8 @@ on one card at all.
 > multi-GPU results. Confirm the interconnect with `nvidia-smi topo -m`
 > before drawing conclusions from Phase 5.
 
+
+
 ### Mode C — packing
 
 ```
@@ -298,7 +335,7 @@ GPU 0: [ LLM | CV ]     GPU 1: [ VLM | ILM ]
 
 Four tenants over two cards, two per card. This is the actual
 capacity-planning question: *given N GPUs and M models, what's the best
-grouping?* And §3 gives the heuristic — pair tenants that stress **different**
+grouping?* And section 3 above gives the heuristic — pair tenants that stress **different**
 resources. A bandwidth-bound LLM next to a compute-bound detector is a better
 pairing than two LLMs, even though the memory arithmetic looks identical.
 
@@ -311,8 +348,8 @@ of *each* card. Tenants on different GPUs don't compete for VRAM at all, so
 the `sum ≤ 1.0` check has to be applied per device, not per colocation. Two
 tenants on separate cards can each take 0.9.
 
-**The baseline must match the placement, not just the cap.** §2b said the
-solo baseline must use the contention run's memory cap. On multi-GPU it must
+**The baseline must match the placement, not just the cap.** The KV cache trap
+in section 2b said the solo baseline must use the contention run's memory cap. On multi-GPU it must
 also use the contention run's *topology*: a tenant running TP=2 in the
 contention window needs a TP=2 solo baseline. Compared against a TP=1
 baseline, the ratio would fold in all of TP's cross-GPU overhead and report
@@ -320,16 +357,19 @@ it as contention.
 
 ---
 
+
+
 ## 6. How to read the output
 
-`bench summary --gpu <gpu>` produces three things in §10:
+`bench summary --gpu <gpu>` writes a §10 *Contention* section into
+`summary.md`, containing three things:
 
 **The degradation table** — one row per (colocation, tenant): throughput
 retention, and p50/p95/TTFT ratios against the matched solo baseline. The
 primary result.
 
 **The contention matrix** — p95 ratio arranged by victim × aggressor. Read it
-in both directions; per §3 it is not symmetric, and the asymmetry is usually
+in both directions — as section 3 argued, contention is not symmetric, and the asymmetry is usually
 the most actionable finding in the study.
 
 **The safe-operating envelope** — the colocations where `achieved_rps` fell
@@ -341,22 +381,38 @@ open-loop load; no extra experiment is needed to find it.
 
 - A solo tenant "colocated" with nothing must give ratio ≈ 1.0.
 - `achieved_rps ≈ offered_rps` at low load, or the load generator was the
-  bottleneck rather than the GPU.
+bottleneck rather than the GPU.
 - No published run had a throttle reason fire.
 - Exactly one sampler process per run.
 - Ratios ≈ 1.0 *everywhere* usually means the load was too low to contend, or
-  closed-loop crept back in.
+closed-loop crept back in.
 
 ---
 
+
+
 ## 7. Where this sits
 
-| Question | Study |
-|---|---|
-| How fast can this model go on this GPU? | Single-model benchmark — `benchmark-gpu-inference` |
-| How much do these models slow each other down? | **This one** |
-| Which backend should I deploy on? | Single-model, backend sweep |
-| Can I run these two on one card? | This one — the envelope section |
 
-The two are complementary and use *different baselines*, which is the single
-most common way to misread these numbers. See §2b.
+There are two different GPU studies in this repo, and mixing them up is the
+most common way to misread either one.
+
+| Your question | Which study | Skill |
+|---|---|---|
+| How fast can this model go on this GPU? | Single-model | `benchmark-gpu-inference` |
+| Which backend should I deploy on? | Single-model | `benchmark-gpu-inference` |
+| How much do these models slow each other down? | **Contention** | `gpu-contention-benchmark` |
+| Can I run these two models on one card? | **Contention** | `gpu-contention-benchmark` |
+
+**They use different baselines, and that is the whole reason they are separate
+studies.**
+
+- The **single-model** study gives each model the *whole GPU* and asks how fast
+  it can possibly go. Best-case numbers.
+- The **contention** study gives each model its *production share* of the GPU
+  and asks how much a neighbour costs it. The baseline here is deliberately
+  handicapped — see section 2b.
+
+Quote a contention number as though it were a single-model number and you will
+understate your hardware. Quote a single-model number as a contention baseline
+and every degradation ratio you compute will be inflated.
