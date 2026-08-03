@@ -21,7 +21,7 @@ specifically about **two or more models resident at the same time**.
 ## Build status
 
 **Built, never run on hardware.** All eight build steps are complete: 39
-colocations covering all seven of the customer's phases, 248 unit tests, no
+colocations covering all seven phases of the study, 264 unit tests, no
 VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
 at [reference/gpu-validation.md](reference/gpu-validation.md).
 
@@ -89,8 +89,7 @@ Hybrid, and deliberately so — see [reference/serving-topology.md](reference/se
 
 ## Recipe
 
-Phases follow the customer's own structure in
-`workspace/contention/experiment_design.md`.
+Phases follow the structure in `workspace/contention/experiment_design.md`.
 
 > **First session on real hardware?** The harness was built and unit-tested
 > without a GPU. Work through
@@ -99,18 +98,53 @@ Phases follow the customer's own structure in
 > without hardware, ordered by how much work each one invalidates if wrong.
 > The weight estimates that set every VRAM cap are top of that list.
 
+### Prerequisites — once per machine, before any run
+
+Skipping these does not fail early. The Triton one fails at the first CV
+tenant, several minutes into a window you paid GPU time for.
+
+```bash
+# 1. Backend venvs. Each backend gets its own; the orchestrator activates them.
+bench setup --backend vllm
+bench setup --backend sglang        # only if a colocation names sglang
+
+# 2. CV models into a Triton model repo. NOTHING ELSE DOES THIS — the
+#    orchestrator writes each model's config.pbtxt but cannot produce the
+#    weights, so an unbuilt repo means every CV tenant fails to load.
+#    One invocation per (model, backend) a colocation references.
+python scripts/build_triton_cv_repo.py --model yolov8-l   --triton-backend tensorrt \
+       --repo-root benchmarks/results/rtx_pro6000/triton_repo
+python scripts/build_triton_cv_repo.py --model dinov2-base --triton-backend tensorrt \
+       --repo-root benchmarks/results/rtx_pro6000/triton_repo
+
+# 3. Workload payloads. The .jsonl are committed, so this only verifies them —
+#    but a missing one silently drops --input-file and every LLM/VLM tenant
+#    runs on synthetic prompts instead of yours.
+python scripts/build_contention_prompts.py --check
+```
+
+### The run
+
 ```bash
 # Phase 0 — GATE. Do this first and stop if it fails.
 python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 #   Confirms tenants genuinely overlap on the GPU rather than time-slicing.
 #   Also measures run-to-run variance (5x) — that sets the repetition policy.
 
+# Resolve a plan and run every pre-flight WITHOUT launching anything.
+# Non-zero exit + "PRE-FLIGHT WOULD BLOCK THIS RUN" means fix it first.
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run
+
 # Phase 1 — solo baselines, at the SAME offered rate as the contention runs
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --solo-only
 
-# Phases 2-6 — named colocations from the GPU yaml
+# Phases 2-6 — named colocations from the GPU yaml (39 defined)
 bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv     # rate sweep
 bench coloc --gpu rtx_pro6000 --colocation mix-full            # all 4 categories
+
+# Phase 5 — placement, 2 GPUs
+bench coloc --gpu rtx_pro6000 --colocation place-isolated      # null test: ratio ~1.0
+bench coloc --gpu rtx_pro6000 --colocation place-p1
 
 bench summary --gpu rtx_pro6000                                # §10 = contention
 python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
@@ -134,6 +168,15 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
    tenant. Two samplers on one card means two `dcgmi dmon` processes and both
    tenants reporting that card's memory as their own; a card with no sampler
    means a placement result with no telemetry to explain it.
+7. **Workload payloads present.** `bench coloc` refuses to launch if a
+   workload's `prompts:` or `data:` file is missing — but only because that
+   check exists. Without it aiperf silently falls back to synthetic prompts and
+   never sends the video, so `cross-vlm-prefill-vs-llm` would run as a
+   text-only workload and still produce plausible numbers.
+8. **Confirm the video is actually being sent.** Run
+   `cross-vlm-prefill-vs-llm` solo for ~30s and check the VLM tenant's
+   `input_sequence_length` is in the thousands, not ~30. That single number
+   separates "40-frame prefill burst" from "silently text".
 
 ## Failure recovery
 
