@@ -39,8 +39,8 @@ read it first, update it as you complete a step, and commit the change.
 | 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
 | 6 | `bench coloc` orchestrator | ✅ HTTP path live-validated (`benchmarks/coloc.py`, `bench coloc`, 27 unit tests). End-to-end solo run on PRO 6000 via config: orchestrator launched the server, held t0, ran one DCGM sampler, aiperf-streamed 58 reqs → `llm.ndjson` (epoch ts + TTFT + ITL), achieved_rps 4.02 vs offered 4.0, no throttle. Pinned the real aiperf `{metadata,metrics}` schema. **Note:** contention tenants need `--streaming` (done) and a vllm backend **variant without the `--gpu-memory-utilization=0.90` pin** in `extra_args`, else per-tenant caps can't take effect. Triton CV tenant server side is step 7 |
-| 7 | Triton CV tenants | ⬜ not built |
-| 8 | Contention analysis (summary §10, `align_traces.py`) | ⬜ not built |
+| 7 | Triton CV tenants | ✅ done (`benchmarks/triton_cv.py`: CVModelSpec registry, config.pbtxt builder, Triton model-repo layout, perf_analyzer wrapper; `scripts/build_triton_cv_repo.py`: ONNX + TRT export paths; `coloc.py`: Triton lifecycle, CSV parsing, docker-inspect mutex. 75 unit tests pass) |
+| 8 | Contention analysis (summary §10, `align_traces.py`) | ✅ done (`scripts/align_traces.py`: aligns all tenant traces to t0, computes overlap window + per-tenant stats; `benchmarks/summary.py` §10: degradation table, contention matrix, safe-operating-envelope section. 92 unit tests pass) |
 
 ### Continuing on another machine
 
