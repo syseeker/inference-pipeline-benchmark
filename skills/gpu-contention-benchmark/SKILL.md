@@ -149,6 +149,7 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
 
 ## Pinned references
 
+- [docs/contention.md](../../docs/contention.md) — **start here**: what a degradation ratio means, why the solo baseline must be handicapped, how the four model types contend, and the 1/2/4-GPU topologies. Written for customers too
 - [reference/design-decisions.md](reference/design-decisions.md) — the methodology and *why*: open-loop, clock policy, sampler ownership, timestamps, repetition policy
 - [reference/model-catalogue.md](reference/model-catalogue.md) — verified model sources, per-GPU scoping, and which picks are broken
 - [reference/serving-topology.md](reference/serving-topology.md) — vLLM vs Triton vs MPS vs MIG, explained from first principles

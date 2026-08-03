@@ -1,0 +1,362 @@
+# GPU contention benchmarking — the concept, and the architecture
+
+For anyone asking "what is this study actually measuring, and how is it laid
+out on the hardware?" — including the customer.
+
+This is the conceptual document. The methodology decisions and their reasoning
+live in
+[skills/gpu-contention-benchmark/reference/design-decisions.md](../skills/gpu-contention-benchmark/reference/design-decisions.md);
+the model list lives in
+[reference/model-catalogue.md](../skills/gpu-contention-benchmark/reference/model-catalogue.md).
+Read this one first.
+
+---
+
+## 1. The question
+
+You have one GPU and four models you'd like to run on it: a text LLM, a
+video-understanding VLM, a document/image model, and an object detector.
+They fit in memory. Can you run them together?
+
+"They fit" is a memory question, and it's the easy one. The hard question is
+what happens to *speed*. Two models on one GPU are not two models on two
+half-GPUs — they interleave, they queue behind each other, they evict each
+other's caches. One of them may be almost unaffected while the other falls
+off a cliff.
+
+**A contention benchmark measures exactly that: how much slower each model
+gets because of its neighbours.**
+
+The unit of measurement is a ratio:
+
+```
+                  latency of model A when sharing the GPU
+degradation  =    ───────────────────────────────────────
+                  latency of model A when running alone
+```
+
+A ratio of 1.0 means the neighbour cost you nothing. 1.3 means 30% slower.
+3.0 means you probably can't ship it.
+
+Everything else in this study — the phases, the config schema, the two load
+generators, the orchestrator — exists to make that one fraction trustworthy.
+
+---
+
+## 2. The baseline is the hard part
+
+The denominator is where contention studies go wrong, so it's worth being
+blunt about the rule:
+
+> **Between the baseline run and the contention run, the neighbour must be
+> the only thing that changed.**
+
+If anything else differs — request rate, memory allocation, clock speed,
+prompt length — then that difference lands in the ratio and gets reported as
+contention. The number comes out looking authoritative and is simply wrong.
+
+Three things break this in practice, and all three are easy to get wrong.
+
+### 2a. Same request rate
+
+Drive both runs at the same offered rate, and drive them **open-loop** — a
+fixed requests-per-second, not a fixed number of requests in flight.
+
+A closed-loop client ("keep 4 requests in flight") slows itself down when the
+GPU slows down, because it waits for replies before sending more. It hides
+the exact damage you're trying to measure. Real workloads — game engines,
+camera feeds, video pipelines — push at their own rate and don't wait for
+you. Full reasoning in design-decisions §1.
+
+### 2b. Same memory allocation — the KV cache trap
+
+This one is the least obvious, and it's the reason this section exists.
+
+When vLLM starts it reserves `gpu_memory_utilization` × VRAM. Model weights
+take a fixed slice of that, and **everything left over becomes the KV cache**
+— the pool that holds attention state for in-flight requests. A bigger KV
+cache means more requests can be in flight simultaneously, which means higher
+throughput and less queueing.
+
+So the cap is not a passive memory limit. It directly sets how fast the model
+runs.
+
+Now watch what happens if you leave it at the default for the solo run. A 7B
+model on a 96 GB card:
+
+| | cap | reserved | weights | **KV cache** |
+|---|---|---|---|---|
+| Solo baseline at vLLM's default | 0.90 | 86 GB | 15 GB | **71 GB** |
+| Contention run, sharing with CV | 0.45 | 43 GB | 15 GB | **28 GB** |
+
+The contention run is now slower for **two** reasons, thoroughly mixed:
+
+1. The neighbour is stealing SM time and memory bandwidth ← *what we want*
+2. Its own KV cache is 2.5× smaller ← *a self-inflicted artifact*
+
+There is no way to separate them afterwards. You would report "the detector
+slowed my LLM by 2.4×" when much of that was "I gave my LLM a third of the
+memory."
+
+**The fix:** run the solo baseline at 0.45 too. Identical KV cache in both
+runs, so the neighbour is the only difference left.
+
+The part worth saying out loud to anyone reading the results:
+
+> **The solo baseline is deliberately handicapped.** It does not answer "how
+> fast can this model go on this GPU." It answers "how fast is this model at
+> its production memory allocation, with nobody else on the card."
+
+Those are different questions. The first one is a single-model benchmark — a
+different study, run with the
+[benchmark-gpu-inference](../skills/benchmark-gpu-inference/SKILL.md) skill.
+Mixing the two up produces contention ratios that are inflated across the
+board.
+
+### 2c. Same clocks
+
+Under co-residency, power draw rises. The GPU hits its power cap, drops its
+SM clocks, and everything slows down. That's real, but it is **not
+contention** — it's thermodynamics, and it would happen to a single model
+under equivalent load.
+
+So: pin the power limit and lock clocks at 60–80% of max boost, record the
+achieved clocks with every result, and throw the run away if a throttle
+reason fired. Detail in design-decisions §2.
+
+---
+
+## 3. Why the four model types contend differently
+
+A GPU isn't one resource, it's several — and each workload leans on a
+different mix. This is the whole reason a *matrix* of results is needed
+rather than one number.
+
+| Resource | What exhausts it |
+|---|---|
+| SM compute (FLOPs) | Big matmuls — prefill, vision encoders |
+| Memory bandwidth | Streaming weights from VRAM — token-by-token decode |
+| VRAM capacity | Weights + KV cache |
+| NVDEC (video decode) | Separate silicon — video tenants only |
+
+Now the four categories:
+
+**Text LLM — bandwidth-bound, steady.**
+Generating each token requires streaming the entire weight matrix out of
+VRAM. That's very low arithmetic intensity: the SMs are mostly idle, waiting
+on memory. An LLM in its decode phase is a *bandwidth* hog, not a compute
+hog. Its KV cache also grows with context length, so it's the tenant most
+sensitive to having its memory cap cut.
+
+**VLM on video — the worst neighbour in the set.**
+A 40-frame clip means: decode the video (NVDEC), run a vision encoder over
+all 40 frames (a large compute burst), then prefill with several thousand
+tokens because each frame expands into hundreds. It is a periodic *compute
+tsunami* — quiet, then enormous, then quiet. Anything sharing the card sees a
+latency spike shaped exactly like that burst. This is why `vlm_video_long`
+exists as a workload.
+
+**ILM / document models — heavy but steadier.**
+High-resolution single images through a vision encoder. Less bursty than
+video, considerably heavier than text. Two of these (`kosmos-2.5`,
+`paddleocr`) have no vLLM implementation at all and run on Triton's Python
+backend — which means they're also the slowest-served tenants in the study,
+for reasons that have nothing to do with contention.
+
+**CV detection / embedding — small, fast, high-rate, fragile.**
+YOLOv8 or DINOv2 at 50–200 requests per second, each one a few milliseconds.
+A stream of tiny kernels. And here's the asymmetry that matters: **a 5 ms
+model pushed to 15 ms is a 3× regression, while a 500 ms LLM pushed to 600 ms
+is barely noticeable.** Same absolute interference, wildly different
+consequence.
+
+### The consequence: contention is not symmetric
+
+Pairing matters, and it matters in both directions:
+
+- A bandwidth-bound LLM next to a compute-bound CV model can overlap
+  surprisingly well — they're competing for different things.
+- Two bandwidth-bound models fight badly.
+- A small fast model next to a bursty one gets wrecked, while the bursty one
+  hardly notices.
+
+So "model A and model B contend" is not one number — it's two, and they're
+often very different. That's why `summary.py` reports a **victim × aggressor
+matrix** rather than a single score per pair.
+
+---
+
+## 4. Architecture — one GPU
+
+```
+                     ┌──────────── one timed window ────────────┐
+                     │                                          │
+  aiperf ────────────┼──► vLLM :8000   (LLM, cap 0.45)          │
+  (open-loop, rps)   │                                          │
+                     │                                          │
+  perf_analyzer ─────┼──► Triton :8001 (CV, TensorRT)           │
+  (open-loop, rps)   │                                          │
+                     │                                          │
+                     └──────────────────────────────────────────┘
+                                        │
+                     one dcgmi sampler ─┘  (whole window, not per tenant)
+
+              shared t0  ── every request stamped in epoch ms ──►  aligned traces
+```
+
+Four design points, each with a reason:
+
+**Native servers for LLM/VLM, Triton for CV.**
+vLLM, SGLang and TRT-LLM each run their own process with their own scheduler
+— putting them behind Triton adds a hop and buys nothing. CV models genuinely
+benefit from Triton (TensorRT backend, dynamic batching, and a Python backend
+for the two models with no export path). Detail in
+[reference/serving-topology.md](../skills/gpu-contention-benchmark/reference/serving-topology.md).
+
+**Two load generators, one per tenant type.**
+AIPerf cannot drive Triton — it dropped GenAI-Perf's `kserve` endpoint types.
+So LLM/VLM tenants get `aiperf --request-rate`, CV tenants get
+`perf_analyzer --request-rate-range`. Both support Poisson arrivals, so the
+two remain comparable. The orchestrator's job is to start them against a
+shared `t0` and merge their traces — never to generate load itself.
+
+**MPS on, always.** Without MPS, kernels from different processes
+time-slice instead of overlapping. Measured on the PRO 6000 during Phase 0:
+MPS off gave **0.28×** aggregate throughput (worse than serial — the tenants
+were fighting over context switches), MPS on gave **1.94×**. Without MPS you
+aren't measuring contention, you're measuring the time-slice scheduler.
+
+**Exactly one GPU sampler for the whole window.** DCGM is device-scoped and
+has no per-process view, so N samplers would mean N subprocesses all
+reporting the *whole card's* memory as each tenant's own. Whole-GPU numbers
+attach to the colocation; per-tenant VRAM comes from
+`nvidia-smi --query-compute-apps`.
+
+### The memory budget
+
+The rule on one GPU:
+
+```
+sum(tenant gpu_memory_utilization) + CV footprint  ≤  1.0
+```
+
+vLLM's default of 0.90 takes essentially the whole card, so the second tenant
+OOMs at startup. Every tenant needs an explicit cap — and, per §2b, the same
+cap in its solo baseline.
+
+---
+
+## 5. Architecture — 2 and 4 GPUs
+
+The customer's Phase 5 asks the right question: *does adding GPUs eliminate
+contention, or just move it?* The answer depends entirely on **placement**,
+and there are three genuinely different modes. They answer different
+questions and should not be blended.
+
+### Mode A — separate GPUs (isolation)
+
+```
+GPU 0: [ LLM ]          GPU 1: [ CV ]
+```
+
+One tenant per card. No shared SMs, no shared bandwidth, no shared VRAM.
+Contention should disappear and the degradation ratio should return to
+**≈ 1.0**.
+
+Two uses. First, it's the honest answer to "should I just buy another GPU?" —
+it puts a number on what the extra card actually buys. Second, it's a
+**hardware null test**: if a tenant still shows degradation when its
+neighbour is on a *different card*, the harness has a bug. That's a
+verification we get for free.
+
+### Mode B — tensor parallel
+
+```
+GPU 0: [ LLM shard 0 | CV ]     GPU 1: [ LLM shard 1 | CV ]
+```
+
+One model split across both cards. This is the mode people assume will fix
+contention, and it mostly doesn't: the LLM now touches *every* GPU, so it
+contends with whatever else is on *every* GPU, plus it adds cross-GPU
+synchronisation on each forward pass. What TP actually buys is capacity —
+more VRAM for weights, more aggregate bandwidth — not isolation.
+
+For the 72B models this isn't a choice; `qwen2.5-vl-72b` at BF16 doesn't fit
+on one card at all.
+
+> **To verify on the hardware:** RTX PRO 6000 Blackwell has no NVLink, so
+> cross-GPU traffic goes over PCIe. That makes TP notably more expensive than
+> it would be on an NVLink'd H200 pair, and it's likely to dominate the
+> multi-GPU results. Confirm the interconnect with `nvidia-smi topo -m`
+> before drawing conclusions from Phase 5.
+
+### Mode C — packing
+
+```
+GPU 0: [ LLM | CV ]     GPU 1: [ VLM | ILM ]
+```
+
+Four tenants over two cards, two per card. This is the actual
+capacity-planning question: *given N GPUs and M models, what's the best
+grouping?* And §3 gives the heuristic — pair tenants that stress **different**
+resources. A bandwidth-bound LLM next to a compute-bound detector is a better
+pairing than two LLMs, even though the memory arithmetic looks identical.
+
+### What changes in the measurement
+
+Two things, and both are easy to get wrong:
+
+**The memory rule becomes per-GPU.** `gpu_memory_utilization` is a fraction
+of *each* card. Tenants on different GPUs don't compete for VRAM at all, so
+the `sum ≤ 1.0` check has to be applied per device, not per colocation. Two
+tenants on separate cards can each take 0.9.
+
+**The baseline must match the placement, not just the cap.** §2b said the
+solo baseline must use the contention run's memory cap. On multi-GPU it must
+also use the contention run's *topology*: a tenant running TP=2 in the
+contention window needs a TP=2 solo baseline. Compared against a TP=1
+baseline, the ratio would fold in all of TP's cross-GPU overhead and report
+it as contention.
+
+---
+
+## 6. How to read the output
+
+`bench summary --gpu <gpu>` produces three things in §10:
+
+**The degradation table** — one row per (colocation, tenant): throughput
+retention, and p50/p95/TTFT ratios against the matched solo baseline. The
+primary result.
+
+**The contention matrix** — p95 ratio arranged by victim × aggressor. Read it
+in both directions; per §3 it is not symmetric, and the asymmetry is usually
+the most actionable finding in the study.
+
+**The safe-operating envelope** — the colocations where `achieved_rps` fell
+below `offered_rps`. That's the point where the GPU stopped keeping up with
+what was asked of it, which is the deployment limit. It comes free from
+open-loop load; no extra experiment is needed to find it.
+
+### Sanity checks before believing any of it
+
+- A solo tenant "colocated" with nothing must give ratio ≈ 1.0.
+- `achieved_rps ≈ offered_rps` at low load, or the load generator was the
+  bottleneck rather than the GPU.
+- No published run had a throttle reason fire.
+- Exactly one sampler process per run.
+- Ratios ≈ 1.0 *everywhere* usually means the load was too low to contend, or
+  closed-loop crept back in.
+
+---
+
+## 7. Where this sits
+
+| Question | Study |
+|---|---|
+| How fast can this model go on this GPU? | Single-model benchmark — `benchmark-gpu-inference` |
+| How much do these models slow each other down? | **This one** |
+| Which backend should I deploy on? | Single-model, backend sweep |
+| Can I run these two on one card? | This one — the envelope section |
+
+The two are complementary and use *different baselines*, which is the single
+most common way to misread these numbers. See §2b.
