@@ -1,17 +1,32 @@
-# Scenarios — the common input format
+# Scenarios — the input format for the model-quality benchmarks
 
-Every benchmark in this harness consumes the same on-disk shape. One
-scenario is **one (frame + optional instruction + optional context) → one
-ground truth**. We use the same shape across the VLM backends
-(vLLM / SGLang / TRT-LLM serving Qwen3-VL / Gemma 4 / Nemotron-Omni) and
-the policy backend (NitroGen), so a single sweep can compare them
-apples-to-apples on the same input.
+A **scenario** is one (frame + optional instruction + optional context) → one
+ground truth, sitting in a directory on disk.
+
+**Which benchmarks use it:**
+
+| Benchmark | Scenarios? | What drives it instead |
+|---|---|---|
+| Single-model VLM | ✅ yes | — |
+| NitroGen policy | ✅ yes | same shape, different ground-truth file |
+| Multi-model contention | ❌ **no** | `workloads:` in the GPU yaml — named prompt sets and video clips, replayed at a fixed request rate |
+
+The VLM and policy benchmarks share the shape deliberately, so one sweep can
+compare them apples-to-apples on the same input.
+
+**The contention benchmark does not use scenarios at all.** It is not measuring
+whether a model gets the right answer — it is measuring how much slower a model
+gets when something else is on the card. So its tenants are driven by *load*,
+not by test cases: a workload names a prompt file and optionally a video clip,
+and the orchestrator replays it at a set requests-per-second. See
+[contention.md](contention.md) if that is the benchmark you want.
 
 This doc explains:
 
 1. The on-disk shape and what each file is for.
 2. How scenarios from the `nvidia/NitroGen` dataset are converted into
-   that shape (and why we convert at all).
+   that shape (and why we convert at all) — *NitroGen-specific, skip if you
+   are only benchmarking VLMs*.
 3. How to add your own dataset as a scenario source — no fork needed.
 
 ---
@@ -98,6 +113,8 @@ The fields inside each ground-truth file:
 
 ## 2. NitroGen dataset → scenario, field by field
 
+*NitroGen-specific. Skip to §4 if you are adding your own dataset.*
+
 `nvidia/NitroGen` ships **action annotations only — no pixels.** Each chunk
 on the HF dataset is:
 
@@ -160,6 +177,8 @@ model emit the right action for *this* gameplay moment) does not.
 ---
 
 ## 3. Why we convert, instead of reading the dataset directly
+
+*NitroGen-specific.*
 
 Three reasons. The first is the load-bearing one.
 
