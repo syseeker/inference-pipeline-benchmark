@@ -94,7 +94,7 @@ Ordered by likelihood of failing to load:
 
 | Where | Cap | Reservation | Concern |
 |---|---|---|---|
-| `cross-memory-pressure-84` | 0.74 + 0.22 = **0.96** | ~92 of 96 GB | Deliberately near-OOM. It is *supposed* to be at the edge — but confirm it loads at all, else the top of the curve is missing |
+| `cross-memory-pressure-kv29` | 0.69 + 0.28 = **0.97** | ~93 of 96 GB | Deliberately near-OOM. It is *supposed* to be at the edge — but confirm it loads at all, else the top of the curve is missing |
 | `cross-size-scaling` 32b rung | **0.87** | ~83.5 GB | The tightest single tenant. Leaves ~12.5 GB for the CV container. Fails if 65.5 GB is an underestimate |
 | `mix-memory-bound` | 0.55 + 0.39 = **0.94** | ~90 GB | Leaves ~5.8 GB for Triton + driver. Is that enough for yolov8-l? |
 
@@ -184,7 +184,7 @@ more interesting result than confirmation.
 
 ### 5.2 Bimodality under memory pressure
 
-`cross-memory-pressure-*` carries `repetitions: 3` on the theory that near-OOM
+`cross-memory-pressure-kv29` carries `repetitions: 3` on the theory that near-OOM
 behaviour is bimodal — the model either fits or thrashes, so the mean of the
 two describes neither. Check whether the three repeats actually separate into
 modes. If they are tightly clustered, the repetition can be dropped and the

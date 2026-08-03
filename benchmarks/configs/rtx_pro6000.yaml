@@ -1084,57 +1084,70 @@ colocations:
       values: [qwen2.5-7b, llama3.1-8b, mistral-7b]
 
   # ── Phase 4 — the KV-cache cliff ───────────────────────────────────
-  # Four points walking VRAM from comfortable to near-OOM. Where does the
-  # KV cache get small enough that vLLM starts evicting and preempting
-  # rather than batching? Below that point co-residency costs a little
-  # throughput; above it, requests queue and the latency curve turns
+  # Where does the KV cache get small enough that vLLM starts evicting and
+  # preempting rather than batching? Below that point co-residency costs a
+  # little throughput; above it, requests queue and the latency curve turns
   # vertical. The customer wants the location of that knee, because it is
   # the number that decides whether a second tenant is affordable at all.
   #
-  # Read as ONE curve, in this order:
-  #   cross-memory-pressure-63 → -66 → -78 → -84
-  # The suffix is the share of the card taken by WEIGHTS alone. Held
-  # against it, the two tenants' KV caches shrink 9.7 → 8.4 → 5.0 → 3.9 GB
-  # (neighbour) and 5.8 → 5.8 → 5.8 → 3.5 GB (anchor).
+  # HOW THIS DIFFERS FROM THE CUSTOMER'S DESIGN, and why.
+  # Their ladder swaps in a bigger neighbour at each rung — (72b,7b),
+  # (72b,14b), (72b,32b), (vl-72b,72b) — so each point changes TWO things:
+  # how full the card is, AND which model is being measured. When
+  # throughput drops at a rung you cannot tell whether the KV cache got too
+  # small (the question) or whether a 32B model is simply slower than a 7B
+  # one (true regardless of memory, and not contention at all).
+  #
+  # Here the MODELS ARE FIXED and only the caps move. The KV cache is then
+  # the single independent variable, so a throughput drop has exactly one
+  # possible cause. It also yields a TRANSFERABLE number — "throughput
+  # degrades below N GB of KV" — which the customer can check any future
+  # model pair against, instead of four outcomes for four specific pairs.
+  #
+  # DISQUALIFIED from the customer's ladder, on this card, with these
+  # checkpoints — removed rather than substituted:
+  #   · (72b, 32b) = 45.0 + 65.5 = 110.5 GB of weights. Does not load on a
+  #     96 GB card. (Their `q4` intent would fit at ~65 GB, but this yaml
+  #     carries qwen2.5-32b at BF16 only; no AWQ 32b checkpoint is
+  #     registered.)
+  #   · (vl-72b, 72b) — `qwen2.5-vl-72b` has no entry in this yaml, and at
+  #     BF16 it needs two cards.
+  # Their 47% floor is also unreachable: the 72B anchor ALONE is 47%.
+  #
+  # READ AS ONE CURVE, in this order:
+  #   cross-memory-pressure-kv03 → -kv13 → -kv22 → -kv29
+  # The suffix is TOTAL KV across both tenants, in GB — the swept variable.
+  # Weights + allocator overhead are fixed at 64.2 GB (67% of the card), so
+  # KV is everything above that line.
+  #
+  # ⚠ THE TWO ENDS FAIL DIFFERENTLY, and the naming is deliberate. More KV
+  # means MORE of the card reserved, so pressure does NOT rise with the
+  # reservation percentage the way the customer's utilisation numbers did:
+  #   · kv03 (70% reserved) — KV starved. This is where the eviction cliff
+  #     should appear, and it is the end the experiment is hunting.
+  #   · kv29 (97% reserved) — KV ample, but 93 of 96 GB committed. This is
+  #     where allocator fragmentation and near-OOM bimodality should appear.
+  # A reader who assumes "higher percentage = worse" will read it backwards.
   #
   # WHY EXPLICIT CAPS HERE, against the derive-from-kv_budget_gb rule used
-  # everywhere else: the rule exists to hold the KV cache CONSTANT so that
-  # a comparison isolates the neighbour. Here the KV cache is the swept
-  # variable. Deriving the caps would pin the exact quantity the experiment
-  # is about and every rung would come out the same. The caps are written
-  # out per point, and the resulting KV is written next to each one so a
-  # reader can check the arithmetic rather than trust it.
+  # everywhere else: that rule exists to hold the KV cache CONSTANT so a
+  # comparison isolates the neighbour. Here the KV cache IS the variable.
+  # Deriving would pin the exact quantity under test and flatten the curve.
+  # Each rung's resulting KV is written beside its cap so a reader can check
+  # the arithmetic rather than trust it.
   #
-  # WHY FOUR NAMES instead of one entry with a sweep: both tenants change
-  # per point (model AND cap), and `vary` moves one field of one tenant.
-  # Four explicit entries are honest about that; contorting the schema to
-  # emit them would hide which knobs actually moved.
+  # The KV split is held at ~2:1 anchor:neighbour at every rung, so the
+  # ratio is not a second variable — only the total moves.
   #
-  # SUBSTITUTIONS from the customer's (72b,7b) / (72b,14b) / (72b,32b) /
-  # (vl-72b,72b) ladder, both forced by this card:
-  #   · (72b, 32b) is 45 + 65.5 = 110.5 GB of weights and does not load on
-  #     a 96 GB card at all — nor does any pair reaching their 86% top rung
-  #     with a 72B anchor. `qwen2.5-32b` becomes the ANCHOR at the top rung
-  #     instead, beside the 7b: 80.7 GB of weights, 84% — one point under
-  #     their 86%, and it is the heaviest loadable pair in the roster.
-  #   · `qwen2.5-vl-72b` has no entry in this yaml (and at BF16 needs two
-  #     cards), so it cannot serve the top rung either.
-  #   · The Qwen2.5 ladder has nothing between 7B and 14B, so their second
-  #     rung is filled by `gemma2-9b`. It changes vendor mid-curve, which
-  #     `cross-arch-validation` exists to bound: if the three architectures
-  #     agree there within ~20%, this rung is comparable to its neighbours.
+  # repetitions: 3 — near-OOM behaviour is bimodal. The model either fits or
+  # it thrashes, and the mean of those two states describes neither, so the
+  # SPREAD across the three runs is the finding at kv29. Kept at 3 for the
+  # lower rungs too, so that spread has something to be compared against.
   #
-  # repetitions: 3 — near-OOM behaviour is bimodal. The model either fits
-  # or it thrashes, and the mean of those two states describes neither, so
-  # the SPREAD across the three runs is the finding at the top rungs. Kept
-  # at 3 for the comfortable rungs too, so the spread has something to be
-  # compared against.
-  #
-  # The offered rate is deliberately IDENTICAL at all four points. The
-  # customer's config halves it at the extreme point to avoid OOM; our top
-  # rung loads (92 GB reserved of 96), so halving would only confound the
-  # cliff with a load change.
-  cross-memory-pressure-63:
+  # The offered rate is deliberately IDENTICAL at all four points, so a
+  # change in throughput is never a change in what was asked for.
+
+  cross-memory-pressure-kv03:
     phase: 4
     duration_s: 120
     isolation: mps
@@ -1143,45 +1156,45 @@ colocations:
     tenants:
       - name: anchor
         backend: vllm
-        model: qwen2.5-72b           # AWQ, 45.0 GB
+        model: qwen2.5-72b            # AWQ, 45.0 GB weights — fixed all curve
         workload: llm_short
-        gpu_memory_utilization: 0.55  # 52.8 GB → 45.0 weights + 2 oh + 5.8 KV
+        gpu_memory_utilization: 0.51  # 49.0 GB → 45.0 weights + 2 oh + 2.0 KV
         load: {pattern: poisson, rps: 2}
       - name: neighbour
         backend: vllm
-        model: qwen2.5-7b            # 15.2 GB
+        model: qwen2.5-7b             # 15.2 GB weights — fixed all curve
         workload: llm_short
-        gpu_memory_utilization: 0.28  # 26.9 GB → 15.2 weights + 2 oh + 9.7 KV
+        gpu_memory_utilization: 0.19  # 18.2 GB → 15.2 weights + 2 oh + 1.0 KV
         load: {pattern: poisson, rps: 4}
 
-  cross-memory-pressure-66:
+  cross-memory-pressure-kv13:
     phase: 4
-    extends: cross-memory-pressure-63
-    tenants:
-      - name: neighbour
-        model: gemma2-9b             # 18.4 GB — fills the gap in the Qwen ladder
-        gpu_memory_utilization: 0.30  # 28.8 GB → 18.4 weights + 2 oh + 8.4 KV
-
-  cross-memory-pressure-78:
-    phase: 4
-    extends: cross-memory-pressure-63
-    tenants:
-      - name: neighbour
-        model: qwen2.5-14b           # 29.5 GB
-        gpu_memory_utilization: 0.38  # 36.5 GB → 29.5 weights + 2 oh + 5.0 KV
-
-  # Top rung: 92 of 96 GB reserved, and both caches under 4 GB. If the
-  # cliff exists anywhere in this study it is here.
-  cross-memory-pressure-84:
-    phase: 4
-    extends: cross-memory-pressure-63
+    extends: cross-memory-pressure-kv03
     tenants:
       - name: anchor
-        model: qwen2.5-32b           # BF16, 65.5 GB — heaviest in the roster
-        gpu_memory_utilization: 0.74  # 71.0 GB → 65.5 weights + 2 oh + 3.5 KV
+        gpu_memory_utilization: 0.58  # 55.7 GB → 45.0 + 2 oh + 8.7 KV
       - name: neighbour
-        model: qwen2.5-7b
-        gpu_memory_utilization: 0.22  # 21.1 GB → 15.2 weights + 2 oh + 3.9 KV
+        gpu_memory_utilization: 0.22  # 21.1 GB → 15.2 + 2 oh + 3.9 KV
+
+  cross-memory-pressure-kv22:
+    phase: 4
+    extends: cross-memory-pressure-kv03
+    tenants:
+      - name: anchor
+        gpu_memory_utilization: 0.64  # 61.4 GB → 45.0 + 2 oh + 14.4 KV
+      - name: neighbour
+        gpu_memory_utilization: 0.26  # 25.0 GB → 15.2 + 2 oh + 7.8 KV
+
+  # Top of the curve: 93 of 96 GB committed. KV is ample here — what is
+  # under test at this rung is the allocator, not the cache.
+  cross-memory-pressure-kv29:
+    phase: 4
+    extends: cross-memory-pressure-kv03
+    tenants:
+      - name: anchor
+        gpu_memory_utilization: 0.69  # 66.2 GB → 45.0 + 2 oh + 19.2 KV
+      - name: neighbour
+        gpu_memory_utilization: 0.28  # 26.9 GB → 15.2 + 2 oh + 9.7 KV
 
   # ── Phase 5 — GPU scaling: does a second card remove contention? ───
   # The customer's question is "does adding GPUs eliminate contention or

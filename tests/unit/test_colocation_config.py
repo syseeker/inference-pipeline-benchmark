@@ -169,10 +169,10 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
     """Near-OOM behaviour is bimodal — the model either fits or thrashes, and
     the mean of those two states describes neither. The spread across repeats
     is the finding, so the runs have to actually exist."""
-    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-84") if not r.is_solo]
+    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-kv29") if not r.is_solo]
     assert len(colocs) == 3
     assert [c.repetition for c in colocs] == [1, 2, 3]
-    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-84"}, (
+    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-kv29"}, (
         "repeats are samples of one experiment, not three experiments"
     )
 
@@ -180,7 +180,7 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
 def test_repetitions_do_not_multiply_the_baselines(cfg):
     """Baselines dedup by `_solo_key` here and are cached again per session by
     the orchestrator, so a repeated baseline would be dropped anyway."""
-    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-84") if r.is_solo]
+    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-kv29") if r.is_solo]
     assert len(solos) == 2, "one per tenant, not one per tenant per repeat"
 
 
@@ -576,10 +576,10 @@ def test_cross_sweeps_move_one_tenant_and_hold_the_subject(cfg, name):
 
 
 MEMORY_PRESSURE_CURVE = [
-    "cross-memory-pressure-63",
-    "cross-memory-pressure-66",
-    "cross-memory-pressure-78",
-    "cross-memory-pressure-84",
+    "cross-memory-pressure-kv03",
+    "cross-memory-pressure-kv13",
+    "cross-memory-pressure-kv22",
+    "cross-memory-pressure-kv29",
 ]
 
 
@@ -596,18 +596,46 @@ def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
     assert reserved[-1] <= 1.0, "and must still be loadable"
 
 
-def test_memory_pressure_squeezes_the_kv_cache_not_just_the_weights(cfg):
-    """The mechanism under test is KV-cache eviction, so the cache has to be
-    the thing shrinking. Caps are explicit here for exactly this reason —
-    deriving them would pin the swept variable and flatten the curve."""
-    kv = []
+def test_memory_pressure_moves_the_kv_cache_and_nothing_else(cfg):
+    """KV is the single independent variable, so it must move monotonically —
+    and the models must NOT move with it.
+
+    Note the direction. The customer's ladder swapped in a bigger neighbour at
+    each rung, so KV *shrank* as reservation grew. Here the models are fixed
+    and only the caps move, so KV *grows* along the curve: kv03 is the starved
+    end (where the eviction cliff should be) and kv29 is the committed end
+    (where the allocator should misbehave). Asserting the old direction would
+    be asserting the old confound.
+    """
+    kv, models = [], []
     for name in MEMORY_PRESSURE_CURVE:
         c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
         t = next(t for t in c.tenants if t.name == "neighbour")
         weights = cfg["models"][t.round.model_id]["weights_gb"]
-        kv.append(t.gpu_memory_utilization * cfg["vram_gb"] - weights)
+        kv.append(round(t.gpu_memory_utilization * cfg["vram_gb"] - weights, 1))
+        models.append(tuple(sorted(x.round.model_id for x in c.tenants)))
         assert t.kv_budget_gb is None, "explicit cap, not derived"
-    assert kv == sorted(kv, reverse=True), f"KV must shrink along the curve: {kv}"
+    assert kv == sorted(kv), f"KV must move monotonically along the curve: {kv}"
+    assert len(set(models)) == 1, (
+        f"the models must be identical at every rung, else a throughput drop "
+        f"could be the model rather than the cache: {set(models)}"
+    )
+
+
+def test_memory_pressure_holds_the_kv_split_between_tenants(cfg):
+    """Only the TOTAL KV may move. If the anchor:neighbour split drifted too,
+    the curve would have two variables and neither tenant's cliff would be
+    attributable."""
+    ratios = []
+    for name in MEMORY_PRESSURE_CURVE:
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        kv = {}
+        for t in c.tenants:
+            weights = cfg["models"][t.round.model_id]["weights_gb"]
+            kv[t.name] = t.gpu_memory_utilization * cfg["vram_gb"] - weights - 2.0
+        ratios.append(kv["anchor"] / kv["neighbour"])
+    # 2 dp caps cannot hit an exact ratio; hold it to a band rather than a value.
+    assert max(ratios) - min(ratios) < 0.5, f"KV split drifts across rungs: {ratios}"
 
 
 def test_memory_pressure_holds_the_offered_load_constant(cfg):

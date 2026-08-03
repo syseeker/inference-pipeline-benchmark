@@ -65,7 +65,7 @@ family rather than two.
 | Their experiment | Status |
 |---|---|
 | Ph2 `concurrency-llm` — 2 LLMs, c1→16 | ⚠️ reframed as an **rps** sweep |
-| Ph2 `concurrency-cv` — 3 CV models, rps 1→200 | ⬜ already open-loop, needs building |
+| Ph2 `concurrency-cv` — 3 CV models, rps 1→200 | ✅ `same-cv`, already open-loop in their design |
 | Ph2 `concurrency-vlm` — 2 VLMs | ⚠️ reframed as rps |
 | Ph2 `concurrency-ilm` — 2 ILMs | ⚠️ reframed as rps |
 | Ph3 `mix-llm-only` — 3 LLMs at fixed c4 | ⚠️ folded into the Ph2 sweep |
@@ -100,8 +100,8 @@ still valid. It also comes free, with no extra experiment.
 | `mix-ilm-cv` | ✅ |
 | `mix-llm-vlm` | ✅ covered by Phase 4's `cross-vlm-prefill-vs-llm`, which is the same composition with a designated subject |
 | `mix-llm-only`, `mix-cv-only` | ⚠️ folded into Phase 2 above |
-| `mix-vlm-ilm` | ⬜ needs a VLM substitution first |
-| **`mix-full`** — all four categories | ⬜ **the significant gap.** It is the only 4-tenant combination, and it is what makes multi-GPU placement a real decision rather than a formality |
+| `mix-vlm-ilm` | ✅ second VLM substituted — `gemma-4-31b-it-fp8`, since paligemma2 cannot be either half of a video pair |
+| **`mix-full`** — all four categories | ✅ the only 4-tenant combination, and the basis of the Phase 5 placement study |
 
 ---
 
@@ -113,9 +113,9 @@ still valid. It also comes free, with no extra experiment.
 | `cross-vlm-prefill-vs-llm` | ✅ the sharpest experiment in the study, see below |
 | `cross-arch-validation` qwen/llama/mistral | ✅ |
 | `cross-size-scaling` 7b/14b/32b/72b | ⚠️ present but was **broken** — inherited a fixed 0.45 cap (43 GB) while qwen2.5-72b AWQ needs ~45 GB, so the top rung could not load. Repaired by deriving caps from weights + a constant KV budget |
-| `cross-ilm-vs-cv-rps` | ⬜ |
-| `cross-cv-vs-llm-concurrency` | ❌ as written — sweeps LLM **concurrency**. Reframed to sweep LLM rps with CV as the subject ⬜ |
-| `cross-memory-pressure` — 4-point VRAM curve | ⬜ **high value.** Walks utilization 47% → 86% to find where KV-cache eviction begins. `repetitions: 3`, because near-OOM behaviour is bimodal — the model either fits or thrashes, and the mean of those two states describes neither |
+| `cross-ilm-vs-cv-rps` | ✅ |
+| `cross-cv-vs-llm-concurrency` | ⚠️ built as `cross-cv-vs-llm-rps` — sweeps LLM **rps** with CV as the subject, not concurrency |
+| `cross-memory-pressure` — 4-point VRAM curve | ⚠️ **built, redesigned.** Two of their four pairs are disqualified (see §9). Rebuilt as a **cap sweep on one fitting pair** — models fixed, KV walked 3 → 29 GB — so a throughput drop can only be the cache, where their model-swap ladder confounded "card is fuller" with "this model is bigger and slower anyway". Yields a transferable threshold rather than four one-off outcomes. `repetitions: 3` kept |
 
 ### What `cross-vlm-prefill-vs-llm` measures, and why it is the best one
 
@@ -225,18 +225,22 @@ benchmark numbers.
 | `asymmetry` {equal, moderate, extreme} | ✅ as rps 4 / 16 / 64 — 1:1, 4:1, 16:1 |
 | `arrival_pattern` {burst, uniform} | ✅ as {poisson, constant} — Poisson added at no cost, and it is the realistic middle the original was interpolating between |
 | `backend_llm` {vllm, trt-llm, sglang, llamacpp} | ⚠️ {vllm, sglang} built; trt-llm ⬜; llamacpp ❌ §9 |
-| `input_size_llm` — longer prompt → longer prefill | ⚠️ **`input_size_cv` was built instead.** A legitimate experiment, but not the one asked for; the LLM-prefill question is still open ⬜ |
+| `input_size_llm` — longer prompt → longer prefill | ✅ `secondary-input-size-llm-{a,b}`, using a new `llm_long_prompt` workload. `input_size_cv` is kept as a separate question |
 | `quantization` | ❌ §9 |
-| **Dual baseline A/B** | ❌ **structural gap** — every `secondary-*` currently extends the compute-bound baseline only |
+| **Dual baseline A/B** | ✅ `mix-memory-bound` added as baseline B; all seven dimensions now run `-a` and `-b` |
 
-**The dual-baseline gap is the most substantive omission in the harness.**
-The customer's design runs each secondary dimension against *two* contrasting
-baselines — compute-bound (small models, high load) and memory-bound (72B,
-moderate load) — precisely so interaction effects surface. A finding like
-*"backend choice matters 3× more under memory pressure"* is invisible with one
-baseline. Our own design record singles this out as something the customer got
-right; it then went unimplemented. Every `secondary-*` result today answers
-half its question.
+**The dual baseline was the harness's most substantive omission, and it is
+now closed.** The customer's design runs each secondary dimension against
+*two* contrasting baselines — compute-bound (small models, high load) and
+memory-bound (72B, moderate load) — precisely so interaction effects surface.
+A finding like *"backend choice matters 3× more under memory pressure"* is
+structurally invisible with one baseline, and every `secondary-*` result was
+answering half its question.
+
+One wrinkle worth knowing when reading the results: `secondary-asymmetry-b`
+runs at 2:1 / 8:1 / 32:1 rather than baseline A's 1:1 / 4:1 / 16:1, because
+baseline B's anchor runs at 2 rps. Matching the ratios would have meant
+changing B's load, which is the very thing that makes it memory-bound.
 
 ---
 
@@ -251,6 +255,7 @@ should be raised with them directly.
 | **`llamacpp` backend** | No Triton backend exists, and it adds no contention axis that vLLM/SGLang/TRT-LLM do not already cover | Omitted |
 | **`gemma-vlm-32b` → `paligemma2-28b-pt-896`** | It is 28B not 32B, a `-pt-` **base** checkpoint, and **image-only** — vLLM raises `"Only image modality is supported"`. **It cannot serve the video dimension it was chosen for** | Kept in config, serves image rounds, skips video rounds cleanly with a reason. Natural replacement from their own list: `qwen2.5-vl-7b` |
 | **`qwen2.5-27b`** | The HF repo does not exist. The Qwen2.5 ladder is 0.5/1.5/3/7/14/**32**/72B — 27B is a Gemma 2 size | `qwen2.5-32b`, with the original entry recorded in a comment |
+| **`cross-memory-pressure` rungs 3 and 4** | `(72b, 32b)` is 110.5 GB of weights with our checkpoints and will not load on a 96 GB card. `(vl-72b, 72b)` needs `qwen2.5-vl-72b`, which has no config entry and needs two cards at BF16. Their 47% floor is also unreachable — the 72B anchor alone is 47% | **Removed, not substituted.** The curve is rebuilt as a cap sweep on `(72b, 7b)`, which fits. Note their `q4` intent for rung 3 *would* fit at ~65 GB — it is dead with the BF16 32b this yaml registers, not dead on the hardware |
 
 Two further picks are kept but degraded, and the customer should know:
 
