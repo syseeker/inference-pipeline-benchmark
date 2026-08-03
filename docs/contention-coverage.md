@@ -29,7 +29,7 @@ Of the customer's ~120 planned runs:
 
 | Their experiment | Status |
 |---|---|
-| `validate-concurrent-kernels` — LLM + CV SM overlap | ✅ `scripts/gpu_concurrency_probe.py`. Run on PRO 6000: MPS **off** → 0.28× aggregate throughput (serialising, gate FAIL); MPS **on** → 1.94× (PASS). Variance CoV 0.4% → 1 repetition per scenario |
+| `validate-concurrent-kernels` — LLM + CV SM overlap | ⚠️ `scripts/gpu_concurrency_probe.py`, **by throughput proxy rather than by kernel timeline** — see below. Run on PRO 6000: MPS **off** → 0.28× aggregate throughput (serialising, gate FAIL); MPS **on** → 1.94× (PASS). Variance CoV 0.4% → 1 repetition per scenario |
 | `validate-vlm-cv-concurrent` — VLM prefill + CV | ⬜ the probe supports it; this variant has not been run |
 | `validate-standalone-vs-triton` — vLLM vs vLLM-inside-Triton | ❌ **We never serve an LLM through Triton.** LLM/VLM go to native servers, CV goes to Triton — so this overhead comparison has no bearing on any run we make. See [serving-topology.md](../skills/gpu-contention-benchmark/reference/serving-topology.md) |
 
@@ -37,6 +37,40 @@ The MPS result is worth dwelling on: **without MPS the gate fails outright.**
 0.28× means the tenants were doing worse than running one after the other.
 Any contention number collected without MPS would have been measuring the
 time-slice scheduler.
+
+### Nsight was specified and is not used — what we do instead
+
+The design says to monitor SM utilisation *"at ms granularity via **DCGM/nsight**
+… if SM shows **interleaved kernels** from both models in the same time window,
+concurrency is confirmed"*, at `sample_interval_ms: 1`. We took the DCGM branch
+of that "or", and the two are not equivalent evidence.
+
+**The gate infers overlap rather than observing it.** It runs a small matmul in
+two processes and classifies on two signals together: aggregate throughput ≈2×
+at latency ≈1× means genuine overlap, ≈1× throughput at ≈2× latency means
+serialising. That is a sound discriminator — it is why the MPS-off result was
+so unambiguous — but it is a *behavioural proxy*. Nothing looks at a kernel
+timeline. DCGM cannot sample at 1 ms in any case; that is Nsight territory.
+
+For the gate this is arguably the better instrument, because it measures the
+thing that actually matters — does co-residency buy throughput — rather than a
+picture someone has to interpret. Where it falls short is explanation rather
+than detection, and there are two specific places:
+
+- **`cross-vlm-prefill-vs-llm`.** The causal claim is that the LLM's ITL spike
+  lands *inside* the VLM's prefill burst. That currently rests on per-request
+  timestamps aligned to a shared `t0` at 50 ms sampling. An Nsight timeline
+  would show the vision-encoder kernels and the stalled decode step directly —
+  proof rather than correlation.
+- **Anomalies.** If a pairing degrades far more than the resource model in
+  [contention.md §3](contention.md) predicts, the timeline is where the reason
+  would be visible.
+
+**Not built.** `bench profile --tool nsys|ncu` exists but wraps a single
+`bench smoke`-style round — one backend, one model, no notion of tenants — so
+it cannot target a colocation today. Making it colocation-aware is the work,
+and it is only worth doing if the results turn up something the aligned traces
+cannot explain. Tracked in *What is outstanding* below.
 
 ---
 
@@ -286,7 +320,7 @@ is the serving path, not the neighbour.
 outstanding list is built — VRAM cap sizing, the four `same-*` colocations,
 the Phase 6 dual baseline, the memory-pressure curve, `mix-full`, per-GPU
 Triton containers and the Phase 5 placement study. **39 colocations** resolve
-with no VRAM pre-flight issues, under **221 unit tests**.
+with no VRAM pre-flight issues, under **341 unit tests**.
 
 What remains is **validation, not construction** — and it needs hardware.
 Nothing here has ever run on a GPU. The weight figures that set every derived
@@ -297,3 +331,24 @@ placement ranking is a prediction on the record, not a result.
 See **[the skill's gpu-validation.md](../skills/gpu-contention-benchmark/reference/gpu-validation.md)**. It is
 ordered by how much work each assumption invalidates if it is wrong — start at
 the top, not at the interesting end.
+
+### Deferred: Nsight profiling of a contention window
+
+The one piece of the original design that is knowingly unbuilt rather than
+disqualified. `bench profile` would need to learn about colocations: attach
+`nsys` to a whole window instead of a single round, and either profile one
+named tenant or capture all of them against the shared `t0`.
+
+**Deliberately deferred, not forgotten.** The gate already answers *does
+overlap happen* by proxy, and the degradation ratios answer *how much it
+costs*. Nsight answers *why*, and until a result appears that the aligned
+traces cannot explain, there is nothing for it to explain. Reach for it when:
+
+- a pairing degrades far more than [contention.md §3](contention.md) predicts,
+- the P1 > P3 > P2 placement ranking comes out wrong, or
+- the ITL-spike-inside-the-prefill-window claim needs to be *proved* rather
+  than shown by correlation — most likely for a customer-facing writeup.
+
+Cost is real: `nsys` adds ~5–10% overhead, which perturbs the very contention
+being measured, so a profiled run is a diagnostic and **not** a run whose
+ratios should be published.
