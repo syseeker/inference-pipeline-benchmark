@@ -281,6 +281,6 @@ cap are estimates rather than measurements; the Docker flags, port scheme and
 per-device repositories are asserted only as strings in unit tests; and the
 placement ranking is a prediction on the record, not a result.
 
-See **[contention-gpu-validation.md](contention-gpu-validation.md)**. It is
+See **[the skill's gpu-validation.md](../skills/gpu-contention-benchmark/reference/gpu-validation.md)**. It is
 ordered by how much work each assumption invalidates if it is wrong — start at
 the top, not at the interesting end.

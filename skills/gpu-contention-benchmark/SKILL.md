@@ -27,8 +27,13 @@ specifically about **two or more models resident at the same time**.
 
 ## Build status
 
-This capability is under construction. **This table is the handoff record** —
-read it first, update it as you complete a step, and commit the change.
+**Built, never run on hardware.** All eight build steps are complete: 39
+colocations covering all seven of the customer's phases, 222 unit tests, no
+VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
+at [reference/gpu-validation.md](reference/gpu-validation.md).
+
+**This table is the handoff record** — read it first, update it as you complete
+a step, and commit the change.
 
 | # | Step | State |
 |---|---|---|
@@ -96,7 +101,7 @@ Phases follow the customer's own structure in
 
 > **First session on real hardware?** The harness was built and unit-tested
 > without a GPU. Work through
-> [docs/contention-gpu-validation.md](../../docs/contention-gpu-validation.md)
+> [reference/gpu-validation.md](reference/gpu-validation.md)
 > before trusting any number it produces — it lists every assumption made
 > without hardware, ordered by how much work each one invalidates if wrong.
 > The weight estimates that set every VRAM cap are top of that list.
@@ -156,6 +161,7 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
 
 ## Pinned references
 
+- [reference/gpu-validation.md](reference/gpu-validation.md) — **every assumption made without a GPU**, ordered by what each invalidates. Work through it on first hardware contact; delete it once its answers are absorbed
 - [docs/contention.md](../../docs/contention.md) — **start here**: what a degradation ratio means, why the solo baseline must be handicapped, how the four model types contend, and the 1/2/4-GPU topologies. Written for customers too
 - [reference/design-decisions.md](reference/design-decisions.md) — the methodology and *why*: open-loop, clock policy, sampler ownership, timestamps, repetition policy
 - [reference/model-catalogue.md](reference/model-catalogue.md) — verified model sources, per-GPU scoping, and which picks are broken

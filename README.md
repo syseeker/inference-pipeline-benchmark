@@ -216,7 +216,6 @@ see [docs/gpu-strategy.md](docs/gpu-strategy.md).
 | [docs/metrics.md](docs/metrics.md) | Every metric defined — decision metrics vs diagnostics, mapped to `summary.md` sections |
 | [docs/contention.md](docs/contention.md) | Multi-model GPU sharing — what a degradation ratio means, why the baseline is the hard part, and the 1/2/4-GPU topologies |
 | [docs/contention-coverage.md](docs/contention-coverage.md) | Coverage of the customer's contention design — what's built, what's reframed, what's disqualified and why |
-| [docs/contention-gpu-validation.md](docs/contention-gpu-validation.md) | Every assumption the contention harness makes without a GPU, ordered by what it invalidates — work through this first on real hardware |
 | [docs/models.md](docs/models.md) | Per-GPU model picks, the rationale, and hypothesis-vs-measured-reality |
 | [docs/capacity.md](docs/capacity.md) | Memory math — which checkpoint fits which GPU at BF16 / FP8 / NVFP4 |
 | [docs/nitrogen.md](docs/nitrogen.md) | The NitroGen diffusion policy: how it works, vs Cosmos 3 / GR00T N1 / VLMs, and the execution-backend study |

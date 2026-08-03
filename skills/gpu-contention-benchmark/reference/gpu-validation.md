@@ -12,6 +12,34 @@ start at the interesting end.
 Written 2026-08-03, at the point where all seven customer phases had
 colocations defined and nothing had ever run on hardware.
 
+## This document is meant to be deleted
+
+It is a temporary record of an unusual situation — a fully built harness that
+has never touched the hardware it was built for. Once that is no longer true,
+it should not exist.
+
+**How an item closes.** Not by ticking it. By landing its answer somewhere
+durable:
+
+| What you found | Where it goes |
+|---|---|
+| A wrong `weights_gb` | Fix `benchmarks/configs/rtx_pro6000.yaml`; put the measured number in the comment |
+| A broken assumption in Tier 3/4 | Fix the code **and add the regression test** — a hardware bug with no test comes back |
+| A hypothesis in Tier 5 resolved | Write it up in `docs/findings/`, add to `docs/findings/knowledge.yaml` (the summary generator reads it) |
+| A design decision revised | Update [design-decisions.md](design-decisions.md), and say what changed and why |
+| A Tier 6 question settled | Same — it is a decision, so it belongs with the decisions |
+
+**Then delete this file and the pointer to it in
+[SKILL.md](../SKILL.md)**, in the same commit that closes the last item.
+
+**Do not delete it early to tidy up.** The value here is the corrections, not
+the checklist. An item deleted before its answer is written down silently
+reverts to being an unverified assumption — except now nobody knows it is one,
+which is strictly worse than the situation this document was written to fix.
+
+Everything here is one-time. Recurring per-run checks live in SKILL.md's
+"Pre-flight checks" section and stay there permanently.
+
 ---
 
 ## Tier 1 — does anything run at all
@@ -223,13 +251,6 @@ so restoring it is a config change, not a code change.
 
 ## Reporting back
 
-Anything corrected here should land in the repo, not in a chat log:
-
-- Wrong `weights_gb` → fix the yaml, note the measured value in the comment
-- A failed assumption in Tier 3/4 → fix the code, add the regression test
-- A hypothesis in Tier 5 resolved → write it up in `docs/findings/` (the
-  summary generator auto-links from Core findings) and update
-  `docs/findings/knowledge.yaml`
-- A revised design decision → update
-  `skills/gpu-contention-benchmark/reference/design-decisions.md`, which is
-  the record of *why*, and say what changed
+See [This document is meant to be deleted](#this-document-is-meant-to-be-deleted)
+at the top — each finding has a durable home, and this file goes away once they
+have all reached it.

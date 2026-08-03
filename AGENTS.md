@@ -349,8 +349,13 @@ specifically about **two or more models resident at the same time**.
 
 ## Build status
 
-This capability is under construction. **This table is the handoff record** —
-read it first, update it as you complete a step, and commit the change.
+**Built, never run on hardware.** All eight build steps are complete: 39
+colocations covering all seven of the customer's phases, 222 unit tests, no
+VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
+at [reference/gpu-validation.md](reference/gpu-validation.md).
+
+**This table is the handoff record** — read it first, update it as you complete
+a step, and commit the change.
 
 | # | Step | State |
 |---|---|---|
@@ -361,8 +366,8 @@ read it first, update it as you complete a step, and commit the change.
 | 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
 | 6 | `bench coloc` orchestrator | ✅ HTTP path live-validated (`benchmarks/coloc.py`, `bench coloc`, 27 unit tests). End-to-end solo run on PRO 6000 via config: orchestrator launched the server, held t0, ran one DCGM sampler, aiperf-streamed 58 reqs → `llm.ndjson` (epoch ts + TTFT + ITL), achieved_rps 4.02 vs offered 4.0, no throttle. Pinned the real aiperf `{metadata,metrics}` schema. **Note:** contention tenants need `--streaming` (done) and a vllm backend **variant without the `--gpu-memory-utilization=0.90` pin** in `extra_args`, else per-tenant caps can't take effect. Triton CV tenant server side is step 7 |
-| 7 | Triton CV tenants | ✅ done (`benchmarks/triton_cv.py`, `scripts/build_triton_cv_repo.py`, coloc.py Triton server lifecycle, 75 unit tests) |
-| 8 | Contention analysis (summary §10, `align_traces.py`) | ✅ done (`scripts/align_traces.py`, `summary.py` §10 degradation table + contention matrix + envelope, 92 unit tests total) |
+| 7 | Triton CV tenants | ✅ done (`benchmarks/triton_cv.py`: CVModelSpec registry, config.pbtxt builder, Triton model-repo layout, perf_analyzer wrapper; `scripts/build_triton_cv_repo.py`: ONNX + TRT export paths; `coloc.py`: Triton lifecycle, CSV parsing, docker-inspect mutex. 75 unit tests pass) |
+| 8 | Contention analysis (summary §10, `align_traces.py`) | ✅ done (`scripts/align_traces.py`: aligns all tenant traces to t0, computes overlap window + per-tenant stats; `benchmarks/summary.py` §10: degradation table, contention matrix, safe-operating-envelope section. 92 unit tests pass) |
 
 ### Continuing on another machine
 
@@ -415,6 +420,13 @@ Hybrid, and deliberately so — see [reference/serving-topology.md](reference/se
 
 Phases follow the customer's own structure in
 `workspace/contention/experiment_design.md`.
+
+> **First session on real hardware?** The harness was built and unit-tested
+> without a GPU. Work through
+> [reference/gpu-validation.md](reference/gpu-validation.md)
+> before trusting any number it produces — it lists every assumption made
+> without hardware, ordered by how much work each one invalidates if wrong.
+> The weight estimates that set every VRAM cap are top of that list.
 
 ```bash
 # Phase 0 — GATE. Do this first and stop if it fails.
@@ -471,6 +483,8 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
 
 ## Pinned references
 
+- [reference/gpu-validation.md](reference/gpu-validation.md) — **every assumption made without a GPU**, ordered by what each invalidates. Work through it on first hardware contact; delete it once its answers are absorbed
+- [docs/contention.md](../../docs/contention.md) — **start here**: what a degradation ratio means, why the solo baseline must be handicapped, how the four model types contend, and the 1/2/4-GPU topologies. Written for customers too
 - [reference/design-decisions.md](reference/design-decisions.md) — the methodology and *why*: open-loop, clock policy, sampler ownership, timestamps, repetition policy
 - [reference/model-catalogue.md](reference/model-catalogue.md) — verified model sources, per-GPU scoping, and which picks are broken
 - [reference/serving-topology.md](reference/serving-topology.md) — vLLM vs Triton vs MPS vs MIG, explained from first principles
