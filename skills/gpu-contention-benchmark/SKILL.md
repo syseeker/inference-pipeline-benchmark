@@ -28,7 +28,7 @@ specifically about **two or more models resident at the same time**.
 ## Build status
 
 **Built, never run on hardware.** All eight build steps are complete: 39
-colocations covering all seven of the customer's phases, 222 unit tests, no
+colocations covering all seven of the customer's phases, 248 unit tests, no
 VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
 at [reference/gpu-validation.md](reference/gpu-validation.md).
 
@@ -137,8 +137,10 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_id>/
 5. **Triton client shared memory enabled** — `--allow-client-shm=true`. Disabled
    by default since Triton 26.04; without it, large CV tensors read as a model
    regression when it is really serialization overhead.
-6. **One GPU sampler for the whole window**, not one per tenant. N samplers means
-   N `dcgmi dmon` processes and every tenant reporting whole-GPU memory as its own.
+6. **One GPU sampler per occupied card** for the whole window, never one per
+   tenant. Two samplers on one card means two `dcgmi dmon` processes and both
+   tenants reporting that card's memory as their own; a card with no sampler
+   means a placement result with no telemetry to explain it.
 
 ## Failure recovery
 

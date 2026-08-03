@@ -1328,7 +1328,9 @@ def coloc(
     colocation: str = typer.Option(..., "--colocation", help="Name from the yaml `colocations:` block."),
     solo_only: bool = typer.Option(False, "--solo-only", help="Run only the solo baselines (Phase 1)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the resolved plan; launch nothing."),
-    gpu_index: int = typer.Option(0, help="CUDA device index."),
+    gpu_index: int = typer.Option(
+        0, help="Fallback CUDA device index. Sampling follows each tenant's `device:`; "
+                "this is only used when a window declares no placement at all."),
     seed: int = typer.Option(0, help="Load-generator random seed, for reproducibility."),
     out: Path = typer.Option(None, help="Run root. Default: benchmarks/results/<gpu>/coloc/<colocation>/."),
     json_out: bool = typer.Option(False, "--json"),

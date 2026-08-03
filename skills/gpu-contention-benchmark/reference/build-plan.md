@@ -475,7 +475,9 @@ result, and fail runs where a throttle reason fired.
 that means N `dcgmi dmon` processes on one GPU, N different windows, and every
 tenant reporting the **whole GPU's** memory as its own. **Decision:** the
 orchestrator owns one sampler spanning the union window; whole-GPU numbers attach
-to the *colocation*, not to each tenant row.
+to the *colocation*, not to each tenant row. **Amended in Phase 5** (see
+design-decisions §3): one sampler per *card the colocation occupies*, keyed by
+device in the manifest — one per tenant is still forbidden.
 
 ### 4.4 Per-request timestamps
 

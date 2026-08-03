@@ -11,6 +11,7 @@ a bare environment (mirrors test_colocation_config.py).
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 
@@ -385,6 +386,147 @@ def test_manifest_solo_has_no_co_tenants():
     assert m["tenants"][0]["co_tenants"] == []
 
 
+def test_manifest_keys_sampler_by_device_and_records_devices():
+    c = _coloc()
+    c.tenants[1].device = 1                      # CV tenant moved to the second card
+    m = coloc.build_manifest(
+        c, t0_epoch_ms=1.0, gpu="rtx_pro6000",
+        sampler_summaries={0: {"gpu_util_pct_p50": 90.0}, 1: {"gpu_util_pct_p50": 10.0}},
+    )
+    assert m["devices"] == [0, 1]
+    assert set(m["gpu_sampler"]) == {"0", "1"}   # JSON keys are strings
+    assert m["gpu_sampler"]["1"]["gpu_util_pct_p50"] == 10.0
+
+
+def test_manifest_single_gpu_sampler_shape_unchanged():
+    # The overwhelmingly common case: no `device:` anywhere ⇒ one entry, card 0.
+    m = coloc.build_manifest(_coloc(), t0_epoch_ms=1.0, gpu="g",
+                             sampler_summaries={0: {"gpu_util_pct_p50": 72.0}})
+    assert m["devices"] == [0]
+    assert list(m["gpu_sampler"]) == ["0"]
+
+
+# ── occupied devices (the sampler set) ──────────────────────────────────────
+
+def test_occupied_devices_defaults_to_single_card():
+    assert coloc.occupied_devices(_coloc().tenants) == [0]
+
+
+def test_occupied_devices_unions_http_and_triton_placement():
+    tenants = [
+        _tenant("llm", port=8001, device=1),
+        _cv_tenant(name="cv", port=8100, device=0),
+    ]
+    assert coloc.occupied_devices(tenants) == [0, 1]
+
+
+def test_occupied_devices_counts_every_card_of_a_tp_tenant():
+    # A tensor-parallel tenant is really running on both cards, so both need
+    # telemetry — its second card is not somebody else's spare.
+    assert coloc.occupied_devices([_tenant("llm", device=[1, 0])]) == [0, 1]
+
+
+def test_occupied_devices_dedupes_co_resident_tenants():
+    # Two tenants on one card share ONE sampler — the rule that has not changed.
+    tenants = [_tenant("a", port=8001, device=1), _tenant("b", port=8002, device=1)]
+    assert coloc.occupied_devices(tenants) == [1]
+
+
+# ── run-time environment capture ────────────────────────────────────────────
+
+def _fake_run_text(monkeypatch, results):
+    """Stub the probe subprocess: {argv[0]: (stdout, error)}. No nvidia-smi, no
+    pgrep, no GPU — the point is the recorded finding, not the tool."""
+    monkeypatch.setattr(coloc, "_run_text",
+                        lambda cmd, **kw: results.get(cmd[0], (None, "unstubbed")))
+
+
+def test_capture_interconnect_detects_nvlink(monkeypatch):
+    matrix = "\tGPU0\tGPU1\nGPU0\t X \tNV18\nGPU1\tNV18\t X \n"
+    _fake_run_text(monkeypatch, {"nvidia-smi": (matrix, None)})
+    got = coloc.capture_interconnect()
+    assert got["available"] is True
+    assert got["nvlink_detected"] is True
+    assert got["topo_matrix"] == matrix          # raw, so a reader can re-derive
+
+
+def test_capture_interconnect_sees_pcie_only(monkeypatch):
+    _fake_run_text(monkeypatch, {"nvidia-smi": ("\tGPU0\tGPU1\nGPU0\t X \tSYS\n", None)})
+    assert coloc.capture_interconnect()["nvlink_detected"] is False
+
+
+def test_capture_interconnect_degrades_when_nvidia_smi_missing(monkeypatch):
+    _fake_run_text(monkeypatch, {"nvidia-smi": (None, "nvidia-smi not found")})
+    got = coloc.capture_interconnect()
+    assert got["available"] is False and got["nvlink_detected"] is None
+    assert "not found" in got["error"]
+
+
+def test_capture_mps_reads_daemon_and_pipe_dir(monkeypatch):
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", "/tmp/nvidia-mps")
+    _fake_run_text(monkeypatch, {"pgrep": ("4242\n", None)})
+    got = coloc.capture_mps()
+    assert got["control_daemon_running"] is True
+    assert got["pipe_directory"] == "/tmp/nvidia-mps"
+    assert got["detected"] is True
+
+
+def test_capture_mps_reports_absent_daemon(monkeypatch):
+    monkeypatch.delenv("CUDA_MPS_PIPE_DIRECTORY", raising=False)
+    # pgrep exits 1 when nothing matched — a real "no daemon", not a failed probe.
+    _fake_run_text(monkeypatch, {"pgrep": (None, "pgrep exited 1: ")})
+    got = coloc.capture_mps()
+    assert got["control_daemon_running"] is False
+    assert got["detected"] is False
+    assert got["probe_error"] is None
+
+
+def test_capture_mps_inconclusive_when_pgrep_missing(monkeypatch):
+    monkeypatch.delenv("CUDA_MPS_PIPE_DIRECTORY", raising=False)
+    _fake_run_text(monkeypatch, {"pgrep": (None, "pgrep not found")})
+    got = coloc.capture_mps()
+    assert got["control_daemon_running"] is None   # unknown ≠ absent
+    assert got["probe_error"] == "pgrep not found"
+
+
+def _env(mps_detected=True, interconnect_available=True):
+    return {
+        "interconnect": {"available": interconnect_available, "error": "nvidia-smi not found",
+                         "nvlink_detected": False if interconnect_available else None},
+        "mps": {"control_daemon_running": mps_detected, "detected": mps_detected},
+    }
+
+
+def test_warns_when_multi_tenant_window_has_no_mps():
+    w = coloc.environment_warnings(_coloc(), _env(mps_detected=False))
+    assert any("MPS" in x and "time-slice" in x for x in w)
+
+
+def test_no_mps_warning_for_a_solo_window():
+    # A solo baseline has nobody to share with; MPS is irrelevant to it.
+    assert coloc.environment_warnings(_coloc(is_solo=True), _env(mps_detected=False)) == []
+
+
+def test_no_mps_warning_when_daemon_present():
+    assert coloc.environment_warnings(_coloc(), _env(mps_detected=True)) == []
+
+
+def test_warns_about_unknown_topology_only_when_multi_gpu():
+    single = coloc.environment_warnings(_coloc(), _env(interconnect_available=False))
+    assert single == []                       # one card: NVLink cannot explain anything
+    c = _coloc()
+    c.tenants[1].device = 1
+    multi = coloc.environment_warnings(c, _env(interconnect_available=False))
+    assert any("interconnect topology unknown" in x for x in multi)
+
+
+def test_manifest_carries_environment_and_warning():
+    m = coloc.build_manifest(_coloc(), t0_epoch_ms=1.0, gpu="g",
+                             environment=_env(mps_detected=False))
+    assert m["environment"]["mps"]["detected"] is False
+    assert len(m["warnings"]) == 1
+
+
 # ── solo-baseline cache ─────────────────────────────────────────────────────
 
 def test_solo_cache_dedupes_identical_baselines():
@@ -731,3 +873,96 @@ def test_launch_drivers_target_each_tenants_own_container(tmp_path, monkeypatch)
 
     urls = [cmd[cmd.index("-u") + 1] for cmd in launched if "-u" in cmd]
     assert urls == ["localhost:8100", "localhost:8110"]
+
+
+# ── sampler set over a whole window ─────────────────────────────────────────
+#
+# The live path with every GPU-touching part replaced: no servers, no drivers,
+# no dcgmi. What is checked is the thing that silently broke before — which
+# cards got a sampler, and that all of them were live for the entire window.
+
+
+class _FakeSampler:
+    """Stands in for GpuSampler, logging its own lifecycle into a shared list."""
+
+    def __init__(self, events, *, gpu_index=0, interval_ms=250):
+        self._events = events
+        self.gpu_index = gpu_index
+
+    def __enter__(self):
+        self._events.append(("start", self.gpu_index))
+        return self
+
+    def __exit__(self, *a):
+        self._events.append(("stop", self.gpu_index))
+
+    @property
+    def summary(self):
+        return {"sampler_backend": "fake", "gpu_util_pct_p50": 10.0 * self.gpu_index}
+
+
+def _run_window(monkeypatch, tmp_path, tenants, environment=None):
+    """Run one colocation with everything external stubbed. Returns (manifest,
+    events) where events interleaves sampler starts/stops with the driver launch."""
+    events: list[tuple] = []
+    c = Colocation(id="w", tenants=tenants, duration_s=10, isolation="mps",
+                   phase=5, is_solo=len(tenants) == 1)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+
+    monkeypatch.setattr(coloc, "GpuSampler",
+                        lambda **kw: _FakeSampler(events, **kw))
+    monkeypatch.setattr(coloc, "capture_environment",
+                        lambda: environment if environment is not None else _env())
+    monkeypatch.setattr(orch, "_build_triton_repos", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "_ensure_server",
+                        lambda t, paths, **kw: coloc.ServerHandle(tenant=t, proc=None, reused=True))
+    monkeypatch.setattr(orch, "_wait_ready", lambda t, *a, **k: None)
+
+    def fake_launch(coloc_obj, paths):
+        events.append(("drivers", None))
+        return {t.name: types.SimpleNamespace(wait=lambda *a, **k: 0) for t in coloc_obj.tenants}
+
+    monkeypatch.setattr(orch, "_launch_drivers", fake_launch)
+    manifest = orch.run(c, coloc.RunPaths(root=tmp_path / "run-1"))
+    return manifest, events
+
+
+def test_run_opens_exactly_one_sampler_on_a_single_gpu_window(tmp_path, monkeypatch):
+    # The case that runs most often: unchanged from before placement existed.
+    _, events = _run_window(monkeypatch, tmp_path, [_tenant("llm", port=8001)])
+    assert [e for e in events if e[0] == "start"] == [("start", 0)]
+
+
+def test_run_opens_one_sampler_per_occupied_card(tmp_path, monkeypatch):
+    tenants = [_tenant("llm", port=8001, device=0), _tenant("vlm", port=8002, device=1)]
+    manifest, events = _run_window(monkeypatch, tmp_path, tenants)
+    assert sorted(dev for kind, dev in events if kind == "start") == [0, 1]
+    assert manifest["devices"] == [0, 1]
+    assert set(manifest["gpu_sampler"]) == {"0", "1"}
+
+
+def test_run_opens_one_sampler_for_two_tenants_on_one_card(tmp_path, monkeypatch):
+    # One per CARD, never one per tenant — the original §4.3 rule, intact.
+    tenants = [_tenant("a", port=8001, device=1), _tenant("b", port=8002, device=1)]
+    _, events = _run_window(monkeypatch, tmp_path, tenants)
+    assert [e for e in events if e[0] == "start"] == [("start", 1)]
+
+
+def test_run_samplers_span_the_whole_window(tmp_path, monkeypatch):
+    # Every card must be sampling before the first request and still sampling
+    # after the last, or its telemetry describes a different window.
+    tenants = [_tenant("llm", port=8001, device=0), _tenant("vlm", port=8002, device=1)]
+    _, events = _run_window(monkeypatch, tmp_path, tenants)
+    launch = events.index(("drivers", None))
+    assert all(i < launch for i, e in enumerate(events) if e[0] == "start")
+    assert all(i > launch for i, e in enumerate(events) if e[0] == "stop")
+
+
+def test_run_writes_environment_and_mps_warning_to_manifest(tmp_path, monkeypatch):
+    tenants = [_tenant("a", port=8001), _tenant("b", port=8002)]
+    manifest, _ = _run_window(monkeypatch, tmp_path, tenants,
+                              environment=_env(mps_detected=False))
+    on_disk = json.loads((tmp_path / "run-1" / "manifest.json").read_text())
+    assert on_disk["environment"]["mps"]["detected"] is False
+    assert any("MPS" in w for w in on_disk["warnings"])
+    assert manifest["warnings"] == on_disk["warnings"]

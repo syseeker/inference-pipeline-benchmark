@@ -3,8 +3,8 @@
 `scenario_config.iter_colocation()` resolves a `colocations:` entry into
 `Colocation` objects (solo baselines first, then the co-resident windows). This
 module *runs* one: launch each tenant's server, hold a single shared `t0`, drive
-every tenant open-loop through its correct load generator, own exactly one GPU
-sampler for the whole window, and merge the per-request traces with the GPU
+every tenant open-loop through its correct load generator, own one GPU sampler
+per card the colocation occupies, and merge the per-request traces with the GPU
 trace into the coloc result layout.
 
 Non-negotiables enforced here (skills/gpu-contention-benchmark/reference/
@@ -15,8 +15,11 @@ design-decisions.md):
                             ratio would describe the harness, not the GPU.
   §4.2  clock integrity   — a window where a fatal throttle fired is discarded,
                             not published; the slowdown was power/thermal.
-  §4.3  one sampler        — N samplers means N dcgmi processes and every tenant
-                            reporting the whole GPU's memory as its own.
+  §4.3  one sampler        — per CARD the colocation occupies, never per tenant.
+                            DCGM is device-scoped: two samplers on one card is
+                            two dcgmi processes and both tenants reporting that
+                            card's memory as their own, while a card with NO
+                            sampler leaves its placement result unexplainable.
   §4.4  shared wall clock  — time.time() for the alignment timeline across
                             processes; perf_counter() only for durations.
 
@@ -37,8 +40,10 @@ placement" section below for why the two mechanisms differ.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -61,6 +66,29 @@ VLLM_DEFAULT_GPU_FRACTION = 0.90
 FATAL_THROTTLE_REASONS = (
     "sw_power_cap", "hw_thermal_slowdown", "sw_thermal_slowdown", "hw_power_brake_slowdown",
 )
+
+
+# ─────────────────────────── placement ─────────────────────────────────────
+
+def occupied_devices(tenants: list[Tenant]) -> list[int]:
+    """Every distinct GPU index the colocation actually sits on, ascending.
+
+    This is the sampler set (§4.3): telemetry is opened per card, so a card that
+    appears here and nowhere else still gets its utilisation, power and VRAM
+    recorded. HTTP tenants contribute `devices` (a tensor-parallel tenant
+    contributes ALL of its cards — it is really running on each of them);
+    Triton tenants contribute the single card resolve_triton_device pins them to.
+
+    A colocation that never mentions `device:` yields exactly [0], so the
+    single-GPU case is byte-for-byte what it was before placement existed.
+    """
+    devs: set[int] = set()
+    for t in tenants:
+        if t.round.transport == "triton":
+            devs.add(triton_device_of(t))
+        else:
+            devs.update(t.devices)
+    return sorted(devs)
 
 
 # ─────────────────────────── VRAM pre-flight ───────────────────────────────
@@ -461,8 +489,8 @@ def achieved_rps(records: list[dict[str, Any]]) -> float | None:
 
 
 def union_window(traces: dict[str, list[dict[str, Any]]]) -> tuple[float, float] | None:
-    """The [min start, max end] across all tenant traces — the span the single
-    GPU sampler must cover so every request has GPU context."""
+    """The [min start, max end] across all tenant traces — the span every GPU
+    sampler must cover so each request has GPU context on its own card."""
     starts, ends = [], []
     for recs in traces.values():
         starts += [r["t_start_ms"] for r in recs if r.get("t_start_ms") is not None]
@@ -470,6 +498,114 @@ def union_window(traces: dict[str, list[dict[str, Any]]]) -> tuple[float, float]
     if not starts or not ends:
         return None
     return min(starts), max(ends)
+
+
+# ─────────────────────────── run environment ───────────────────────────────
+#
+# Two facts about the box were previously taken on faith from the yaml and never
+# checked while a run was happening. Both change how the numbers must be read,
+# so a result has to carry its own evidence rather than point at a config file.
+# Every capture here is best-effort by construction: a missing nvidia-smi
+# records "we could not tell", it never aborts a window.
+
+# NVLink shows up in `nvidia-smi topo -m` as NV<n> in the peer matrix; PCIe
+# shows as PIX/PXB/PHB/NODE/SYS. Nothing else in that output looks like NV\d+.
+_NVLINK_CELL = re.compile(r"\bNV\d+\b")
+
+
+def _run_text(cmd: list[str], *, timeout: float = 10.0) -> tuple[str | None, str | None]:
+    """(stdout, error) for a short probe command. Never raises: a missing binary
+    or a non-zero exit is a *finding* to record, not a reason to lose the run."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return None, f"{cmd[0]} not found"
+    except Exception as e:                       # timeout, permissions, OSError…
+        return None, f"{cmd[0]} failed: {e}"
+    if r.returncode != 0:
+        return None, f"{cmd[0]} exited {r.returncode}: {(r.stderr or '').strip()[:200]}"
+    return r.stdout, None
+
+
+def capture_interconnect() -> dict[str, Any]:
+    """`nvidia-smi topo -m`, verbatim, plus whether any NVLink appears in it.
+
+    A tensor-parallel or two-card result is dominated by whatever fabric the
+    cards actually talk over, and `nvlink: false` in the GPU yaml is a claim
+    nobody has confirmed on this hardware. Storing the raw matrix means a later
+    reader can re-derive the answer even if our parse of it was too crude.
+    """
+    out, err = _run_text(["nvidia-smi", "topo", "-m"])
+    if out is None:
+        return {"available": False, "error": err, "topo_matrix": None, "nvlink_detected": None}
+    return {
+        "available": True,
+        "error": None,
+        "topo_matrix": out,
+        "nvlink_detected": bool(_NVLINK_CELL.search(out)),
+    }
+
+
+def capture_mps() -> dict[str, Any]:
+    """Evidence that an MPS control daemon exists on this host — nothing more.
+
+    Deliberately NOT "is device N covered by MPS": which devices a daemon serves
+    is not reliably introspectable (it depends on how the daemon was started and
+    on CUDA_VISIBLE_DEVICES at that moment), and a confident wrong answer here
+    would be worse than none. So we record what we saw — the control process,
+    the pipe directory — and let the warning below do the interpreting.
+    """
+    pipe_dir = os.environ.get("CUDA_MPS_PIPE_DIRECTORY")
+    out, err = _run_text(["pgrep", "-f", "nvidia-cuda-mps-control"], timeout=5.0)
+    if out is None:
+        # pgrep exits 1 when nothing matched, which _run_text reports as an
+        # error; that is a real "no daemon", not an inconclusive probe.
+        daemon = False if err and "exited 1" in err else None
+        probe_error = None if daemon is False else err
+    else:
+        daemon = bool(out.strip())
+        probe_error = None
+    return {
+        "control_daemon_running": daemon,       # True | False | None (could not tell)
+        "pipe_directory": pipe_dir,
+        "probe_error": probe_error,
+        "detected": bool(daemon) or bool(pipe_dir),
+    }
+
+
+def capture_environment() -> dict[str, Any]:
+    """Both run-time facts, captured once per window before the drivers start."""
+    return {"interconnect": capture_interconnect(), "mps": capture_mps()}
+
+
+def environment_warnings(coloc: Colocation, environment: dict[str, Any] | None) -> list[str]:
+    """Conditions that make the window's numbers un-interpretable, in plain text.
+
+    The one that matters: with more than one tenant and no MPS, the tenants do
+    not share the SMs — they time-slice the card, and the measurement stops being
+    about contention at all. Phase 0 measured 0.28x aggregate throughput with MPS
+    off, so a window run this way is not a milder version of the result, it is a
+    different experiment. Warn on the result rather than refuse the run: a
+    deliberate `isolation: none` window is exactly how that number was obtained.
+    """
+    warnings: list[str] = []
+    if not environment:
+        return warnings
+    mps = environment.get("mps") or {}
+    if len(coloc.tenants) > 1 and not mps.get("detected"):
+        warnings.append(
+            "no MPS control daemon detected while running "
+            f"{len(coloc.tenants)} tenants (isolation={coloc.isolation!r}) — without MPS the "
+            "tenants time-slice the GPU instead of sharing it, and the degradation ratios "
+            "describe the scheduler, not contention (Phase 0: 0.28x aggregate throughput)."
+        )
+    interconnect = environment.get("interconnect") or {}
+    if not interconnect.get("available") and len(occupied_devices(coloc.tenants)) > 1:
+        warnings.append(
+            "interconnect topology unknown (" + str(interconnect.get("error")) + ") — "
+            "multi-GPU results cannot be attributed to NVLink vs PCIe."
+        )
+    return warnings
 
 
 # ─────────────────────────── manifest / result layout ──────────────────────
@@ -523,16 +659,27 @@ class RunPaths:
 
 def build_manifest(
     coloc: Colocation, *, t0_epoch_ms: float, gpu: str,
-    sampler_summary: dict[str, Any] | None = None,
+    sampler_summaries: dict[Any, dict[str, Any]] | None = None,
     throttle_reasons: list[str] | None = None,
     achieved: dict[str, float | None] | None = None,
+    environment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The self-describing record for one colocation window.
 
-    Carries the tenant set, load specs, isolation mode, the shared t0, and the
-    whole-GPU sampler numbers — which attach to the *colocation*, not to any
-    single tenant row (§4.3). `co_tenants` is sorted so the contention matrix in
-    summary.py §10 is a groupby, not bespoke bookkeeping.
+    Carries the tenant set, load specs, isolation mode, the shared t0, the cards
+    the window occupied, and the per-card sampler numbers — which attach to the
+    *colocation*, not to any single tenant row (§4.3). `co_tenants` is sorted so
+    the contention matrix in summary.py §10 is a groupby, not bespoke
+    bookkeeping.
+
+    `gpu_sampler` is keyed by device index as a STRING ("0", "1"): JSON object
+    keys are strings, and round-tripping a manifest must not turn the key into
+    something a reader has to special-case. `devices` states the same set
+    directly so nothing has to re-derive placement from the tenant rows.
+
+    `environment` is the run-time capture (capture_environment) — kept as a
+    parameter rather than taken here so this stays pure and unit-testable
+    without a GPU.
     """
     tenant_models = sorted(t.round.model_id for t in coloc.tenants)
     tenants_out = []
@@ -554,8 +701,12 @@ def build_manifest(
         "duration_s": coloc.duration_s,
         "n_tenants": len(coloc.tenants),
         "t0_epoch_ms": t0_epoch_ms,
+        "devices": occupied_devices(coloc.tenants),
         "tenants": tenants_out,
-        "gpu_sampler": sampler_summary or {},
+        "gpu_sampler": {str(dev): summ for dev, summ in sorted(
+            (sampler_summaries or {}).items(), key=lambda kv: int(kv[0]))},
+        "environment": environment or {},
+        "warnings": environment_warnings(coloc, environment),
         "throttle_reasons": sorted(throttle_reasons or []),
     }
 
@@ -630,7 +781,12 @@ class ColocationOrchestrator:
 
     HTTP tenants (vLLM / SGLang / TRT-LLM) are launched as subprocesses;
     Triton CV tenants are launched as a Docker container (step 7). Both paths
-    share a single wall-clock anchor (t0) and a single GPU sampler (§4.3).
+    share a single wall-clock anchor (t0) and one GPU sampler per occupied card
+    (§4.3).
+
+    `gpu_index` is only the fallback for a colocation with no tenants to read a
+    placement from; the sampler set comes from the tenants themselves, because
+    a hard-coded index is exactly how GPU 1's telemetry went missing.
     """
 
     def __init__(self, gpu: str, *, gpu_index: int = 0, sampler_interval_ms: int = 50,
@@ -647,6 +803,11 @@ class ColocationOrchestrator:
             raise RuntimeError("VRAM pre-flight failed: " + "; ".join(issues))
 
         paths.root.mkdir(parents=True, exist_ok=True)
+
+        # Captured before anything is launched, so the manifest records the box
+        # as it was when the window ran rather than what the yaml claims about
+        # it. Both probes are soft — see capture_environment.
+        environment = capture_environment()
 
         # Pre-pass: write all CV model configs before launching the container so
         # Triton starts with a complete repo (avoids mid-startup model additions).
@@ -667,9 +828,20 @@ class ColocationOrchestrator:
             # §4.4 — one shared wall-clock anchor for every tenant.
             t0_epoch_ms = time.time() * 1000.0
 
-            # §4.3 — exactly one sampler for the whole window.
+            # §4.3 — one sampler per card this colocation occupies. ExitStack so
+            # every card's window is the SAME window: all samplers are live
+            # before the first driver starts and none stops until the last one
+            # finishes, which hand-nesting cannot guarantee for an N decided at
+            # run time.
+            devices = occupied_devices(coloc.tenants) or [self.gpu_index]
             traces: dict[str, list[dict[str, Any]]] = {}
-            with GpuSampler(gpu_index=self.gpu_index, interval_ms=self.sampler_interval_ms) as gs:
+            with contextlib.ExitStack() as stack:
+                samplers = {
+                    dev: stack.enter_context(
+                        GpuSampler(gpu_index=dev, interval_ms=self.sampler_interval_ms)
+                    )
+                    for dev in devices
+                }
                 procs = self._launch_drivers(coloc, paths)
                 for name, p in procs.items():
                     p.wait()
@@ -680,7 +852,7 @@ class ColocationOrchestrator:
                         )
                     else:
                         traces[t.name] = parse_aiperf_records(paths.tenant_artifact_dir(t.name))
-            sampler_summary = gs.summary
+            sampler_summaries = {dev: gs.summary for dev, gs in samplers.items()}
 
             achieved = {t.name: achieved_rps(traces.get(t.name, [])) for t in coloc.tenants}
             for t in coloc.tenants:
@@ -688,7 +860,8 @@ class ColocationOrchestrator:
 
             manifest = build_manifest(
                 coloc, t0_epoch_ms=t0_epoch_ms, gpu=self.gpu,
-                sampler_summary=sampler_summary, achieved=achieved,
+                sampler_summaries=sampler_summaries, achieved=achieved,
+                environment=environment,
             )
             paths.manifest.write_text(json.dumps(manifest, indent=2))
             return manifest

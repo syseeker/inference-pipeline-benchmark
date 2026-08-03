@@ -86,7 +86,9 @@ def _write_manifest(run_dir, coloc_id, is_solo, tenants, achieved=None):
             }
             for t in tenants
         ],
-        "gpu_sampler": {"gpu_util_pct_p50": 72.0, "power_avg_w": 280.0, "fb_used_peak_gb": 38.0},
+        "devices": [0],
+        "gpu_sampler": {"0": {"gpu_util_pct_p50": 72.0, "power_avg_w": 280.0,
+                              "fb_used_peak_gb": 38.0}},
         "throttle_reasons": [],
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -265,7 +267,8 @@ def test_envelope_no_crossing_when_ok(tmp_path):
 
 # ── align_traces.py ──────────────────────────────────────────────────────────
 
-def _write_align_manifest(run_dir, t0, duration_s, tenants, achieved):
+def _write_align_manifest(run_dir, t0, duration_s, tenants, achieved,
+                          devices=(0,), gpu_sampler=None, environment=None, warnings=()):
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "colocation_id": "mix-llm-cv",
@@ -285,8 +288,13 @@ def _write_align_manifest(run_dir, t0, duration_s, tenants, achieved):
              "workload": None, "gpu_memory_utilization": 0.45, "triton_backend": None}
             for t in tenants
         ],
-        "gpu_sampler": {"gpu_util_pct_p50": 72.0, "power_avg_w": 280.0,
-                        "fb_used_peak_gb": 38.0, "mem_bw_util_pct_p50": None},
+        "devices": list(devices),
+        "gpu_sampler": gpu_sampler if gpu_sampler is not None else {
+            "0": {"gpu_util_pct_p50": 72.0, "power_avg_w": 280.0,
+                  "fb_used_peak_gb": 38.0, "mem_bw_util_pct_p50": None},
+        },
+        "environment": environment or {},
+        "warnings": list(warnings),
         "throttle_reasons": [],
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -359,6 +367,60 @@ def test_align_traces_missing_manifest_raises(tmp_path):
     import pytest
     with pytest.raises(FileNotFoundError):
         at.analyse(tmp_path)
+
+
+def _one_tenant_run(tmp_path, t0, **manifest_kw):
+    llm_t = {"name": "llm", "backend": "vllm", "model_id": "qwen2.5-7b", "offered_rps": 4.0}
+    _write_align_manifest(tmp_path, t0, 120, [llm_t], {"llm": 3.99}, **manifest_kw)
+    (tmp_path / "llm.ndjson").write_text("\n".join(json.dumps(
+        {"t_start_ms": t0 + i * 250, "t_end_ms": t0 + i * 250 + 50,
+         "e2e_ms": 50.0, "ttft_ms": 12.0, "ok": True}) for i in range(10)))
+
+
+def test_align_traces_reports_each_card_separately(tmp_path):
+    # A placement run's whole point is that the two cards differ; one averaged
+    # GPU line would erase exactly the asymmetry the run exists to show.
+    t0 = 1_700_000_000_000.0
+    _one_tenant_run(tmp_path, t0, devices=(0, 1), gpu_sampler={
+        "0": {"gpu_util_pct_p50": 91.0, "power_avg_w": 410.0, "fb_used_peak_gb": 60.0},
+        "1": {"gpu_util_pct_p50": 12.0, "power_avg_w": 90.0, "fb_used_peak_gb": 4.0},
+    })
+    result = at.analyse(tmp_path)
+    assert "GPU 0: util p50 91%" in result
+    assert "GPU 1: util p50 12%" in result
+
+
+def test_align_traces_json_carries_per_device_sampler(tmp_path):
+    t0 = 1_700_000_000_000.0
+    _one_tenant_run(tmp_path, t0, devices=(0, 1), gpu_sampler={
+        "0": {"gpu_util_pct_p50": 91.0}, "1": {"gpu_util_pct_p50": 12.0},
+    })
+    obj = json.loads(at.analyse(tmp_path, json_out=True))
+    assert obj["devices"] == [0, 1]
+    assert obj["gpu_sampler"]["1"]["gpu_util_pct_p50"] == 12.0
+
+
+def test_align_traces_surfaces_environment_and_warning(tmp_path):
+    t0 = 1_700_000_000_000.0
+    _one_tenant_run(
+        tmp_path, t0,
+        environment={"interconnect": {"available": True, "nvlink_detected": False},
+                     "mps": {"control_daemon_running": False, "pipe_directory": None,
+                             "detected": False}},
+        warnings=["no MPS control daemon detected while running 2 tenants"],
+    )
+    result = at.analyse(tmp_path)
+    assert "NVLink absent" in result
+    assert "MPS control daemon: not running" in result
+    assert "WARNING: no MPS control daemon" in result
+    obj = json.loads(at.analyse(tmp_path, json_out=True))
+    assert obj["warnings"] and obj["environment"]["interconnect"]["nvlink_detected"] is False
+
+
+def test_align_traces_handles_missing_sampler_data(tmp_path):
+    t0 = 1_700_000_000_000.0
+    _one_tenant_run(tmp_path, t0, gpu_sampler={})
+    assert "no sampler data" in at.analyse(tmp_path)
 
 
 def test_align_traces_pct_helper():

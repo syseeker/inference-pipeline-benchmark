@@ -4,13 +4,15 @@
 Reads one coloc run directory:
 
     benchmarks/results/<gpu>/coloc/<colocation>/<run_label>/
-      manifest.json         # t0_epoch_ms, tenant specs, gpu_sampler aggregate
+      manifest.json         # t0_epoch_ms, tenant specs, per-card gpu_sampler
       <tenant>.ndjson       # per-request rows (LLM/VLM) or aggregate (CV)
       gpu.ndjson            # optional per-row sampler (may not exist)
 
 Verifies that tenants were genuinely concurrent (overlap window > 0), reports
 per-tenant latency and throughput within the window, and summarises GPU load
-from the manifest's gpu_sampler aggregate.
+per card from the manifest's `gpu_sampler` map — a two-card window has two
+entries, and collapsing them into one average would hide the very asymmetry a
+placement run exists to show.
 
 Usage:
     python scripts/align_traces.py <run_dir>
@@ -149,6 +151,37 @@ def _ms_to_epoch(ms: float) -> str:
     return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
 
 
+def _environment_lines(manifest: dict[str, Any]) -> list[str]:
+    """The run-time facts the window recorded about the box, plus any warning.
+
+    A warning here (typically "no MPS with N tenants") means the latency numbers
+    above describe time-slicing rather than contention, so it is printed next to
+    them rather than buried in the manifest.
+    """
+    env = manifest.get("environment") or {}
+    warnings = manifest.get("warnings") or []
+    if not env and not warnings:
+        return []
+    lines = ["Environment"]
+    inter = env.get("interconnect") or {}
+    if inter.get("available"):
+        lines.append(f"  interconnect: NVLink {'present' if inter.get('nvlink_detected') else 'absent'} "
+                     "(nvidia-smi topo -m)")
+    elif inter:
+        lines.append(f"  interconnect: unknown ({inter.get('error')})")
+    mps = env.get("mps") or {}
+    if mps:
+        daemon = mps.get("control_daemon_running")
+        state = {True: "running", False: "not running", None: "unknown"}[daemon]
+        pipe = mps.get("pipe_directory")
+        lines.append(f"  MPS control daemon: {state}"
+                     + (f" | CUDA_MPS_PIPE_DIRECTORY={pipe}" if pipe else ""))
+    for w in warnings:
+        lines.append(f"  WARNING: {w}")
+    lines.append("")
+    return lines
+
+
 def _summarise_text(run_dir: Path, manifest: dict[str, Any],
                     tenant_stats: dict[str, dict[str, Any]],
                     overlap: tuple[float, float] | None) -> str:
@@ -206,15 +239,25 @@ def _summarise_text(run_dir: Path, manifest: dict[str, Any],
             lines.append("  Overlap coverage: LOW (<80%) — partial co-residency; interpret with care")
     lines.append("")
 
-    lines.append("GPU (whole window, from manifest aggregate)")
+    devices = manifest.get("devices") or []
     lines.append(
-        f"  util p50 {_fmt(gpu_sm.get('gpu_util_pct_p50'), '%', 0)} | "
-        f"util peak {_fmt(gpu_sm.get('gpu_util_pct_peak'), '%', 0)} | "
-        f"mem-bw p50 {_fmt(gpu_sm.get('mem_bw_util_pct_p50'), '%', 0)} | "
-        f"power avg {_fmt(gpu_sm.get('power_avg_w'), ' W', 0)} | "
-        f"peak VRAM {_fmt(gpu_sm.get('fb_used_peak_gb'), ' GB')}"
+        "GPU (whole window, per card from manifest aggregate)"
+        + (f"  — occupied: {', '.join(str(d) for d in devices)}" if devices else "")
     )
+    if not gpu_sm:
+        lines.append("  no sampler data")
+    for dev in sorted(gpu_sm, key=lambda d: int(d)):
+        s = gpu_sm[dev]
+        lines.append(
+            f"  GPU {dev}: util p50 {_fmt(s.get('gpu_util_pct_p50'), '%', 0)} | "
+            f"util peak {_fmt(s.get('gpu_util_pct_peak'), '%', 0)} | "
+            f"mem-bw p50 {_fmt(s.get('mem_bw_util_pct_p50'), '%', 0)} | "
+            f"power avg {_fmt(s.get('power_avg_w'), ' W', 0)} | "
+            f"peak VRAM {_fmt(s.get('fb_used_peak_gb'), ' GB')}"
+        )
     lines.append("")
+
+    lines += _environment_lines(manifest)
 
     if throttle:
         lines.append(f"Throttle: {', '.join(throttle)}  ← clock integrity violation (§4.2)")
@@ -243,7 +286,12 @@ def _summarise_json(manifest: dict[str, Any],
              "end_rel_s": (overlap[1] - t0) / 1000.0}
             if overlap else None
         ),
+        # Passed through per card, keyed "0"/"1" exactly as the manifest holds
+        # it, so a consumer never has to know which card an aggregate came from.
+        "devices": manifest.get("devices") or [],
         "gpu_sampler": manifest.get("gpu_sampler") or {},
+        "environment": manifest.get("environment") or {},
+        "warnings": manifest.get("warnings") or [],
         "throttle_reasons": manifest.get("throttle_reasons") or [],
     }
     return json.dumps(out, indent=2)

@@ -85,7 +85,7 @@ bench summary --gpu rtx_pro6000                             # §10 = contention
 ```
 
 > **Built, not yet run on hardware.** 39 colocations covering all seven phases
-> of the study, under 222 unit tests — but nothing has executed on a GPU yet.
+> of the study, under 248 unit tests — but nothing has executed on a GPU yet.
 > Work through
 > [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
 > on first hardware contact. `QUICKSTART_MULTIMODEL_CONTENTION.md` follows once

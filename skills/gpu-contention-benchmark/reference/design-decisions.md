@@ -78,7 +78,7 @@ All of these require root.
 
 ---
 
-## 3. One GPU sampler per window, not one per tenant
+## 3. One GPU sampler per occupied card, not one per tenant
 
 The single-model runner creates a `GpuSampler` per round. With N co-resident
 tenants that would mean N `dcgmi dmon` subprocesses on one GPU, N different
@@ -91,6 +91,33 @@ The orchestrator owns exactly one sampler spanning the union of all tenant
 windows. Whole-GPU numbers attach to the **colocation**, not to individual tenant
 rows. Per-tenant VRAM, where needed, comes from
 `nvidia-smi --query-compute-apps`, not from the sampler.
+
+### Amendment (Phase 5, multi-GPU placement)
+
+The rule above was reasoned on one card, where "one per window" and "one per
+card" are the same sentence. They stop being the same once a `place-*`
+colocation puts tenants on GPU 0 **and** GPU 1: a single sampler pinned to
+device 0 left GPU 1's utilisation, power and VRAM out of the manifest entirely,
+so a placement latency number had no telemetry that could explain it.
+
+The general form of the same reasoning — DCGM is device-scoped — is:
+
+**One sampler per distinct card the colocation occupies.** The set is the union
+of every HTTP tenant's `devices` and every Triton tenant's resolved device
+(`coloc.occupied_devices`), and all of those samplers span the one shared
+window.
+
+What has **not** changed:
+
+- **One per tenant is still forbidden**, for the original reason. Two tenants on
+  one card share one sampler; they do not get one each, and neither of them may
+  claim that card's memory as its own.
+- A colocation that names no `device:` yields exactly `[0]` — one sampler on
+  device 0, identical to the pre-placement behaviour.
+- The numbers still attach to the colocation, not to a tenant row. They are now
+  keyed by card: `manifest["gpu_sampler"] == {"0": {...}, "1": {...}}`, with
+  `manifest["devices"]` stating the occupied set so a reader need not re-derive
+  placement from the tenants.
 
 ---
 

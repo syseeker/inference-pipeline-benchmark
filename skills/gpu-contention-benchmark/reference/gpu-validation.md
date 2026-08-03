@@ -153,6 +153,9 @@ All of this is asserted in unit tests as *strings*. No test has run Docker.
 | `perf_analyzer -u localhost:8110` | `coloc.triton_tenant_url` | Driver reaches the second container |
 | `CUDA_VISIBLE_DEVICES` pins vLLM tenants | `coloc.build_server_env` | `nvidia-smi` shows the process on the intended card |
 | The cap override actually reaches vLLM | `coloc._override_flag` | **Confirm the server logs the tenant's cap, not 0.90.** This was a live bug; the fix is unverified against a real vLLM |
+| One sampler per occupied card | `coloc.occupied_devices` | A `place-*` run must produce a `gpu_sampler` block with keys `"0"` AND `"1"`; a single-GPU run must have only `"0"` |
+| `nvidia-smi topo -m` capture | `coloc.capture_interconnect` | Manifest `environment.interconnect.nvlink_detected` should be `false` on this box — **this is the check that confronts the yaml's `nvlink: false`** |
+| MPS detection | `coloc.capture_mps` | With MPS running, `environment.mps.detected` must be `true`. If a multi-tenant run records the no-MPS warning, stop — Phase 0 measured 0.28× with MPS off |
 
 That last one matters most. The old code silently dropped the per-tenant cap
 so both tenants launched at 0.90 and the second OOMed — while the pre-flight
