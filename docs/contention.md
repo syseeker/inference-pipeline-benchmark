@@ -413,6 +413,35 @@ studies.**
   and asks how much a neighbour costs it. The baseline here is deliberately
   handicapped — see section 2b.
 
-Quote a contention number as though it were a single-model number and you will
-understate your hardware. Quote a single-model number as a contention baseline
-and every degradation ratio you compute will be inflated.
+### The mix-up, with numbers
+
+Take one 7B model. Here are three measurements of it — all real, all correct,
+all different (figures illustrative):
+
+| | Setup | p95 latency |
+|---|---|---|
+| **A** | the whole GPU to itself | 200 ms |
+| **B** | capped at its production share, no neighbour | 400 ms |
+| **C** | same cap, object detector running alongside | 500 ms |
+
+**A is the single-model study. B and C are the contention study** — B is the
+baseline, C is the measurement. The honest answer is **C ÷ B = 1.25×**: the
+neighbour costs you 25%.
+
+Now the two ways to get it wrong.
+
+**Mistake 1 — reporting C as your hardware's speed.** *"A 7B takes 500 ms on
+this card."* It doesn't. Alone it takes 200 ms. You have quoted a number
+measured under a deliberate memory handicap *and* under interference, and made
+the GPU look 2.5× slower than it is. Plan capacity on that and you buy
+hardware you don't need.
+
+**Mistake 2 — using A as the baseline instead of B.** Now the ratio is
+C ÷ A = 500 ÷ 200 = **2.5×**, so you report *"the neighbour costs 150%"* and
+conclude co-location is hopeless. But most of that gap — the 200 ms to 400 ms
+part — was the memory cap **you** set, not the neighbour. The neighbour only
+ever cost 25%. You would kill a deployment that was fine.
+
+B is the number that looks wrong and is right. It is the model running exactly
+as it will in production, with the card to itself — which is the only fair
+thing to compare C against.
