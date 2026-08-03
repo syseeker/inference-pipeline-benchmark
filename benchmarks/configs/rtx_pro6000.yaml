@@ -707,6 +707,11 @@ workloads:
 # Composition: `extends` inherits a base (tenants merge by name),
 # `rps_sweep` expands one tenant's rate, `vary` expands any tenant field.
 # Phases match workspace/contention/experiment_design.md.
+#
+# Placement: a tenant may set `device: 0` (one card) or `device: [0, 1]`
+# (tensor parallel across both). Omitted means GPU 0 — this box has one
+# card, so nothing below sets it. The VRAM sum is enforced per GPU, and a
+# tensor-parallel tenant charges its fraction to every card it occupies.
 colocations:
 
   # ── Phase 3 — model type mix ───────────────────────────────────────

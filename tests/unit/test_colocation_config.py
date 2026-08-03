@@ -29,6 +29,7 @@ from benchmarks.scenario_config import (  # noqa: E402
     LoadSpec,
     _merge_extends,
     _resolve_tenant,
+    _solo_key,
     iter_colocation,
     load_gpu_config,
 )
@@ -238,6 +239,79 @@ def test_output_tokens_come_from_the_workload(cfg):
               "workload": "llm_long"}, cfg["workloads"])
     assert short.load.output_tokens == 32
     assert long_.load.output_tokens == 512
+
+
+# --------------------------------------------------------------------------- #
+# Device placement
+# --------------------------------------------------------------------------- #
+
+
+def _llm(cfg, **extra):
+    return _resolve_tenant(
+        cfg, {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b", **extra},
+        cfg["workloads"],
+    )
+
+
+def test_device_defaults_to_gpu_zero(cfg):
+    """Every colocation in the shipped yaml omits `device`; they must keep
+    meaning "the one card"."""
+    t = _llm(cfg)
+    assert t.device is None
+    assert t.devices == [0]
+
+
+def test_single_int_device_places_one_tenant(cfg):
+    t = _llm(cfg, device=3)
+    assert t.device == 3
+    assert t.devices == [3]
+
+
+def test_list_device_is_tensor_parallel_across_all_of_them(cfg):
+    t = _llm(cfg, device=[2, 0])
+    assert t.devices == [0, 2], "normalised ascending"
+
+
+def test_device_out_of_range_names_the_tenant_and_the_range(cfg):
+    with pytest.raises(ValueError, match=r"'llm'.*out of range.*0\.\.7"):
+        _llm(cfg, device=8)
+
+
+def test_negative_device_is_rejected(cfg):
+    with pytest.raises(ValueError, match="out of range"):
+        _llm(cfg, device=-1)
+
+
+def test_duplicate_devices_are_rejected(cfg):
+    with pytest.raises(ValueError, match="duplicate"):
+        _llm(cfg, device=[0, 0])
+
+
+def test_empty_device_list_is_rejected(cfg):
+    with pytest.raises(ValueError, match="device list is empty"):
+        _llm(cfg, device=[])
+
+
+def test_non_integer_device_is_rejected(cfg):
+    with pytest.raises(ValueError, match="not an integer"):
+        _llm(cfg, device=["0"])
+
+
+def test_device_lands_in_the_run_manifest(cfg):
+    d = _llm(cfg, device=[0, 1]).to_dict()
+    assert d["device"] == [0, 1]
+    assert d["devices"] == [0, 1]
+
+
+def test_solo_baselines_are_not_shared_across_devices(cfg):
+    """Same model, same load, different card ⇒ different baseline."""
+    a, b = _llm(cfg, device=0), _llm(cfg, device=1)
+    assert _solo_key(a) != _solo_key(b)
+    assert _solo_key(_llm(cfg)) == _solo_key(a), "unspecified is GPU 0"
+
+
+def test_solo_baselines_are_not_shared_across_tp_widths(cfg):
+    assert _solo_key(_llm(cfg, device=[0, 1])) != _solo_key(_llm(cfg, device=0))
 
 
 # --------------------------------------------------------------------------- #

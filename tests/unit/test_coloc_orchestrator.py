@@ -40,11 +40,11 @@ def _round(backend="vllm", model="qwen2.5-7b", port=8001, transport="http", trtl
 
 def _tenant(name="llm", backend="vllm", model="qwen2.5-7b", port=8001, rps=4.0,
             pattern="poisson", driver="aiperf", frac=0.45, workload="llm_short",
-            transport="http", output_tokens=None):
+            transport="http", output_tokens=None, device=None):
     return Tenant(
         name=name, round=_round(backend, model, port, transport),
         driver=driver, load=LoadSpec(pattern=pattern, rps=rps, output_tokens=output_tokens),
-        workload=workload, gpu_memory_utilization=frac,
+        workload=workload, gpu_memory_utilization=frac, device=device,
     )
 
 
@@ -72,6 +72,61 @@ def test_preflight_ignores_triton_fraction():
     llm = _tenant("llm", frac=0.9)
     cv = _tenant("cv", backend="triton", transport="triton", driver="perf_analyzer", frac=None)
     assert coloc.preflight_vram([llm, cv]) == []
+
+
+# ── VRAM pre-flight, per GPU ────────────────────────────────────────────────
+
+def test_preflight_sums_per_gpu_not_per_colocation():
+    """Two 0.9 tenants on DIFFERENT cards fit; the old whole-colocation sum
+    would have rejected a perfectly valid multi-GPU window."""
+    tenants = [_tenant("a", port=8001, frac=0.9, device=0),
+               _tenant("b", port=8002, frac=0.9, device=1)]
+    assert coloc.preflight_vram(tenants) == []
+
+
+def test_preflight_flags_oversubscription_on_the_same_gpu():
+    tenants = [_tenant("a", port=8001, frac=0.9, device=1),
+               _tenant("b", port=8002, frac=0.9, device=1)]
+    issues = coloc.preflight_vram(tenants)
+    assert any("GPU 1:" in i and "1.80" in i for i in issues)
+    assert not any("GPU 0:" in i for i in issues)
+
+
+def test_preflight_charges_tensor_parallel_tenant_to_every_gpu():
+    """gpu_memory_utilization is a fraction of EACH card, so a TP tenant on
+    [0, 1] leaves only 0.4 on both — not 0.7 on one."""
+    tp = _tenant("tp", port=8001, frac=0.6, device=[0, 1])
+    tenants = [tp, _tenant("a", port=8002, frac=0.5, device=0),
+               _tenant("b", port=8003, frac=0.5, device=1)]
+    issues = coloc.preflight_vram(tenants)
+    assert any("GPU 0:" in i and "1.10" in i for i in issues)
+    assert any("GPU 1:" in i and "1.10" in i for i in issues)
+
+
+def test_preflight_still_names_uncapped_tenants_per_gpu():
+    """The uncapped warning is about the tenant, not the card, and survives
+    the regrouping."""
+    tenants = [_tenant("a", port=8001, frac=None, device=2),
+               _tenant("b", port=8002, frac=0.45, device=3)]
+    issues = coloc.preflight_vram(tenants)
+    assert any("no gpu_memory_utilization" in i and "'a'" in i for i in issues)
+    assert not any("GPU 2:" in i for i in issues), "0.90 alone still fits"
+
+
+# ── device placement / CUDA_VISIBLE_DEVICES ─────────────────────────────────
+
+def test_server_env_pins_a_single_device():
+    assert coloc.build_server_env(_tenant(device=3)) == {"CUDA_VISIBLE_DEVICES": "3"}
+
+
+def test_server_env_lists_every_tensor_parallel_device():
+    env = coloc.build_server_env(_tenant(device=[2, 0]))
+    assert env["CUDA_VISIBLE_DEVICES"] == "0,2", "ascending, so local 0..N-1 map predictably"
+
+
+def test_server_env_defaults_to_gpu_zero():
+    # Every colocation written before placement existed means GPU 0.
+    assert coloc.build_server_env(_tenant(device=None)) == {"CUDA_VISIBLE_DEVICES": "0"}
 
 
 # ── server command builder ──────────────────────────────────────────────────
@@ -313,6 +368,17 @@ def test_solo_cache_dedupes_identical_baselines():
     # Same backend/model/workload/load ⇒ already seen.
     s2 = _coloc(is_solo=True)
     assert cache.seen(s2) == "run-1"
+
+
+def test_solo_key_separates_tenants_on_different_devices():
+    """A GPU-0 baseline is not a baseline for a tenant pinned to GPU 1."""
+    assert coloc._solo_key(_tenant(device=0)) != coloc._solo_key(_tenant(device=1))
+    assert coloc._solo_key(_tenant(device=None)) == coloc._solo_key(_tenant(device=0))
+
+
+def test_solo_key_separates_tensor_parallel_widths():
+    """TP-2 is a different deployment from TP-1, not the same run on a card."""
+    assert coloc._solo_key(_tenant(device=[0, 1])) != coloc._solo_key(_tenant(device=0))
 
 
 def test_solo_cache_ignores_non_solo():

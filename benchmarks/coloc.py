@@ -35,6 +35,7 @@ this module builds their driver command but does not yet launch the Triton repo.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -68,9 +69,15 @@ def preflight_vram(tenants: list[Tenant]) -> list[str]:
     `gpu_memory_utilization`, plus headroom for the CV tenants' footprint, must
     stay ≤ 1.0. An uncapped vLLM tenant is treated as claiming 0.90, because
     that is what it will actually take.
+
+    The sum is per GPU, not per colocation: two tenants at 0.9 on different
+    cards fit fine, and rejecting them would forbid the multi-GPU windows the
+    schema now allows. A tensor-parallel tenant charges its fraction in FULL to
+    every card it occupies — `gpu_memory_utilization` is a fraction of each
+    card, not of the aggregate pool.
     """
     issues: list[str] = []
-    total = 0.0
+    per_gpu: dict[int, float] = {}
     uncapped: list[str] = []
     for t in tenants:
         if t.round.transport == "triton":
@@ -82,17 +89,19 @@ def preflight_vram(tenants: list[Tenant]) -> list[str]:
         if frac is None:
             uncapped.append(t.name)
             frac = VLLM_DEFAULT_GPU_FRACTION
-        total += frac
+        for dev in t.devices:
+            per_gpu[dev] = per_gpu.get(dev, 0.0) + frac
     if uncapped:
         issues.append(
             f"tenants {uncapped} have no gpu_memory_utilization — each will claim "
             f"vLLM's default {VLLM_DEFAULT_GPU_FRACTION}, starving co-tenants. Set an explicit cap."
         )
-    if total > 1.0:
-        issues.append(
-            f"sum of tenant GPU fractions is {total:.2f} > 1.0 — they will not co-reside. "
-            "Lower the caps or move a tenant to another GPU."
-        )
+    for dev in sorted(per_gpu):
+        if per_gpu[dev] > 1.0:
+            issues.append(
+                f"GPU {dev}: sum of tenant GPU fractions is {per_gpu[dev]:.2f} > 1.0 — "
+                "they will not co-reside. Lower the caps or move a tenant to another GPU."
+            )
     return issues
 
 
@@ -150,6 +159,20 @@ def build_server_cmd(
             "--port", str(r.port), *r.launch_args,
         ]
     raise ValueError(f"tenant {tenant.name!r}: no server launcher for backend {r.backend!r}")
+
+
+def build_server_env(tenant: Tenant) -> dict[str, str]:
+    """Environment overlay that pins a tenant to its GPU(s).
+
+    Separate from build_server_cmd because placement is not a command-line
+    concern for any of the three backends — they all read CUDA_VISIBLE_DEVICES —
+    and because that builder's `list[str]` return is what the tests and the
+    orchestrator already consume. Caller merges this over os.environ.
+
+    A tensor-parallel tenant gets every index it occupies, in ascending order,
+    so the backend's local device 0..N-1 map onto exactly those cards.
+    """
+    return {"CUDA_VISIBLE_DEVICES": ",".join(str(d) for d in tenant.devices)}
 
 
 def build_aiperf_cmd(
@@ -481,9 +504,12 @@ def build_manifest(
 def _solo_key(tenant: Tenant) -> tuple:
     """Same identity scenario_config uses: a baseline is valid only at the SAME
     offered load, so load is part of the key. Lets a session skip re-running the
-    ~40 duplicate baselines across a full study."""
+    ~40 duplicate baselines across a full study. Placement is part of it too —
+    a GPU-0 baseline does not describe a tenant pinned elsewhere, nor a TP-2
+    one."""
     t = tenant
-    return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+    return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
+            tuple(t.devices))
 
 
 class SoloBaselineCache:
@@ -648,7 +674,11 @@ class ColocationOrchestrator:
                                 container_name=container)
         if self._port_serving(tenant):
             return ServerHandle(tenant=tenant, proc=None, reused=True)
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        # Overlay, not replace: the backend still needs HF_HOME, CUDA paths and
+        # the rest of the caller's environment.
+        env = {**os.environ, **build_server_env(tenant)}
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                                env=env)
         return ServerHandle(tenant=tenant, proc=proc, reused=False)
 
     def _triton_ready(self, port: int) -> bool:

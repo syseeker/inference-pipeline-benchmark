@@ -289,6 +289,57 @@ class LoadSpec:
         return asdict(self)
 
 
+# Widest single-node box we plan for. An index outside this range is a yaml
+# typo, and a typo that silently placed a tenant on a non-existent GPU would
+# only surface as a CUDA error minutes into a run.
+MAX_GPUS = 8
+
+
+def _normalise_devices(device: Any, *, tenant_name: str) -> list[int]:
+    """Validated, sorted list of GPU indices a tenant occupies.
+
+    `None` means "unspecified" and resolves to GPU 0 — every colocation written
+    before device placement existed assumed a single card, and those configs
+    must keep running unchanged. A list means tensor parallel: the tenant sits
+    on ALL of those cards at once, which is why the VRAM pre-flight charges its
+    fraction to each of them.
+    """
+    if device is None:
+        return [0]
+    # bool is an int subclass; `device: true` is a typo, not GPU 1.
+    raw = [device] if isinstance(device, int) and not isinstance(device, bool) else device
+    if isinstance(raw, (list, tuple)):
+        raw = list(raw)
+    else:
+        raise ValueError(
+            f"tenant {tenant_name!r}: device must be an int or a list of ints, "
+            f"got {device!r}"
+        )
+    if not raw:
+        raise ValueError(
+            f"tenant {tenant_name!r}: device list is empty — omit `device` to default to GPU 0."
+        )
+    out: list[int] = []
+    for v in raw:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                f"tenant {tenant_name!r}: device index {v!r} is not an integer "
+                f"(valid GPU indices are 0..{MAX_GPUS - 1})."
+            )
+        if not 0 <= v < MAX_GPUS:
+            raise ValueError(
+                f"tenant {tenant_name!r}: device index {v} is out of range — "
+                f"valid GPU indices are 0..{MAX_GPUS - 1}."
+            )
+        out.append(v)
+    if len(set(out)) != len(out):
+        raise ValueError(
+            f"tenant {tenant_name!r}: device list {raw} has duplicate indices — "
+            "a tensor-parallel tenant occupies each GPU once."
+        )
+    return sorted(out)
+
+
 @dataclass
 class Tenant:
     """One model in a colocation, plus how it is loaded."""
@@ -300,11 +351,23 @@ class Tenant:
     workload: str | None = None        # key into the yaml `workloads:` block
     gpu_memory_utilization: float | None = None
     triton_backend: str | None = None  # tensorrt | onnx | python
+    # int → one card; list → tensor parallel across those cards; None → GPU 0,
+    # which is what every pre-existing colocation means by saying nothing.
+    device: int | list[int] | None = None
+
+    @property
+    def devices(self) -> list[int]:
+        """Every GPU index this tenant occupies, ascending. A tensor-parallel
+        tenant occupies all of them — placement is not a single number."""
+        return _normalise_devices(self.device, tenant_name=self.name)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["round"] = self.round.to_dict()
         d["load"] = self.load.to_dict()
+        # Both forms: `device` as written in the yaml, `devices` normalised, so
+        # a manifest can be grouped per GPU without re-deriving the default.
+        d["devices"] = self.devices
         return d
 
 
@@ -408,6 +471,14 @@ def _resolve_tenant(cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[
             "dynamic_grpc endpoint type). Use driver: perf_analyzer."
         )
 
+    # Validate placement here, at parse time, so a bad index fails the plan
+    # rather than the run. Store the normalised (sorted) form.
+    device = _normalise_devices(tspec.get("device"), tenant_name=str(tspec["name"]))
+    if tspec.get("device") is None:
+        device = None                  # keep "unspecified" distinguishable in the manifest
+    elif len(device) == 1 and isinstance(tspec["device"], int):
+        device = device[0]
+
     return Tenant(
         name=str(tspec["name"]),
         round=r,
@@ -419,6 +490,7 @@ def _resolve_tenant(cfg: dict[str, Any], tspec: dict[str, Any], workloads: dict[
             if tspec.get("gpu_memory_utilization") is not None else None
         ),
         triton_backend=tspec.get("triton_backend"),
+        device=device,
     )
 
 
@@ -426,8 +498,13 @@ def _solo_key(t: Tenant) -> tuple:
     """Identity of a solo baseline. A baseline is only valid for a
     contention run at the SAME offered load, so load is part of the key —
     but two contention runs sharing a tenant config share one baseline,
-    which is why we dedupe rather than re-running it per colocation."""
-    return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+    which is why we dedupe rather than re-running it per colocation.
+
+    Placement is part of the identity too: a baseline taken on GPU 0 does not
+    describe a tenant pinned to GPU 3 (different card, possibly different
+    clocks), and a TP-2 tenant is a different deployment from a TP-1 one."""
+    return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
+            tuple(t.devices))
 
 
 def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
