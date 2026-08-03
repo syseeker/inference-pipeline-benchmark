@@ -94,6 +94,13 @@ Hybrid, and deliberately so — see [reference/serving-topology.md](reference/se
 Phases follow the customer's own structure in
 `workspace/contention/experiment_design.md`.
 
+> **First session on real hardware?** The harness was built and unit-tested
+> without a GPU. Work through
+> [docs/contention-gpu-validation.md](../../docs/contention-gpu-validation.md)
+> before trusting any number it produces — it lists every assumption made
+> without hardware, ordered by how much work each one invalidates if wrong.
+> The weight estimates that set every VRAM cap are top of that list.
+
 ```bash
 # Phase 0 — GATE. Do this first and stop if it fails.
 python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json

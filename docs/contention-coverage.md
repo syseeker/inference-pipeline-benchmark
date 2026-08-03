@@ -141,11 +141,40 @@ epoch timestamps exist: the causal claim is that the LLM's ITL spike lands
 
 ---
 
-## Phase 5 — GPU scaling (2 and 4 GPUs)
+## Phase 5 — GPU scaling (2 GPUs)
 
-⬜ **Not yet built.** Tenant device placement landed on 2026-08-03 (`device:`
-accepts a single GPU index or a list for tensor-parallel, up to 8 GPUs), which
-was the prerequisite.
+✅ **Built 2026-08-03** — five colocations, listed below.
+
+⚠️ **Scoped to 2 GPUs. The customer's 4-GPU arm is dropped by decision**, not
+by any technical limitation — `device:` supports up to 8 GPUs, so restoring it
+is a config change rather than a code change. This halves the phase's run
+count.
+
+| Entry | Placement | Question |
+|---|---|---|
+| `place-p1` | GPU0[LLM+VLM] GPU1[ILM+CV] | Predicted best — does separating the two compute-heavy tenants win? |
+| `place-p2` | GPU0[LLM+ILM] GPU1[VLM+CV] | Predicted worst — VLM burst landing on the 5 ms detector |
+| `place-p3` | GPU0[LLM+CV] GPU1[VLM+ILM] | Predicted middle — two compute-heavy tenants together |
+| `place-isolated` | `mix-llm-cv`, one tenant per card | What a second GPU actually buys — **and the hardware null test** |
+| `place-vlm-prefill-split` | `cross-vlm-prefill-vs-llm` split | Does the LLM's ITL spike vanish when the burst is on another card? |
+
+**The measurement rule that makes the three pairings comparable.** They are
+compared against each other, so placement must be the only variable — but the
+pairings are not naturally memory-equivalent. P1 puts both vLLM tenants on one
+card while the two Triton tenants take almost no fraction; P2 and P3 give each
+vLLM tenant a card to itself. Derived per-GPU, P1's tenants would get roughly
+half the KV cache of P2's and P3's, and **P1 would look bad for a reason that
+has nothing to do with its neighbours** — §2b's artifact, wearing a different
+hat.
+
+So all three carry an identical `kv_budget_gb: 20.0`, sized for P1 as the
+tightest case, and it is the same budget `mix-full` uses — which makes the
+1-GPU → 2-GPU comparison valid as well. Verified: every vLLM tenant resolves
+to the same cap (llm 0.39, vlm 0.30) in all three pairings and in `mix-full`.
+
+**No tensor-parallel entries.** See the interconnect note below; TP results
+would likely be dominated by PCIe rather than by contention, so they are
+deferred rather than collected and misread.
 
 The customer's framing — *"does adding GPUs eliminate contention or just
 redistribute it?"* — resolves into three genuinely different placements that
@@ -235,12 +264,18 @@ is the serving path, not the neighbour.
 
 ## What is outstanding
 
-Ordered by value, not by phase number:
+**Construction is done.** As of 2026-08-03 everything on the original
+outstanding list is built — VRAM cap sizing, the four `same-*` colocations,
+the Phase 6 dual baseline, the memory-pressure curve, `mix-full`, per-GPU
+Triton containers and the Phase 5 placement study. **39 colocations** resolve
+with no VRAM pre-flight issues, under **221 unit tests**.
 
-1. **VRAM cap sizing** — derive from weights + a constant KV budget. Also repairs `cross-size-scaling`'s unloadable 72B rung
-2. **Same-category mixes** — the four `same-*` colocations, closing Phase 2 and Phase 3's `*-only` together
-3. **Phase 6 dual baseline** — structural, cheap, and it doubles the information in six colocations that already exist
-4. **`cross-memory-pressure`** — the KV-cache cliff curve
-5. **`mix-full`** — unblocks Phase 5
-6. ~~**Per-GPU Triton containers**~~ — done, see Phase 5
-7. **Phase 5 placement study** — the three pairings × {2, 4} GPUs
+What remains is **validation, not construction** — and it needs hardware.
+Nothing here has ever run on a GPU. The weight figures that set every derived
+cap are estimates rather than measurements; the Docker flags, port scheme and
+per-device repositories are asserted only as strings in unit tests; and the
+placement ranking is a prediction on the record, not a result.
+
+See **[contention-gpu-validation.md](contention-gpu-validation.md)**. It is
+ordered by how much work each assumption invalidates if it is wrong — start at
+the top, not at the interesting end.

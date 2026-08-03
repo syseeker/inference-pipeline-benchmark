@@ -682,6 +682,172 @@ def test_input_size_llm_moves_prefill_without_moving_decode(cfg):
     assert outs == {32}, "output length must be the constant here"
 
 
+# --------------------------------------------------------------------------- #
+# Phase 5 — placement (docs/contention.md §5)
+# --------------------------------------------------------------------------- #
+
+
+PLACEMENT_PAIRINGS = {
+    # colocation -> {tenant: device}
+    "place-p1": {"llm": 0, "vlm": 0, "ilm": 1, "cv": 1},
+    "place-p2": {"llm": 0, "ilm": 0, "vlm": 1, "cv": 1},
+    "place-p3": {"llm": 0, "cv": 0, "vlm": 1, "ilm": 1},
+}
+
+
+def _window(cfg, name) -> Colocation:
+    return next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+
+
+@pytest.mark.parametrize("name,expected", sorted(PLACEMENT_PAIRINGS.items()))
+def test_each_pairing_splits_four_tenants_two_per_card(cfg, name, expected):
+    """With four tenants over two cards there are exactly three pairings, and
+    each one has to actually be a 2/2 split — a pairing that quietly left
+    three tenants on GPU 0 would be `mix-full` wearing a Phase 5 name."""
+    c = _window(cfg, name)
+    assert len(c.tenants) == 4
+    placement = {t.name: t.devices for t in c.tenants}
+    assert placement == {n: [d] for n, d in expected.items()}
+
+    per_gpu: dict[int, list[str]] = {0: [], 1: []}
+    for t in c.tenants:
+        per_gpu[t.devices[0]].append(t.name)
+    assert len(per_gpu[0]) == 2 and len(per_gpu[1]) == 2
+
+
+def test_the_three_pairings_rearrange_mix_full_and_change_nothing_else(cfg):
+    """Placement is the only variable. If a model or an offered rate drifted
+    between the pairings, the ranking would not be a placement finding."""
+    ref = {
+        t.name: (t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+        for t in _window(cfg, "mix-full").tenants
+    }
+    for name in PLACEMENT_PAIRINGS:
+        got = {
+            t.name: (t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+            for t in _window(cfg, name).tenants
+        }
+        assert got == ref, name
+
+
+def test_the_three_pairings_hold_the_kv_cache_constant(cfg):
+    """THE constraint of Phase 5, and the one most likely to be "fixed" away.
+
+    P1 puts both vLLM tenants on GPU 0; P2 and P3 give each of them a card.
+    Derive the caps per-GPU and P1's tenants get roughly half the KV cache of
+    P2's and P3's — P1 then comes out slowest for a reason that has nothing to
+    do with its neighbours (docs/contention.md §2b). So the budget is sized
+    for P1, the tightest case, and every vLLM tenant gets the SAME absolute
+    cap in all three."""
+    caps: dict[str, set] = {}
+    budgets = set()
+    for name in PLACEMENT_PAIRINGS:
+        for t in _window(cfg, name).tenants:
+            if t.gpu_memory_utilization is None:
+                continue           # Triton tenants reserve no GPU fraction
+            caps.setdefault(t.name, set()).add(t.gpu_memory_utilization)
+            budgets.add(t.kv_budget_gb)
+
+    assert set(caps) == {"llm", "vlm"}, "both vLLM tenants must be covered"
+    for tenant, values in caps.items():
+        assert len(values) == 1, f"{tenant} cap varies across the pairings: {values}"
+    assert budgets == {20.0}, "one KV budget for the whole comparison set"
+
+
+def test_the_pairings_keep_mix_fulls_kv_budget(cfg):
+    """The 1-GPU `mix-full` is the before/after these are ranked against, so
+    its tenants have to be running the same caches too."""
+    ref = {
+        t.name: (t.gpu_memory_utilization, t.kv_budget_gb)
+        for t in _window(cfg, "mix-full").tenants
+    }
+    for name in PLACEMENT_PAIRINGS:
+        got = {
+            t.name: (t.gpu_memory_utilization, t.kv_budget_gb)
+            for t in _window(cfg, name).tenants
+        }
+        assert got == ref, name
+
+
+@pytest.mark.parametrize(
+    "name", [*PLACEMENT_PAIRINGS, "place-isolated", "place-vlm-prefill-split"]
+)
+def test_every_placement_window_fits_on_each_card_it_uses(cfg, name):
+    """The `sum <= 1.0` rule is per DEVICE on multi-GPU (§5), and the Triton
+    tenants take their footprint out of whatever the vLLM caps left on their
+    own card."""
+    per_gpu: dict[int, float] = {}
+    triton_gpus: set[int] = set()
+    for t in _window(cfg, name).tenants:
+        if t.round.transport == "triton":
+            triton_gpus.update(t.devices)
+            continue
+        for d in t.devices:
+            per_gpu[d] = per_gpu.get(d, 0.0) + t.gpu_memory_utilization
+    for dev, total in per_gpu.items():
+        assert total <= 1.0, f"{name} GPU {dev}: {total}"
+        if dev in triton_gpus:
+            assert (1.0 - total) * cfg["vram_gb"] > 4.0, (
+                f"{name} GPU {dev} leaves no room for its Triton tenant"
+            )
+
+
+@pytest.mark.parametrize("name", ["place-isolated", "place-vlm-prefill-split"])
+def test_the_two_gpu_repeats_put_their_tenants_on_different_cards(cfg, name):
+    """No shared SMs, bandwidth or VRAM — so these are the runs whose
+    degradation ratios must come back ~1.0. Both tenants on one card would
+    make that a re-run of the 1-GPU window under a new name."""
+    c = _window(cfg, name)
+    assert len(c.tenants) == 2
+    devices = [t.devices for t in c.tenants]
+    assert devices == [[0], [1]] or devices == [[1], [0]]
+    assert len({d[0] for d in devices}) == 2
+
+
+@pytest.mark.parametrize(
+    "name,parent",
+    [("place-isolated", "mix-llm-cv"),
+     ("place-vlm-prefill-split", "cross-vlm-prefill-vs-llm")],
+)
+def test_the_two_gpu_repeats_are_a_before_after_of_a_one_gpu_run(cfg, name, parent):
+    """The extra card is the only difference — same models, same rates, same
+    caps. A different cap would fold a KV-cache change into the answer to
+    "what does a second GPU buy me?"."""
+    assert cfg["colocations"][name]["extends"] == parent
+    ref = {
+        t.name: (t.round.model_id, t.workload, t.load.rps, t.gpu_memory_utilization)
+        for t in _window(cfg, parent).tenants
+    }
+    got = {
+        t.name: (t.round.model_id, t.workload, t.load.rps, t.gpu_memory_utilization)
+        for t in _window(cfg, name).tenants
+    }
+    assert got == ref
+
+
+def test_placement_baselines_are_taken_on_the_placed_card(cfg):
+    """§5: the baseline must match the topology, not just the cap. A tenant
+    pinned to GPU 1 compared against a GPU 0 baseline is comparing cards."""
+    for name in [*PLACEMENT_PAIRINGS, "place-isolated", "place-vlm-prefill-split"]:
+        runs = _coloc_runs(cfg, name)
+        placed = {t.name: t.devices for t in _window(cfg, name).tenants}
+        solos = [r.tenants[0] for r in runs if r.is_solo]
+        assert len(solos) == len(placed)
+        for s in solos:
+            assert s.devices == placed[s.name], name
+
+
+def test_no_tensor_parallel_entries_while_the_interconnect_is_unconfirmed(cfg):
+    """`nvlink: false` on this card means TP traffic crosses PCIe every
+    forward pass, which would dominate the result. Deferred until
+    `nvidia-smi topo -m` says otherwise — not silently added."""
+    assert cfg.get("nvlink") is False
+    for name in cfg["colocations"]:
+        for run in _coloc_runs(cfg, name):
+            for t in run.tenants:
+                assert len(t.devices) == 1, f"{name}/{t.name} is tensor-parallel"
+
+
 def test_every_defined_colocation_resolves(cfg):
     """Catches typos in model/backend/workload names across the whole block."""
     for name in cfg["colocations"]:

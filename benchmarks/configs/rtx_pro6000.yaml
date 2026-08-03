@@ -1183,6 +1183,127 @@ colocations:
         model: qwen2.5-7b
         gpu_memory_utilization: 0.22  # 21.1 GB → 15.2 weights + 2 oh + 3.9 KV
 
+  # ── Phase 5 — GPU scaling: does a second card remove contention? ───
+  # The customer's question is "does adding GPUs eliminate contention or
+  # just redistribute it?", and the honest answer depends entirely on where
+  # the tenants land. So this phase does not measure "2 GPUs"; it measures
+  # PLACEMENT, with the card count held at two.
+  #
+  # SCOPE: 2 GPUs only. The original design sweeps {2, 4}; the 4-GPU half is
+  # dropped by decision, not by capability — `device:` still accepts indices
+  # up to 7, so a 4-GPU arm is a config edit rather than a code change.
+  #
+  # NO TENSOR-PARALLEL ENTRIES, deliberately. This card records
+  # `nvlink: false`, so a TP tenant's cross-card traffic goes over PCIe on
+  # every forward pass. Those results would be dominated by the interconnect
+  # rather than by the neighbour, which is not what this study reports.
+  # Deferred until `nvidia-smi topo -m` on the real box says what the link
+  # actually is (docs/contention.md §5, Mode B).
+
+  # ── The three packing pairings (Mode C) ────────────────────────────
+  # `mix-full`'s four tenants are the only 4-tenant roster in the study, and
+  # over two cards there are exactly three ways to split them:
+  #
+  #   place-p1   GPU0[LLM + VLM]   GPU1[ILM + CV]
+  #   place-p2   GPU0[LLM + ILM]   GPU1[VLM + CV]
+  #   place-p3   GPU0[LLM + CV]    GPU1[VLM + ILM]
+  #
+  # Same four models, same offered rates, same KV budget as `mix-full` —
+  # each entry extends it and overrides nothing but `device`. If the ranking
+  # comes out as §3's resource-profile heuristic predicts (P1 best, then P3,
+  # then P2), the customer gets a placement RULE they can apply to models we
+  # never benchmarked, which is worth more than the three numbers.
+  #
+  # THE ONE THING NOT TO "FIX" HERE: the KV budget is 20 GB in all three,
+  # and it is sized for P1 — the tightest case, where both vLLM tenants
+  # (LLM 0.39 + VLM 0.30 = 0.69) sit on GPU 0 together. P2 and P3 give each
+  # vLLM tenant a card of its own and could afford far more. Handing them
+  # more is exactly the mistake docs/contention.md §2b describes: P1's
+  # tenants would run with half the KV cache of P2's and P3's, P1 would come
+  # out slowest, and the finding would be about our own memory allocation
+  # rather than about who each tenant's neighbour is. Placement is the only
+  # variable these three are allowed to differ in — the cache stays put.
+  #
+  # Per-GPU reservation, which is what the pre-flight now checks (§5):
+  #   P1  GPU0 0.39 + 0.30 = 0.69   GPU1 0.00 (both tenants are Triton)
+  #   P2  GPU0 0.39  + Triton ILM   GPU1 0.30 + Triton CV
+  #   P3  GPU0 0.39  + Triton CV    GPU1 0.30 + Triton ILM
+
+  # Predicted BEST: the two compute-heavy tenants (VLM, ILM) are separated,
+  # and the LLM's bandwidth-bound decode overlaps the VLM's compute burst.
+  place-p1:
+    phase: 5
+    extends: mix-full
+    kv_budget_gb: 20.0        # P1-sized, and identical in p2/p3 — see above
+    tenants:
+      - {name: llm, device: 0}
+      - {name: vlm, device: 0}
+      - {name: ilm, device: 1}
+      - {name: cv,  device: 1}
+
+  # Predicted WORST: the VLM's prefill burst lands on the CV detector, the
+  # most fragile tenant in the set — a 5 ms model pushed to 15 ms is a 3x
+  # regression, while the burst that caused it barely notices (§3).
+  place-p2:
+    phase: 5
+    extends: mix-full
+    kv_budget_gb: 20.0
+    tenants:
+      - {name: llm, device: 0}
+      - {name: ilm, device: 0}
+      - {name: vlm, device: 1}
+      - {name: cv,  device: 1}
+
+  # Predicted MIDDLE: VLM and ILM are both compute-heavy and share a card,
+  # but the tenant they damage is another heavy model rather than a
+  # millisecond-scale one.
+  place-p3:
+    phase: 5
+    extends: mix-full
+    kv_budget_gb: 20.0
+    tenants:
+      - {name: llm, device: 0}
+      - {name: cv,  device: 0}
+      - {name: vlm, device: 1}
+      - {name: ilm, device: 1}
+
+  # ── Separate GPUs (Mode A) ─────────────────────────────────────────
+  # `mix-llm-cv`, unchanged except that the two tenants are on different
+  # cards. It answers two questions at once.
+  #
+  # First, the customer's: what does buying a second GPU actually get me?
+  # This is the before/after against the 1-GPU `mix-llm-cv` — same models,
+  # same rates, same 0.45 cap, so the only difference is the extra card.
+  #
+  # Second, it is the HARDWARE NULL TEST. With no shared SMs, no shared
+  # bandwidth and no shared VRAM there is nothing left to contend over, so
+  # every degradation ratio here must come back ≈1.0. If a tenant still
+  # degrades against a neighbour on a different card, that is a bug in the
+  # harness — not contention — and this is the run that catches it.
+  place-isolated:
+    phase: 5
+    extends: mix-llm-cv
+    tenants:
+      - {name: llm, device: 0}
+      - {name: cv,  device: 1}
+
+  # The second before/after, and the one worth having: `cross-vlm-prefill-
+  # vs-llm` is the sharpest contention signal in the study — the LLM's ITL
+  # P99 spikes inside the VLM's prefill window. Split across two cards, does
+  # the spike disappear entirely, or does something (PCIe, host, MPS) carry
+  # it over? Caps stay at the 1-GPU values (0.45 / 0.35) so the comparison
+  # is against a baseline with the same KV cache, not a roomier one (§2b).
+  #
+  # Deliberately only two repeats of 1-GPU scenarios, not a fan-out over the
+  # whole file: the placement question is answered by the three pairings
+  # above, and these exist to anchor them to a known 1-GPU number.
+  place-vlm-prefill-split:
+    phase: 5
+    extends: cross-vlm-prefill-vs-llm
+    tenants:
+      - {name: vlm, device: 0}
+      - {name: llm, device: 1}
+
   # ── Phase 6 — secondary dimensions ─────────────────────────────────
   # Every dimension below runs against TWO contrasting baselines, `-a` and
   # `-b`. That is the customer's design and it is the point of the phase: a
