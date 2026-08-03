@@ -277,7 +277,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
-  # NOTE: the customer's config lists `qwen2.5-27b`. That checkpoint does not
+  # NOTE: the original design lists `qwen2.5-27b`. That checkpoint does not
   # exist — the Qwen2.5 ladder is 0.5/1.5/3/7/14/32/72B. Corrected to 32B.
   qwen2.5-32b:
     hf_id: "Qwen/Qwen2.5-32B-Instruct"
@@ -354,7 +354,7 @@ models:
     unsupported_workloads:
   # Prompt token counts below are measured with cl100k_base, not estimated.
   #
-  # llm_long is NOT the customer's text. Theirs measured 142/109 tokens against
+  # llm_long is NOT the original text. That measured 142/109 tokens against
   # a "~1000 tok" label, which would have made the long arm of the prompt-length
   # dimension barely longer than the short one, and would have pitted a
   # ~140-token LLM prefill against the VLM's 40-frame burst in the one
@@ -677,7 +677,7 @@ sweeps:
       - {model: nemotron-omni-fp8}      # sglang+trtllm dropped via unsupported_backends
 
 # ─── Workloads (contention study) ──────────────────────────────────────
-# What each tenant sends. Adopted verbatim from the customer's
+# What each tenant sends. Adopted verbatim from the
 # experiment_config.json `prompts` + `prompt_to_data_mapping`, so the
 # request shapes are theirs, not invented here.
 #
@@ -825,13 +825,13 @@ colocations:
   # interesting case is when the two prefill bursts land on top of each
   # other rather than interleaving.
   #
-  # SUBSTITUTION: the customer's second VLM (`gemma-vlm-32b` →
+  # SUBSTITUTION: the original second VLM (`gemma-vlm-32b` →
   # paligemma2-28b) is image-only and cannot serve a video workload at all
   # (§9 of docs/contention-coverage.md), so it cannot be the second tenant
   # of a *video* VLM pair. `qwen2.5-vl-7b` is the only video VLM in the
   # contention roster, so the neighbour comes from the headline roster:
   # `gemma-4-31b-it-fp8` is dense, video-capable, and from a different
-  # vendor — which keeps the cross-vendor check the customer's original
+  # vendor — which keeps the cross-vendor check the original
   # pick was carrying.
   #
   # Rates are low because one 40-frame clip is several hundred ms of
@@ -967,7 +967,7 @@ colocations:
   # All four categories at once — the only 4-tenant window in the study.
   # Every other colocation answers "do these two fit together"; this one
   # answers "does the whole stack fit on one card", which is the question a
-  # customer actually has. It is also the prerequisite for Phase 5: with
+  # the deployment actually has. It is also the prerequisite for Phase 5: with
   # four tenants and two GPUs there are exactly three pairings to rank, and
   # without this window there is no 1-GPU number to rank them against.
   #
@@ -1029,7 +1029,7 @@ colocations:
   # to 15 ms is a 3x regression while the LLM beside it barely moves, and
   # that direction is invisible until the detector is the one being watched.
   #
-  # REFRAMED: the customer specified this as an LLM *concurrency* sweep. A
+  # REFRAMED: the original design specified this as an LLM *concurrency* sweep. A
   # closed-loop neighbour throttles itself in proportion to the slowdown it
   # is causing, so the aggression level would have been set by the harness
   # rather than by us — the ratio would describe the load generator. Swept
@@ -1097,7 +1097,7 @@ colocations:
   # Where does the KV cache get small enough that vLLM starts evicting and
   # preempting rather than batching? Below that point co-residency costs a
   # little throughput; above it, requests queue and the latency curve turns
-  # vertical. The customer wants the location of that knee, because it is
+  # vertical. The question is where that knee sits, because it is
   # the number that decides whether a second tenant is affordable at all.
   #
   # HOW THIS DIFFERS FROM THE CUSTOMER'S DESIGN, and why.
@@ -1111,10 +1111,10 @@ colocations:
   # Here the MODELS ARE FIXED and only the caps move. The KV cache is then
   # the single independent variable, so a throughput drop has exactly one
   # possible cause. It also yields a TRANSFERABLE number — "throughput
-  # degrades below N GB of KV" — which the customer can check any future
+  # degrades below N GB of KV" — which can be checked against any future
   # model pair against, instead of four outcomes for four specific pairs.
   #
-  # DISQUALIFIED from the customer's ladder, on this card, with these
+  # DISQUALIFIED from the original ladder, on this card, with these
   # checkpoints — removed rather than substituted:
   #   · (72b, 32b) = 45.0 + 65.5 = 110.5 GB of weights. Does not load on a
   #     96 GB card. (Their `q4` intent would fit at ~65 GB, but this yaml
@@ -1132,7 +1132,7 @@ colocations:
   #
   # ⚠ THE TWO ENDS FAIL DIFFERENTLY, and the naming is deliberate. More KV
   # means MORE of the card reserved, so pressure does NOT rise with the
-  # reservation percentage the way the customer's utilisation numbers did:
+  # reservation percentage the way the original utilisation numbers did:
   #   · kv03 (70% reserved) — KV starved. This is where the eviction cliff
   #     should appear, and it is the end the experiment is hunting.
   #   · kv29 (97% reserved) — KV ample, but 93 of 96 GB committed. This is
@@ -1207,14 +1207,13 @@ colocations:
         gpu_memory_utilization: 0.28  # 26.9 GB → 15.2 + 2 oh + 9.7 KV
 
   # ── Phase 5 — GPU scaling: does a second card remove contention? ───
-  # The customer's question is "does adding GPUs eliminate contention or
+  # The question is "does adding GPUs eliminate contention or
   # just redistribute it?", and the honest answer depends entirely on where
   # the tenants land. So this phase does not measure "2 GPUs"; it measures
   # PLACEMENT, with the card count held at two.
   #
-  # SCOPE: 2 GPUs only. The original design sweeps {2, 4}; the 4-GPU half is
-  # dropped by decision, not by capability — `device:` still accepts indices
-  # up to 7, so a 4-GPU arm is a config edit rather than a code change.
+  # SCOPE: the `device:` field supports up to 8 GPUs, but this study is
+  # tested with 2 GPUs only.
   #
   # NO TENSOR-PARALLEL ENTRIES, deliberately. This card records
   # `nvlink: false`, so a TP tenant's cross-card traffic goes over PCIe on
@@ -1234,7 +1233,7 @@ colocations:
   # Same four models, same offered rates, same KV budget as `mix-full` —
   # each entry extends it and overrides nothing but `device`. If the ranking
   # comes out as §3's resource-profile heuristic predicts (P1 best, then P3,
-  # then P2), the customer gets a placement RULE they can apply to models we
+  # then P2), the result is a placement RULE that applies to models we
   # never benchmarked, which is worth more than the three numbers.
   #
   # THE ONE THING NOT TO "FIX" HERE: the KV budget is 20 GB in all three,
@@ -1294,7 +1293,7 @@ colocations:
   # `mix-llm-cv`, unchanged except that the two tenants are on different
   # cards. It answers two questions at once.
   #
-  # First, the customer's: what does buying a second GPU actually get me?
+  # First: what does buying a second GPU actually get me?
   # This is the before/after against the 1-GPU `mix-llm-cv` — same models,
   # same rates, same 0.45 cap, so the only difference is the extra card.
   #
@@ -1329,7 +1328,7 @@ colocations:
 
   # ── Phase 6 — secondary dimensions ─────────────────────────────────
   # Every dimension below runs against TWO contrasting baselines, `-a` and
-  # `-b`. That is the customer's design and it is the point of the phase: a
+  # `-b`. That is the original design and it is the point of the phase: a
   # secondary dimension measured against one baseline gives a main effect,
   # and the thing worth knowing is the INTERACTION. "TensorRT beats the
   # python backend by 1.4x" is a fact about Triton; "it beats it by 1.4x
