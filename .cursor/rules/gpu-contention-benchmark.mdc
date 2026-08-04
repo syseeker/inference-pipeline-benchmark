@@ -178,6 +178,13 @@ echo get_default_active_thread_percentage | nvidia-cuda-mps-control   # expect 1
 #    Export the pipe dir in the SAME shell as `bench coloc` — that is how it
 #    reaches the Triton containers, which must bind-mount it to join MPS.
 
+# 4b. Derived Triton image, only if a colocation names a python-backend CV
+#     model (kosmos-2.5: same-ilm, mix-ilm-cv, mix-vlm-ilm, mix-full). It runs
+#     inside the container and imports torch + transformers, which the stock
+#     tritonserver image does not ship — without this the tenant never loads.
+docker build -f docker/Dockerfile.triton-python \
+  -t inference-bench/tritonserver:26.07-py3-transformers .
+
 # 5. Workload payloads. The .jsonl are committed, so this only verifies them —
 #    but a missing one silently drops --input-file and every LLM/VLM tenant
 #    runs on synthetic prompts instead of yours.

@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-4 solo baseline(s), 1 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+5 solo baseline(s), 2 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -17,8 +17,10 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 | Colocation             | Phase | Tenant   | Model                    | Backend | Offered rps | Achieved rps | Throughput kept |  e2e p50 |  e2e p95 |  TTFT p95 |
 |-----------------------:|------:|---------:|-------------------------:|--------:|------------:|-------------:|----------------:|---------:|---------:|----------:|
-| mix-llm-cv             | 3     | cv       | yolov8-l                 | triton  |        50.0 |         50.8 |          ≈1.00× |   ≈0.99× |   ≈0.98× |       n/a |
-| mix-llm-cv             | 3     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.03× |    ≈1.01× |
+| mix-llm-cv             | 3     | cv       | yolov8-l                 | triton  |        50.0 |         50.8 |          ≈1.00× |   ≈0.98× |   ≈0.97× |       n/a |
+| mix-llm-cv             | 3     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.02× |    ≈1.01× |
+| mix-vlm-cv             | 3     | cv       | dinov2-base              | triton  |        50.0 |          n/a |             n/a |      n/a |      n/a |       n/a |
+| mix-vlm-cv             | 3     | vlm      | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈1.00× |   ▲1.19× |   ▲1.22× |    ≈1.03× |
 
 ### 1b. Contention matrix
 
@@ -26,8 +28,9 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 | Victim model | Aggressors | e2e p95 ratio (mean) |
 |---|---|---|
-| qwen2.5-7b | yolov8-l | ≈1.03× |
-| yolov8-l | qwen2.5-7b | ≈0.98× |
+| qwen2.5-7b | yolov8-l | ≈1.02× |
+| qwen2.5-vl-7b | dinov2-base | ▲1.22× |
+| yolov8-l | qwen2.5-7b | ≈0.97× |
 
 ### 1c. Safe-operating envelope
 

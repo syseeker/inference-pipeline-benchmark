@@ -131,9 +131,13 @@ def main(argv: list[str] | None = None) -> int:
             "re-export, don't re-build.\n"
         )
     else:  # python
+        from benchmarks.triton_cv import TRITON_PYTHON_IMAGE
+        print(f">> Python backend: staged {layout.weight_file}")
         print(
-            f">> Python backend: author {layout.version_dir / 'model.py'} by hand "
-            f"(TritonPythonModel wrapping {spec.hf_id})."
+            "\n>> This model runs INSIDE the Triton container and imports torch +\n"
+            "   transformers, which the stock image does not ship. Build the derived\n"
+            "   image once (~10 min, 11 GB); the tenant will not start without it:\n"
+            f"     docker build -f docker/Dockerfile.triton-python -t {TRITON_PYTHON_IMAGE} .\n"
         )
     return 0
 

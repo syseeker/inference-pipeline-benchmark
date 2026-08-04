@@ -154,6 +154,13 @@ docker run --rm --gpus all -v "$PWD/$REPO/yolov8-l/1":/w \
 # 4. Docker wrote model.plan as root; Triton must be able to read it.
 sudo chown -R "$(id -u):$(id -g)" "$REPO"
 
+# 5. Only if a colocation uses a python-backend CV model (kosmos-2.5 does, in
+#    same-ilm / mix-ilm-cv / mix-vlm-ilm / mix-full). It runs inside the Triton
+#    container and imports torch + transformers, which the stock image does not
+#    ship. ~10 min, 11 GB, once per machine.
+docker build -f docker/Dockerfile.triton-python \
+  -t inference-bench/tritonserver:26.07-py3-transformers .
+
 python3 scripts/build_contention_prompts.py --check
 ```
 
