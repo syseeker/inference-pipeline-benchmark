@@ -665,22 +665,65 @@ capacity (measure that first, per rung) rather than at a fixed absolute rate.
 Keep one absolute-rate arm if the customer-facing question is "what happens at
 4 req/s", but do not read the current arm as isolating size.
 
-### `vram_after_load_gb` is not actually recorded
+### The `weights_gb` estimates are verified — from the server logs
 
-The validation record's Tier 2 assumes it is:
+An earlier version of this section claimed the ground truth was unrecorded.
+It is recorded: every vLLM tenant logs
 
-> "The runner already records `vram_after_load_gb` — that is the ground truth.
-> After the first runs, compare and correct."
+```
+Model loading took 38.77 GiB memory and 14.913061 seconds
+Available KV cache memory: 6.69 GiB
+```
 
-The GPU sampler writes `mem_bw_util_pct_p50` and `mem_bw_util_pct_peak` and no
-memory-*used* field, so no manifest in this run carries one. Every estimated
-`weights_gb` — including the `65.5` that sets the 32B rung's 0.87 cap — is
-therefore still an estimate, and no number of further runs will correct it.
+into `<tenant>.server.log`, which the orchestrator already captures. Tier 2 can
+be checked against runs already on disk.
 
-A run that loads only proves the cap is *sufficient*, not that the estimate is
-*accurate*; a generous estimate and a correct one are indistinguishable from
-outside. Snapshot `nvidia-smi --query-gpu=memory.used` after each server reports
-ready, or add a memory-used field to the sampler, and Tier 2 becomes checkable.
+Converting the yaml's `weights_gb` (GB) to the GiB vLLM reports, seven of eight
+declared values are correct to within 0.10 GiB:
+
+| Model | Declared (GiB) | Measured (GiB) | Delta |
+|---|---|---|---|
+| `llama3.1-8b` | 14.99 | 14.99 | −0.00 |
+| `mistral-7b` | 13.50 | 13.51 | +0.01 |
+| `qwen2.5-32b` | 61.00 | 61.04 | +0.04 |
+| `qwen2.5-vl-7b` | 6.52 | 6.59 | +0.07 |
+| `gemma2-9b` | 17.14 | 17.22 | +0.08 |
+| `qwen2.5-7b` | 14.16 | 14.25 | +0.09 |
+| `qwen2.5-14b` | 27.47 | 27.57 | +0.10 |
+| **`qwen2.5-72b`** | **41.91** | **38.77** | **−3.14** |
+
+Only `qwen2.5-72b` (AWQ) is materially wrong, and it is conservative — the cap
+reserves 3.14 GiB more than the weights need, so nothing fails; the space is
+simply handed to KV instead.
+
+**Note the unit.** The field is `weights_gb` and the values are GB, but vLLM
+reports GiB. Comparing them directly makes every estimate look ~7% high. Either
+rename the field or record the conversion beside it.
+
+### The 72B error shifts the `cross-memory-pressure` x-axis
+
+The consequence is not cosmetic. That family labels its rungs by *total KV in
+GB* (`kv03` → `kv13` → `kv22` → `kv29`) and derives each cap from the assumed
+45.0 GB weights. With the weights 3.14 GiB smaller, every rung gets that much
+more KV than its name claims.
+
+Measured at the `kv03` anchor (cap 0.51), which the yaml annotates
+`45.0 weights + 2 overhead + 2.0 KV`:
+
+```
+Available KV cache memory: 6.69 GiB      (predicted 2.0)
+GPU KV cache size: 21,936 tokens
+Maximum concurrency for 8,192 tokens per request: 2.68x
+```
+
+The anchor alone has more than twice the KV the whole rung is named for. So the
+starved end of the curve is **not as starved as designed**, and the eviction
+cliff the family is hunting may sit below `kv03` rather than at it — the sweep
+could miss it entirely while appearing to cover it.
+
+Do not renormalise the existing results to fix this. Recompute the caps from the
+measured 38.77 GiB and re-run the family, and until then read the rung names as
+approximate labels rather than as the KV actually provisioned.
 
 ### Two colocations are missing `kv_budget_gb`, and both need it
 
