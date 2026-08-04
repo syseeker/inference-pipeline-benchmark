@@ -612,6 +612,21 @@ runs in a container and may become the bottleneck itself, which would measure
 the client rather than the GPU. Run the tenant solo at the intended top rate and
 confirm `achieved_rps` still tracks `offered_rps`.
 
+### One repetition is not enough at low utilisation
+
+Phase 0 measured run-to-run variance at 1.8% and set `recommended_reps: 1`. That
+was on a *loaded* probe. At the utilisations these colocations actually run at,
+the ratios are dominated by variance rather than contention:
+
+`same-cv`'s `dinov2-base` reads **1.55× at 10 req/s and 1.05× at 50 req/s** —
+non-monotonic, so at least one of those points is noise. At 1–8% GPU
+utilisation a single repetition cannot separate 1.55× from 1.05×.
+
+Two ways out, and the first is better: raise the rates until the signal exceeds
+the variance (see the sweep table above), or raise `repetitions` on the low
+rungs. Only `cross-memory-pressure-kv29` currently sets `repetitions: 3`, and it
+does so for a different reason — expected bimodality near the memory ceiling.
+
 ### A measurement artifact to know about
 
 `perf_analyzer`-driven tenants report `achieved_rps` about **17–20% below
