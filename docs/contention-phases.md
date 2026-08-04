@@ -564,3 +564,64 @@ inherits tenants from `mix-memory-bound`
 - For backend swaps, whether the change is the backend itself or the memory footprint that came with it.
 
 ---
+
+---
+
+## Tuning for the next run
+
+Measured on 2× RTX PRO 6000, 2026-08-04. Every rate in this config was chosen
+before any hardware existed; these are the numbers to choose them from next
+time. Nothing here invalidates the current results — it says what regime they
+describe.
+
+### The configured rates are far below capacity
+
+| Tenant | Configured | Measured solo | GPU utilisation there |
+|---|---|---|---|
+| `qwen2.5-7b` | 4 req/s | sustains **62 of 64** | 99% "util", but see below |
+| `yolov8-l` | 50 req/s | **201 of 200**, still climbing | 33% at 200 req/s, 8% at 50 |
+| `dinov2-base` | 50 req/s | 50 of 50 | 7% |
+| `kosmos-2.5` | 0.1 req/s | ~0.133 ceiling | — |
+
+Only `kosmos-2.5` is anywhere near its limit. The LLM runs at about 1/16th of
+capacity and the CV tenants at under a tenth.
+
+**Do not read `gpu_util_pct` as saturation.** It is the fraction of time the
+engine is *active*, not occupancy: `qwen2.5-7b` shows 99% at 4 req/s and still
+absorbs 16× more load at the same memory bandwidth, because continuous batching
+reads the weights once per decode step rather than once per request. Memory
+bandwidth and achieved-vs-offered are the honest signals.
+
+### Sweeps that never reach a knee
+
+| Colocation | Phase | Sweep | Top rung reaches | Suggested |
+|---|---|---|---|---|
+| `same-cv` | 2 | `[1, 10, 50, 200]` | 33% utilisation | `[50, 200, 600, 1500]` |
+| `cross-llm-vs-cv-rps` | 4 | `[1, 10, 50, 200]` | 33% | same |
+| `cross-ilm-vs-cv` | 4 | `[1, 10, 50, 200]` | 33% | same |
+| `secondary-asymmetry-a/b` | 6 | `[4, 16, 64]` | ~10% | scale to the CV ceiling |
+| `same-llm` | 2 | `[1, 4, 16, 64]` | past the cliff | add a 32 rung |
+
+`same-llm` is the one sweep that *does* cross its knee, and it shows why the
+rungs matter: flat at 1.6–1.9× from 1 to 16 req/s, then 33–37× with 23%
+throughput loss at 64. The knee is somewhere between, and `[1, 4, 16, 64]` is
+too coarse to place it.
+
+**Check the driver before raising a CV rate past ~600 req/s.** `perf_analyzer`
+runs in a container and may become the bottleneck itself, which would measure
+the client rather than the GPU. Run the tenant solo at the intended top rate and
+confirm `achieved_rps` still tracks `offered_rps`.
+
+### A measurement artifact to know about
+
+`perf_analyzer`-driven tenants report `achieved_rps` about **17–20% below
+offered**, independent of load or model: `yolov8-l`, `dinov2-base` and
+`kosmos-2.5` all read exactly 83% of offered at their lowest rung. It is the
+`--request-count` accounting — N requests over an elapsed window that runs
+longer than the configured one.
+
+This **cancels in degradation ratios**, since baseline and contention carry the
+same offset, so every throughput-retention number stands. It does bias the
+absolute "% of offered" reading, and it is why a Triton tenant at 83% is normal
+rather than a warning. aiperf-driven vLLM tenants do not show it — they read
+96–98% at every rate.
