@@ -885,6 +885,17 @@ class RunPaths:
             return self.triton_repo_root
         return self.gpu_root / f"triton_repo-gpu{dev}"
 
+    def server_log(self, tenant_name: str) -> Path:
+        """Where a tenant's server stdout+stderr lands, per run.
+
+        Kept inside the run directory rather than the shared
+        <gpu>/server-logs/ the single-model sweep uses: colocation tenants are
+        concurrent, so one shared file per backend would interleave two servers,
+        and `--resume` would leave a failed run's log overwritten by the next
+        one. A log belongs to the window that produced it.
+        """
+        return self.root / f"{tenant_name}.server.log"
+
     @property
     def gpu_ndjson(self) -> Path:
         return self.root / "gpu.ndjson"
@@ -1100,6 +1111,7 @@ class ColocationOrchestrator:
         self.sampler_interval_ms = sampler_interval_ms
         self.warmup = warmup
         self.seed = seed
+        self._server_logs: list[Any] = []
 
     def run(self, coloc: Colocation, paths: RunPaths) -> dict[str, Any]:
         issues = preflight_vram(coloc.tenants)
@@ -1130,7 +1142,7 @@ class ColocationOrchestrator:
             for t in coloc.tenants:
                 servers.append(self._ensure_server(t, paths, triton_tenants=triton_tenants))
             for h in servers:
-                self._wait_ready(h.tenant)
+                self._wait_ready(h.tenant, paths=paths)
 
             # §4.4 — one shared wall-clock anchor for every tenant.
             t0_epoch_ms = time.time() * 1000.0
@@ -1177,6 +1189,7 @@ class ColocationOrchestrator:
         finally:
             for h in servers:
                 self._stop_server(h)
+            self._close_server_logs()
 
     # ---- server lifecycle --------------------------------------------------
 
@@ -1235,9 +1248,14 @@ class ColocationOrchestrator:
                 models=_triton_models_on(triton_tenants or [tenant], device),
                 mps_pipe_dir=mps_pipe_dir_for_containers(),
             )
-            proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.STDOUT)
-            proc.wait()  # docker run -d exits immediately after spawning
+            # `docker run -d` prints the container id on success and the
+            # reason on failure; the latter is the only record of why a CV
+            # tenant never came up.
+            log_path = paths.server_log(tenant.name)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("w") as fh:
+                proc = subprocess.Popen(docker_cmd, stdout=fh, stderr=subprocess.STDOUT)
+                proc.wait()  # docker run -d exits immediately after spawning
             return ServerHandle(tenant=tenant, proc=None, reused=False,
                                 container_name=container)
         if self._port_serving(tenant):
@@ -1245,7 +1263,16 @@ class ColocationOrchestrator:
         # Overlay, not replace: the backend still needs HF_HOME, CUDA paths and
         # the rest of the caller's environment.
         env = {**os.environ, **build_server_env(tenant)}
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        # Captured, not discarded. When a tenant misbehaves the server log is
+        # the first thing the skill's failure-recovery table tells you to read,
+        # and it did not exist: the qwen2.5-vl-7b 400s had to be reconstructed
+        # from aiperf's profile_export.jsonl because vLLM's own complaint went
+        # to /dev/null.
+        log_path = paths.server_log(tenant.name)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = log_path.open("w")
+        self._server_logs.append(log_fh)
+        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT,
                                 env=env)
         return ServerHandle(tenant=tenant, proc=proc, reused=False)
 
@@ -1274,12 +1301,14 @@ class ColocationOrchestrator:
         except Exception:
             return False
 
-    def _wait_ready(self, tenant: Tenant, timeout_s: int | None = None) -> None:
+    def _wait_ready(self, tenant: Tenant, timeout_s: int | None = None,
+                    paths: RunPaths | None = None) -> None:
         if tenant.round.transport == "triton":
             from benchmarks.triton_cv import triton_ports, triton_ready_url
             deadline = time.time() + (timeout_s or 300)
             # Poll the container on THIS tenant's card; a ready GPU-0 container
             # says nothing about whether GPU 1's has loaded its models yet.
+            from benchmarks.triton_cv import triton_container_name
             url = triton_ready_url(triton_ports(tenant.round.port, triton_device_of(tenant))[0])
             while time.time() < deadline:
                 try:
@@ -1288,10 +1317,19 @@ class ColocationOrchestrator:
                             return
                 except Exception:
                     time.sleep(2.0)
+            # `docker run -d` succeeding says only that the container started;
+            # a model that fails to load leaves it up and never ready. The
+            # container's own log carries the reason (e.g. "unable to get number
+            # of CUDA devices: MPS client failed to connect"), and it disappears
+            # with the container, so capture it into the run before raising.
+            tail = (self._capture_container_log(
+                triton_container_name(triton_device_of(tenant)), paths, tenant.name)
+                if paths is not None else "")
             raise RuntimeError(
                 f"Triton server not ready within {timeout_s or 300}s ({url}). "
                 "Ensure model weights are exported (scripts/build_triton_cv_repo.py) "
                 "and the Docker daemon is running."
+                + (f"\nContainer log ({paths.server_log(tenant.name)}):\n{tail}" if tail else "")
             )
         deadline = time.time() + (timeout_s or tenant.round.ready_timeout_s or 600)
         url = self._models_url(tenant)
@@ -1338,6 +1376,33 @@ class ColocationOrchestrator:
             procs[t.name] = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                              stderr=subprocess.STDOUT)
         return procs
+
+    def _capture_container_log(self, container: str, paths: RunPaths,
+                               tenant_name: str) -> str:
+        """Persist `docker logs <container>` into the run and return its tail.
+
+        Written before the container is torn down: once `--rm` reaps it the
+        only account of why a model never loaded is gone.
+        """
+        try:
+            r = subprocess.run(["docker", "logs", "--tail", "200", container],
+                               capture_output=True, text=True, timeout=30)
+        except Exception:
+            return ""
+        body = (r.stdout or "") + (r.stderr or "")
+        if not body.strip():
+            return ""
+        with contextlib.suppress(OSError):
+            path = paths.server_log(tenant_name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        return "\n".join(body.splitlines()[-15:])
+
+    def _close_server_logs(self) -> None:
+        for fh in self._server_logs:
+            with contextlib.suppress(Exception):
+                fh.close()
+        self._server_logs.clear()
 
     def _stop_server(self, handle: ServerHandle) -> None:
         if handle.container_name and not handle.reused:

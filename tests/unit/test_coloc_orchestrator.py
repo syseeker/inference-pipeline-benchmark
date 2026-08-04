@@ -1333,3 +1333,54 @@ def test_trace_warning_for_partial_failure():
 
 def test_no_trace_warning_for_a_clean_run():
     assert coloc.trace_warnings({"llm": [{"ok": True}] * 5}) == []
+
+
+# ── server logs ─────────────────────────────────────────────────────────────
+#
+# Regression: both server Popen sites used stdout=DEVNULL, so no server log was
+# ever written for a colocation — while SKILL.md's failure-recovery table tells
+# you to read server-logs/<backend>.log. The qwen2.5-vl-7b 400s had to be
+# reconstructed from aiperf's profile_export.jsonl because vLLM's own complaint
+# was discarded.
+
+def test_server_log_path_is_per_tenant_and_inside_the_run(tmp_path):
+    paths = _triton_paths(tmp_path)
+    a, b = paths.server_log("llm"), paths.server_log("cv")
+    assert a != b
+    assert a.parent == paths.root, "a log belongs to the window that produced it"
+    assert a.name == "llm.server.log"
+
+
+def test_http_server_output_is_captured_not_discarded(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+
+    captured = {}
+
+    def fake_popen(cmd, **kw):
+        captured["stdout"] = kw.get("stdout")
+        return types.SimpleNamespace(wait=lambda *a, **k: 0, pid=1)
+
+    monkeypatch.setattr(coloc.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(orch, "_port_serving", lambda t: False)
+
+    orch._ensure_server(_tenant(name="llm"), paths)
+    assert captured["stdout"] is not coloc.subprocess.DEVNULL
+    assert paths.server_log("llm").exists(), "vLLM output must land in the run dir"
+
+
+def test_container_log_is_captured_before_teardown(tmp_path, monkeypatch):
+    """`docker run -d` succeeding only means the container started; a model that
+    fails to load leaves it up and never ready, and --rm reaps the reason."""
+    paths = _triton_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    monkeypatch.setattr(
+        coloc.subprocess, "run",
+        lambda *a, **k: types.SimpleNamespace(
+            stdout="UNAVAILABLE: unable to get number of CUDA devices", stderr=""),
+    )
+    tail = orch._capture_container_log("triton-cv", paths, "cv")
+    assert "CUDA devices" in tail
+    assert "CUDA devices" in paths.server_log("cv").read_text()

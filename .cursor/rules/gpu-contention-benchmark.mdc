@@ -259,6 +259,7 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>
 |---|---|---|
 | Phase 0 shows ~1.0× aggregate throughput, ~2.0× latency | Tenants are **serialising**, not sharing | Stop. Enable MPS and retry. If still serialised, the study measures time-slice fairness — rescope and tell the user |
 | Tenant 2 OOMs at startup | Tenant 1 took the whole card | Set explicit `gpu_memory_utilization` per tenant |
+| A tenant produced no numbers, or the run warns `ALL n/n requests failed` | The server rejected every request | Read `<run_dir>/<tenant>.server.log` — written per run, per tenant. The warning quotes the upstream error; a 400 on a video tenant is usually `--max-model-len` smaller than the clip |
 | `achieved_rps` << `offered_rps` even solo | The driver is the bottleneck, not the GPU | Lower the rate, or check the client host isn't CPU-saturated |
 | Degradation ratio ≈ 1.0 everywhere | Load too low to contend, or closed-loop crept back in | Raise offered rate; confirm `--request-rate` is set, not `--concurrency` |
 | Ratio varies wildly between repeats | Near-OOM KV-cache eviction is bimodal | Expected at the memory-pressure points — report both modes, not the mean |
