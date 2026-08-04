@@ -353,16 +353,27 @@ specifically about **two or more models resident at the same time**.
 eight build steps are complete: 39 colocations covering all seven phases, 357
 unit tests, no VRAM pre-flight issues.
 
-Validated so far: the Phase 0 gate (2.07× overlap, CoV 1.8% → 1 rep), the
-solo LLM baseline, the per-tenant VRAM cap genuinely reaching vLLM (0.45, not
-0.90), a Triton CV container loading and joining MPS, and `nvlink: false`.
-**Not yet: any two-tenant contention window**, and therefore no degradation
-ratio has ever been produced.
+**Phase 3 and Phase 5 are complete** — 12 and 15 runs, all clean. Phase 0's
+gate passes at 2.07× overlap, both null tests return ~1.0, and the harness has
+produced its first real findings:
 
-First hardware contact found eight bugs that the unit tests could not reach —
-the CV tenant never joined MPS, and fixing that exposed a second failure where
-it then could not initialise CUDA at all. Both were in the seam between a
-correct function and its caller. Details and the remaining open items:
+- **Contention is not additive.** Every two-tenant pairing costs under 11% on
+  end-to-end p95; all four on one card costs 1.64× to 2.88×.
+- **The smallest tenant suffers most.** `yolov8-l` (7 ms requests) degrades
+  2.88× under four-way load, `qwen2.5-7b` only 1.64×. A short request has no
+  slack to absorb queueing.
+- **Placement matters, and the recorded prediction was wrong.** Measured
+  P2 (1.46×) beats P1 (1.95×) and P3 (2.19×). Never co-locate the two vLLM
+  tenants; then pair the CV tenant with the VLM rather than the LLM.
+
+Not yet run: Phases 2, 4 and 6. And the load points need revisiting — these
+ratios come from a state where one tenant was bandwidth-saturated and the other
+card near idle.
+
+First hardware contact found **fourteen** bugs the unit tests could not reach,
+nearly all in the seam between a correct function and its caller, and most
+invisible until an earlier one was fixed. Every one has a regression test.
+Details and the remaining open items:
 [reference/gpu-validation.md](reference/gpu-validation.md).
 
 **This table is the handoff record** — read it first, update it as you complete

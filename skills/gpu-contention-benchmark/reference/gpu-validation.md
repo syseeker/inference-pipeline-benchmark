@@ -69,37 +69,52 @@ This run also exposed the bug in the probe's own MPS detection: it used
 Still not run: the **VLM prefill + CV** variant — the sharpest contention pair
 in the study and the one most likely to expose a scheduling surprise.
 
-### 1.2 A single colocation, end to end — ⚠️ IN PROGRESS
+### 1.2 A single colocation, end to end — ✅ ANSWERED 2026-08-04
 
 ```bash
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
+bench coloc --gpu rtx_pro6000 --phase 3 --resume
 ```
 
-Expect to debug here rather than at the far end of a sweep — and that is what
-happened. Both solo baselines now run; the two-tenant window has still not
-completed, so this item stays open.
+"Expect to debug here rather than at the far end of a sweep" was right. Phase 3
+took **four attempts and nine distinct bugs**, most invisible until an earlier
+one was fixed — the Triton container-reuse bug hid a broken dinov2 engine,
+`--rm` hid the error message that would have named it, `int(rps)` hid kosmos
+serving nothing, and a backend-wide port default hid two vLLM tenants answering
+each other's traffic with HTTP 404s.
 
-What the solo LLM baseline established:
+All 12 runs now complete clean. What it established:
 
-- `achieved_rps` 3.91 against `offered_rps` 4.0 — the driver is not the
-  bottleneck, so ratios measured at this rate mean something.
-- `gpu_memory_utilization: 0.45` in the manifest — **the per-tenant cap
-  override does reach vLLM**, closing the Tier 3 item that called it out as a
-  live bug whose fix was unverified. It is not silently 0.90.
+- `achieved_rps` 3.91 against 4.0 on the LLM — the driver is not the bottleneck.
+- `gpu_memory_utilization: 0.45` in the manifest — **the per-tenant cap override
+  does reach vLLM**, not silently 0.90.
+- Pairs are cheap and four-way is not: every two-tenant pairing costs under 11%
+  on end-to-end p95, while all four on one card costs **1.64× to 2.88×**.
+  Contention is not additive in tenant count.
+- The victim ranking inverts intuition: the smallest, fastest tenant
+  (`yolov8-l`, 7 ms requests) suffers most at 2.88×, the largest least at 1.64×.
+  A short request has no slack to absorb queueing.
 
-Two bugs blocked the CV baseline, both now fixed and both invisible to the
-unit tests — see 3.1.
+Every bug found here has a regression test; see the commits on
+`contention/first-hardware-run`.
 
-### 1.3 The null test — the harness checking itself
+### 1.3 The null test — ✅ ANSWERED 2026-08-04, TWICE
 
 ```bash
 bench coloc --gpu rtx_pro6000 --colocation place-isolated
 ```
 
-Two tenants, one per card. No shared SMs, bandwidth or VRAM, so **the
-degradation ratio must come back ≈ 1.0**. If a tenant degrades against a
-neighbour on a *different* GPU, the harness has a bug and nothing else it
-reports can be trusted. This is the single highest-value check in the list.
+**`place-isolated` returned 1.02× worst-tenant, 1.01× mean.** Two tenants, one
+per card, nothing shared — the harness does not manufacture degradation.
+
+A second, sharper null test came free with the phase:
+**`place-vlm-prefill-split` returned 1.00× and 0.99×** — a 40-frame video
+prefill burst on GPU 0 has no measurable effect on an LLM decoding on GPU 1. On
+a PCIe box the interconnect is not a hidden coupling channel either.
+
+It failed on its first attempt, for a real reason worth recording: the second
+card's repo symlinked its weights to the staging repo's absolute host path,
+which dangles inside a container that mounts only its own repo. Hard-linked now
+— see the Tier 3 table.
 
 ---
 
@@ -169,13 +184,13 @@ All of this is asserted in unit tests as *strings*. No test has run Docker.
 | MPS detection | `coloc.capture_mps` | ✅ **confirmed** — `environment.mps.detected: true`. But see 3.1: detection was never the hard part |
 | Container joins MPS | `triton_cv.build_triton_serve_cmd` | ❌ **was broken, now fixed** — see 3.1 |
 | `--model-control-mode=explicit` + `--load-model=` | same | ✅ one container loads only `yolov8-l`; `READY` in ~2 s |
-| `--gpus device=N` pins one card | same | ⚠️ partial — one container sees exactly 1 device. **Two containers still untested** |
-| One sampler per occupied card | `coloc.occupied_devices` | ⚠️ partial — single-GPU run has only `"0"`, as required. The `place-*` two-key case is untested |
+| `--gpus device=N` pins one card | same | ✅ **confirmed** — `place-p2` ran two containers, one per card, on DIFFERENT images (derived for kosmos on GPU 0, stock for yolov8 on GPU 1) |
+| One sampler per occupied card | `coloc.occupied_devices` | ✅ **confirmed** — every `place-*` manifest carries `gpu_sampler` keys `"0"` AND `"1"` |
 | `nvidia-smi topo -m` capture | `coloc.capture_interconnect` | ✅ see 4.1 |
-| Ports `base + 10*device` (8100 / 8110) | `triton_cv.triton_ports` | ⬜ needs two live containers |
-| Symlinking staged weights into another device's repo | `coloc._link_staged_weight` | ⬜ untested |
-| `perf_analyzer -u localhost:8110` | `coloc.triton_tenant_url` | ⬜ untested |
-| `CUDA_VISIBLE_DEVICES` pins vLLM tenants | `coloc.build_server_env` | ⬜ untested |
+| Ports `base + 10*device` (8100 / 8110) | `triton_cv.triton_ports` | ✅ **confirmed** — both bound simultaneously, no conflict |
+| Staging weights into another device's repo | `coloc._link_staged_weight` | ❌ **was broken, now fixed.** A symlink to the staging repo's absolute host path dangles inside a container that mounts only its own repo — "Failed to determine modification time for '/models/yolov8-l/1/model.plan'". Hard-linked now, siblings included (`model.onnx.data`) |
+| `perf_analyzer -u localhost:8110` | `coloc.triton_tenant_url` | ✅ **confirmed** — drove the GPU 1 container |
+| `CUDA_VISIBLE_DEVICES` pins vLLM tenants | `coloc.build_server_env` | ✅ **confirmed** — and the per-card baselines differ measurably (yolov8-l: 50.55 on GPU 0, 49.17 on GPU 1), which is why `_solo_key` carries the device |
 
 ### 3.1 The two MPS bugs, and why the tests could not see them
 
@@ -235,12 +250,13 @@ both bear on published numbers:
   works, but it applies to every CV tenant for the whole study.
   `capture_environment()` does not record either of these today.
 
-### 4.2 MPS with several containers
+### 4.2 MPS with several containers — ✅ ANSWERED 2026-08-04
 
-One Triton container is now confirmed as an MPS client (3.1). The placement
-study runs **two** containers plus two vLLM processes against one control
-daemon. Confirm the pipe is shared correctly under that shape, and that the
-Phase 0 overlap still holds.
+`place-p2` and `place-p3` each ran **two Triton containers plus two vLLM
+processes against one MPS control daemon**, under `EXCLUSIVE_PROCESS`, with the
+two containers on different images. All four were MPS clients; no run recorded a
+no-MPS warning and none failed to get a context. Phase 5 completed 15/15 with
+zero errors and zero warnings.
 
 ### 4.3 Clocks
 
@@ -270,10 +286,29 @@ P3  [LLM+CV]  | [VLM+ILM]   worse  — VLM and ILM both compute-heavy
 P2  [LLM+ILM] | [VLM+CV]    worst  — VLM's burst lands on the most fragile tenant
 ```
 
-If the measured ranking matches, the customer gets a placement rule that
-generalises to models we never tested. **If it does not match, the resource
-model in contention.md §3 is wrong and that doc needs revising** — which is a
-more interesting result than confirmation.
+**ANSWERED 2026-08-04 — it did not match, and the doc has been revised.**
+Measured worst-tenant end-to-end p95:
+
+```
+P2  [LLM+ILM] | [VLM+CV]    1.46x   predicted WORST, measured BEST
+P1  [LLM+VLM] | [ILM+CV]    1.95x   predicted best
+P3  [LLM+CV]  | [VLM+ILM]   2.19x
+```
+
+The annotation above is where it went wrong: P1 is labelled "separates the two
+compute-heavy models" but P1 *groups* the LLM and VLM. Those two are the pair
+that must not share a card — both autoregressive, both KV-hungry, contending for
+the same resource rather than different ones. The VLM pays 1.95x in P1 and 1.02x
+once split.
+
+The second-order rule is backwards from the intuition in §3 too: a small fast
+tenant fares WORSE beside a steady neighbour than a bursty one. CV with the LLM
+is 2.19x; CV with the VLM is 1.46x, because the VLM's prefill bursts leave gaps
+the CV tenant can use.
+
+Both rules and the numbers are now in `docs/contention.md` §3, with the caveat
+that they come from a load point where the LLM was bandwidth-saturated and the
+second card near idle.
 
 ### 5.2 Bimodality under memory pressure
 

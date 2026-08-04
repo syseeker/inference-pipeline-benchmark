@@ -191,6 +191,54 @@ So "model A and model B contend" is not one number — it's two, and they're
 often very different. That's why `summary.py` reports a **victim × aggressor
 matrix** rather than a single score per pair.
 
+### Measured, 2026-08-04 — and the prediction was wrong
+
+The reasoning above says to pair tenants that stress *different* resources.
+Phase 5 tested that on 2× RTX PRO 6000 by splitting `mix-full`'s four tenants
+across two cards three ways. Worst-tenant end-to-end p95, against each tenant's
+own solo baseline on the same card:
+
+| Placement | GPU 0 | GPU 1 | worst p95 | mean p95 |
+|---|---|---|---|---|
+| all four on one card | llm, vlm, ilm, cv | — | 2.88× | 2.20× |
+| P3 | llm + cv | vlm + ilm | 2.19× | 1.35× |
+| P1 | llm + vlm | ilm + cv | 1.95× | 1.38× |
+| **P2** | **llm + ilm** | **vlm + cv** | **1.46×** | **1.23×** |
+
+The prediction on record was **P1 best, P3 middle, P2 worst**. The measurement
+is close to the reverse: **P2 is best on both worst-tenant and mean**, and P1 —
+the predicted winner — is second worst by tail.
+
+Two rules the data does support, each with a clean contrast behind it:
+
+**1. Never co-locate the two vLLM tenants.** In P1 the LLM and VLM share GPU 0
+and the VLM pays **1.95×**. In P2 and P3, where they are split, the VLM sits at
+**1.02×** and **1.12×**. Both are autoregressive and KV-hungry: they contend for
+precisely the resource the other needs, and no amount of "different resource"
+reasoning applies because they are the *same* resource profile.
+
+**2. Given that, pair the CV tenant with the VLM rather than the LLM.** P2 puts
+CV with the VLM → **1.46×**. P3 puts CV with the LLM → **2.19×**. The LLM's
+steady stream of small decode kernels leaves no gaps; the VLM's bursty prefill
+does, and a small fast tenant can use them. This is the "small fast model next
+to a bursty one gets wrecked" intuition above coming out *backwards* — against a
+steady neighbour it fares worse than against a bursty one.
+
+That also explains P3's shape: best mean (1.35×), second-worst tail (2.19×). It
+fixes the vLLM pairing and then concentrates all the remaining damage on one
+victim.
+
+Two null tests bound the result. Two tenants on separate cards with nothing
+shared returned **1.02×** (`place-isolated`), and a 40-frame video prefill burst
+on one card against an LLM decoding on the other returned **1.00×**
+(`place-vlm-prefill-split`) — so on a PCIe box the interconnect is not a hidden
+coupling channel, and the harness does not manufacture degradation.
+
+**Caveat on generality.** These ratios come from a load point where the LLM was
+bandwidth-saturated (99% utilisation, 77% memory bandwidth, alone) while the
+second card sat near idle (20%, 1%). The ranking is a statement about *that*
+asymmetry. Rerun the rate sweeps before extending it to a balanced load.
+
 ---
 
 

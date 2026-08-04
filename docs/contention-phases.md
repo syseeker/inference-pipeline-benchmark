@@ -278,6 +278,28 @@ KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
 
 ## Phase 5 — Two GPUs (placement)
 
+> **Run 2026-08-04 — 15/15 clean, and the prediction was wrong.** Worst-tenant
+> end-to-end p95, each tenant against its own baseline *on the same card*:
+>
+> | Placement | GPU 0 | GPU 1 | worst p95 | mean p95 |
+> |---|---|---|---|---|
+> | one card (`mix-full`, Phase 3) | all four | — | 2.88× | 2.20× |
+> | `place-p3` | llm + cv | vlm + ilm | 2.19× | 1.35× |
+> | `place-p1` | llm + vlm | ilm + cv | 1.95× | 1.38× |
+> | **`place-p2`** | **llm + ilm** | **vlm + cv** | **1.46×** | **1.23×** |
+> | `place-vlm-prefill-split` | vlm | gemma2-9b | 1.00× | 0.99× |
+> | `place-isolated` (null test) | llm | cv | 1.02× | 1.01× |
+>
+> Predicted P1 > P3 > P2; measured **P2 best**. Two rules the data supports:
+> never co-locate the two vLLM tenants (the VLM pays 1.95× in P1, 1.02× once
+> split), and then pair the CV tenant with the VLM rather than the LLM (1.46×
+> versus 2.19×) — the LLM's steady decode leaves no gaps, the VLM's bursty
+> prefill does. Full reasoning in [contention.md](contention.md) §3.
+>
+> Caveat: measured at a load point where the LLM was bandwidth-saturated (99%
+> utilisation, 77% memory bandwidth, alone) and the second card near idle (20%,
+> 1%). The ranking describes that asymmetry.
+
 **Customer's intent.** Repeat key scenarios with 2 and 4 GPUs — does adding GPUs eliminate contention or just redistribute it?
 
 **Question this answers.** Does a second GPU remove contention, or only move it?
