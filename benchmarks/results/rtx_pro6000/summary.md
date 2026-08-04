@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-13 solo baseline(s), 10 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+20 solo baseline(s), 14 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -17,6 +17,14 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 | Colocation             | Phase | Tenant   | Model                    | Backend | Offered rps | Achieved rps | Throughput kept |  e2e p50 |  e2e p95 |  TTFT p95 |
 |-----------------------:|------:|---------:|-------------------------:|--------:|------------:|-------------:|----------------:|---------:|---------:|----------:|
+| same-llm               | 2     | llm_a    | qwen2.5-7b               | vllm    |         1.0 |          1.0 |          ≈1.00× |   ▲1.51× |   ▲1.63× |    ▲1.59× |
+| same-llm               | 2     | llm_a    | qwen2.5-7b               | vllm    |        16.0 |         15.5 |          ≈1.00× |   ▲1.72× |   ▲1.75× |    ▲1.65× |
+| same-llm               | 2     | llm_a    | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ▲1.67× |   ▲1.67× |    ▲1.60× |
+| same-llm               | 2     | llm_a    | qwen2.5-7b               | vllm    |        64.0 |         47.9 |          ▼0.77× |  ▲33.27× |  ▲64.71× |  ▲600.22× |
+| same-llm               | 2     | llm_b    | gemma2-9b                | vllm    |         1.0 |          1.0 |          ≈1.00× |   ▲1.57× |   ▲1.92× |    ▲1.73× |
+| same-llm               | 2     | llm_b    | gemma2-9b                | vllm    |        16.0 |         15.4 |          ≈1.00× |   ▲1.89× |   ▲1.88× |    ▲1.80× |
+| same-llm               | 2     | llm_b    | gemma2-9b                | vllm    |         4.0 |          3.9 |          ≈1.00× |   ▲1.84× |   ▲1.85× |    ▲1.73× |
+| same-llm               | 2     | llm_b    | gemma2-9b                | vllm    |        64.0 |         34.2 |          ▼0.55× |  ▲37.24× |  ▲36.71× |   ▲54.38× |
 | mix-full               | 3     | cv       | yolov8-l                 | triton  |        50.0 |         50.5 |          ≈1.00× |   ▲2.46× |   ▲2.88× |       n/a |
 | mix-full               | 3     | ilm      | kosmos-2.5               | triton  |         0.1 |          0.1 |          ≈1.00× |   ▲1.75× |   ▲2.14× |       n/a |
 | mix-full               | 3     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.8 |          ≈0.98× |   ▲1.40× |   ▲1.64× |    ▲1.51× |
@@ -53,10 +61,12 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | Victim model | Aggressors | e2e p95 ratio (mean) |
 |---|---|---|
 | dinov2-base | qwen2.5-vl-7b | ≈0.95× |
+| gemma2-9b | qwen2.5-7b | ▲10.59× |
 | gemma2-9b | qwen2.5-vl-7b | ≈1.00× |
 | kosmos-2.5 | qwen2.5-7b, qwen2.5-vl-7b, yolov8-l | ▲1.38× |
 | kosmos-2.5 | qwen2.5-vl-7b | ≈1.04× |
 | kosmos-2.5 | yolov8-l | ▲1.06× |
+| qwen2.5-7b | gemma2-9b | ▲17.44× |
 | qwen2.5-7b | kosmos-2.5, qwen2.5-vl-7b, yolov8-l | ▲1.31× |
 | qwen2.5-7b | yolov8-l | ≈1.01× |
 | qwen2.5-vl-7b | dinov2-base | ≈1.02× |
@@ -73,6 +83,8 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 | Colocation | Tenant | Model | Offered | Achieved | Retention |
 |---|---|---|---|---|---|
+| same-llm | llm_b | gemma2-9b | 64.0 | 34.2 | 0.53× |
+| same-llm | llm_a | qwen2.5-7b | 64.0 | 47.9 | 0.75× |
 | place-p3 | ilm | kosmos-2.5 | 0.1 | 0.1 | 0.83× |
 | mix-full | ilm | kosmos-2.5 | 0.1 | 0.1 | 0.83× |
 | mix-vlm-ilm | ilm | kosmos-2.5 | 0.1 | 0.1 | 0.83× |

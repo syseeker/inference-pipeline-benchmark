@@ -296,9 +296,12 @@ KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
 > versus 2.19×) — the LLM's steady decode leaves no gaps, the VLM's bursty
 > prefill does. Full reasoning in [contention.md](contention.md) §3.
 >
-> Caveat: measured at a load point where the LLM was bandwidth-saturated (99%
-> utilisation, 77% memory bandwidth, alone) and the second card near idle (20%,
-> 1%). The ranking describes that asymmetry.
+> Caveat: measured at a **low** load point. Phase 2's sweep shows `qwen2.5-7b`
+> sustains 62 of 64 requests/second alone, so the configured `llm@4` is about
+> 1/16th of capacity. `gpu_util_pct` reads 99% there, but it measures engine-active
+> time rather than occupancy. The ranking holds for the lightly loaded regime —
+> which `same-llm` shows is the safe one, flat at 1.6–1.9× to 16 rps — and says
+> nothing about behaviour past the cliff at 64 rps.
 
 **Customer's intent.** Repeat key scenarios with 2 and 4 GPUs — does adding GPUs eliminate contention or just redistribute it?
 

@@ -1,0 +1,92 @@
+{
+  "colocation_id": "same-llm",
+  "phase": 2,
+  "run_label": "solo",
+  "is_solo": true,
+  "gpu": "rtx_pro6000",
+  "isolation_mode": "mps",
+  "duration_s": 120,
+  "n_tenants": 1,
+  "t0_epoch_ms": 1785852727229.363,
+  "devices": [
+    0
+  ],
+  "tenants": [
+    {
+      "name": "llm_a",
+      "round": {
+        "backend": "vllm",
+        "model_id": "qwen2.5-7b",
+        "hf_id": "Qwen/Qwen2.5-7B-Instruct",
+        "family": "qwen2.5",
+        "quantization": "bf16",
+        "base_url": "http://localhost:8000/v1",
+        "port": 8000,
+        "launch_args": [
+          "--gpu-memory-utilization=0.90",
+          "--max-num-seqs=32",
+          "--max-model-len=8192"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "http",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "aiperf",
+      "load": {
+        "pattern": "poisson",
+        "rps": 1.0,
+        "output_tokens": 32
+      },
+      "workload": "llm_short",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/llm_short.jsonl"
+        ],
+        "output_tokens": 32
+      },
+      "gpu_memory_utilization": 0.39,
+      "kv_budget_gb": 20.0,
+      "triton_backend": null,
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [],
+      "offered_rps": 1.0,
+      "achieved_rps": 0.9581406577436616
+    }
+  ],
+  "gpu_sampler": {
+    "0": {
+      "sampler_backend": "dcgm",
+      "n_samples": 2607,
+      "mem_bw_util_pct_p50": 0.0,
+      "mem_bw_util_pct_peak": 100.0,
+      "gpu_util_pct_p50": 0.0,
+      "gpu_util_pct_peak": 100.0,
+      "fb_used_peak_gb": 35.36328125,
+      "power_avg_w": 157.86205600306937,
+      "power_peak_w": 344.808
+    }
+  },
+  "environment": {
+    "interconnect": {
+      "available": true,
+      "error": null,
+      "topo_matrix": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\t0-47\t0\t\tN/A\nGPU1\tPIX\t X \t0-47\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+      "nvlink_detected": false
+    },
+    "mps": {
+      "control_daemon_running": true,
+      "pipe_directory": null,
+      "container_pipe_directory": "/tmp/nvidia-mps",
+      "probe_error": null,
+      "detected": true
+    }
+  },
+  "warnings": [],
+  "throttle_reasons": []
+}

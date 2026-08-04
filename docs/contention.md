@@ -234,10 +234,41 @@ on one card against an LLM decoding on the other returned **1.00×**
 (`place-vlm-prefill-split`) — so on a PCIe box the interconnect is not a hidden
 coupling channel, and the harness does not manufacture degradation.
 
-**Caveat on generality.** These ratios come from a load point where the LLM was
-bandwidth-saturated (99% utilisation, 77% memory bandwidth, alone) while the
-second card sat near idle (20%, 1%). The ranking is a statement about *that*
-asymmetry. Rerun the rate sweeps before extending it to a balanced load.
+**Caveat on generality — the load point is low.** Phase 2's `same-llm` sweep
+measured what one of these tenants can actually do:
+
+| offered | achieved | memory bandwidth | power |
+|---|---|---|---|
+| 1 rps | 0.96 | 0% | 158 W |
+| 4 rps | 3.91 | 77% | 272 W |
+| 16 rps | 15.50 | 80% | 315 W |
+| 64 rps | 62.38 | 77% | 344 W |
+
+`qwen2.5-7b` sustains **62 of 64 requests/second alone**, with memory bandwidth
+flat from 4 rps upward — continuous batching reads the weights once per decode
+step regardless of how many requests share it. The study's configured `llm@4`
+is therefore about **1/16th of this tenant's capacity**, not a saturating load.
+(Read `gpu_util_pct` carefully: it sat at 99% from 4 rps on, but it measures the
+fraction of time the engine is *active*, not occupancy. It saturates long before
+the card does.)
+
+So the placement ranking above, and Phase 3's pairing costs, are measurements of
+a **lightly loaded** GPU. That is a legitimate operating regime — and the
+`same-llm` sweep shows it is the *safe* one — but it is not the whole picture:
+
+| both LLMs at | e2e p50 ratio | throughput kept |
+|---|---|---|
+| 1 rps | 1.51× / 1.57× | 1.00× |
+| 4 rps | 1.67× / 1.84× | 1.00× |
+| 16 rps | 1.72× / 1.89× | 1.00× |
+| **64 rps** | **33.3× / 37.2×** | **0.77×** |
+
+Flat to 16 rps, then a cliff. Co-locating two LLMs costs a near-constant
+1.6–1.9× inside the safe region and falls apart past it — 20× more latency and
+the first throughput loss in the study. Two tenants at 64 rps each are asking
+128 rps of a card that delivers ~62 for one, so the collapse is capacity, not
+mystery; the useful part is that the tax is flat until it isn't. The knee sits
+between 16 and 64 rps per tenant and this sweep is too coarse to place it.
 
 ---
 

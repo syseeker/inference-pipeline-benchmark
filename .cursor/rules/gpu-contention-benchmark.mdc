@@ -37,9 +37,13 @@ produced its first real findings:
   P2 (1.46×) beats P1 (1.95×) and P3 (2.19×). Never co-locate the two vLLM
   tenants; then pair the CV tenant with the VLM rather than the LLM.
 
-Not yet run: Phases 2, 4 and 6. And the load points need revisiting — these
-ratios come from a state where one tenant was bandwidth-saturated and the other
-card near idle.
+Phase 2 is under way and has already produced the study's sharpest number:
+two LLMs co-resident cost a near-constant **1.6-1.9x** latency from 1 to 16
+requests/second, then collapse to **33-37x with 23% throughput loss** at 64.
+A safe region with a flat tax, and a cliff. It also shows the study's
+configured rates are low — `qwen2.5-7b` sustains 62 of 64 rps alone, so
+`llm@4` is about 1/16th of capacity, and the Phase 3 and Phase 5 numbers
+describe the lightly loaded regime.
 
 First hardware contact found **fourteen** bugs the unit tests could not reach,
 nearly all in the seam between a correct function and its caller, and most
