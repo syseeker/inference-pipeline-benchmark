@@ -1384,3 +1384,22 @@ def test_container_log_is_captured_before_teardown(tmp_path, monkeypatch):
     tail = orch._capture_container_log("triton-cv", paths, "cv")
     assert "CUDA devices" in tail
     assert "CUDA devices" in paths.server_log("cv").read_text()
+
+
+def test_solo_key_separates_different_launch_args():
+    """Regression: --max-model-len lives in launch_args and sets the KV cache,
+    so two values are two deployments. Without it in the key, the qwen2.5-vl-7b
+    baseline taken at 16384 (178/178 rejected) had the same identity as the one
+    at 32768, and --resume would have reused the broken one."""
+    a = _tenant(name="vlm")
+    b = _tenant(name="vlm")
+    object.__setattr__(a.round, "launch_args", ["--max-model-len=16384"])
+    object.__setattr__(b.round, "launch_args", ["--max-model-len=32768"])
+    assert coloc._solo_key(a) != coloc._solo_key(b)
+
+
+def test_solo_key_still_matches_for_identical_tenants():
+    a, b = _tenant(name="vlm"), _tenant(name="vlm2")
+    object.__setattr__(a.round, "launch_args", ["--max-model-len=32768"])
+    object.__setattr__(b.round, "launch_args", ["--max-model-len=32768"])
+    assert coloc._solo_key(a) == coloc._solo_key(b), "dedup across colocations must still work"

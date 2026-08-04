@@ -970,10 +970,19 @@ def _solo_key(tenant: Tenant) -> tuple:
     a GPU-0 baseline does not describe a tenant pinned elsewhere, nor a TP-2
     one. So is the VRAM cap: it sets the KV cache size, so the same model at
     two caps is two deployments, and sharing one baseline between them would
-    compare one of them against a reference that never ran (§2b)."""
+    compare one of them against a reference that never ran (§2b).
+
+    `launch_args` belongs here for the same reason the cap does, and was
+    missed: `--max-model-len` also sets the KV cache, and it is where a config
+    fix lands. Without it, raising qwen2.5-vl-7b from 16384 to 32768 — the
+    change that took its baseline from 178/178 rejected requests to a working
+    one — produced an identical key, so `--resume` would have skipped the
+    re-run and left every ratio dividing by a baseline that measured nothing.
+    """
     t = tenant
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
-            tuple(t.devices), t.gpu_memory_utilization)
+            tuple(t.devices), t.gpu_memory_utilization,
+            tuple(t.round.launch_args or ()))
 
 
 class SoloBaselineCache:
