@@ -1676,3 +1676,35 @@ def test_kv_size_overrides_a_value_inherited_from_launch_args():
     assert cmd.count("--kv-cache-memory-bytes") + \
            sum(a.startswith("--kv-cache-memory-bytes=") for a in cmd) == 1
     assert cmd[cmd.index("--kv-cache-memory-bytes") + 1] == str(int(20.0 * 1024 ** 3))
+
+
+# ── perf_analyzer must terminate ────────────────────────────────────────────
+#
+# Regression: time-window mode repeats measurement windows until the numbers
+# stabilise. At 0.2 rps a 60s window gets ~12 requests, never stabilises, and
+# perf_analyzer loops forever writing no CSV — kosmos-2.5 produced an empty
+# artifact dir and a null achieved_rps in every colocation. Worse, the
+# orchestrator waited on it with a bare p.wait(), so one hung driver stalled the
+# entire study with no timeout at all.
+
+def _pa(rps, duration_s=180):
+    t = types.SimpleNamespace(
+        name="ilm", load=types.SimpleNamespace(rps=rps, pattern="poisson", is_open_loop=True))
+    return coloc.build_perf_analyzer_cmd(model="m", url="localhost:8100",
+                                         tenant=t, duration_s=duration_s)
+
+
+def test_perf_analyzer_sends_a_fixed_request_count():
+    cmd = _pa(0.2)
+    assert "--request-count" in cmd
+    assert cmd[cmd.index("--request-count") + 1] == "36"      # 0.2 * 180
+
+
+def test_request_count_scales_with_rate_and_duration():
+    assert _pa(50.0)[_pa(50.0).index("--request-count") + 1] == "9000"
+    assert _pa(1.0, 60)[_pa(1.0, 60).index("--request-count") + 1] == "60"
+
+
+def test_request_count_is_never_zero():
+    """A sub-1-rps tenant in a short window still has to send something."""
+    assert _pa(0.01, 10)[_pa(0.01, 10).index("--request-count") + 1] == "1"

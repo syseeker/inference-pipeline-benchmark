@@ -484,11 +484,20 @@ def build_perf_analyzer_cmd(
     dist = "poisson" if load.pattern == "poisson" else "constant"
     # perf_analyzer -u expects hostname:port, not a full URL with scheme.
     clean_url = url.removeprefix("http://").removeprefix("https://")
+    # A fixed request count, not a stabilising measurement. perf_analyzer's
+    # time-window mode repeats windows until the numbers settle, which at a low
+    # rate never happens: kosmos-2.5 at 0.2 rps gets ~12 requests per 60s window
+    # and loops forever, producing no CSV at all. A contention window has a known
+    # length and every tenant must cover the same one, so the deterministic form
+    # is also the correct one — send exactly what the offered rate implies for
+    # the window, then stop.
+    count = max(1, round(load.rps * duration_s))
     cmd = [
         "perf_analyzer",
         "-m", model,
         "--service-kind", "triton",
         "-u", clean_url,
+        "--request-count", str(count),
         "--request-rate-range", f"{rps}:{rps}:1",
         "--request-distribution", dist,
         "--measurement-mode", "time_windows",
@@ -1286,8 +1295,24 @@ class ColocationOrchestrator:
                     for dev in devices
                 }
                 procs = self._launch_drivers(coloc, paths)
-                for name, p in procs.items():
-                    p.wait()
+                # A driver that cannot finish must not stall the study. perf_analyzer
+                # loops until its measurement stabilises, and at a low request rate it
+                # may never get enough samples per window to do so — kosmos-2.5 at
+                # 0.2 rps hung indefinitely, with `p.wait()` waiting for it forever.
+                # The window has a known length, so anything past a generous multiple
+                # of it is a hang, not a slow run.
+                budget = max(120.0, (coloc.duration_s or 180) * 3.0)
+                deadline = time.time() + budget
+                for name, proc in procs.items():
+                    try:
+                        proc.wait(timeout=max(10.0, deadline - time.time()))
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        with contextlib.suppress(Exception):
+                            proc.wait(timeout=15)
+                        print(f"  [warn] driver for tenant {name!r} exceeded "
+                              f"{budget:.0f}s and was killed; its trace will be "
+                              "empty and the run flagged", file=sys.stderr)
                 for t in coloc.tenants:
                     if t.driver == "perf_analyzer":
                         traces[t.name] = parse_perf_analyzer_records(
