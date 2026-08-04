@@ -1010,7 +1010,6 @@ def _extract_aiperf_row(data: Any, run_label: str, jpath: Path) -> dict[str, Any
     }
 
 
-@app.command()
 # ──────────────────────────── §10 contention analysis ──────────────────────
 
 
@@ -1327,6 +1326,7 @@ def _coloc_section(gpu_dir: Path) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@app.command()
 def main(
     gpu: str = typer.Option(..., help="GPU profile name; reads benchmarks/results/<gpu>/"),
     results_dir: Path = typer.Option(Path("benchmarks/results"), help="Results root."),
@@ -1338,8 +1338,13 @@ def main(
 
     rows = _load_aggregate_rows(gpu_dir)
     grouped = _load_per_scenario(gpu_dir)
+    # Contention is a self-contained study: `bench coloc` writes only manifests
+    # under coloc/, never the single-model aggregate rows. Bailing on rows alone
+    # threw away a complete set of contention results — every section below is
+    # already guarded on `if rows`, so there is nothing to protect against here.
+    coloc_block = _coloc_section(gpu_dir)
 
-    if not rows and not grouped:
+    if not rows and not grouped and not coloc_block:
         typer.echo(f"no result rows found under {gpu_dir}", err=True)
         raise typer.Exit(2)
 
@@ -1443,8 +1448,8 @@ def main(
         out.append("")
 
     # Section 10: contention analysis — degradation table, matrix, envelope.
-    # No-op when no coloc/ results exist yet.
-    coloc_block = _coloc_section(gpu_dir)
+    # No-op when no coloc/ results exist yet. Built above, so a contention-only
+    # results dir still produces a summary.
     if coloc_block:
         out.append("---")
         out.append("")

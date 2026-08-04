@@ -319,40 +319,10 @@ silently rather than loudly.
 
 ---
 
-## Before you start the long run — 15 minutes that de-risk the night
-
-Do **not** lead with `--all`. These five checks cost a quarter of an hour and
-each one fails in a way that would otherwise waste the whole study:
-
-```bash
-# 1. Does the plan resolve and does the setup hold? (no GPU used)
-bench coloc --gpu rtx_pro6000 --all --dry-run
-
-# 2. THE GATE. ~0.28x means MPS is not active — stop, fix, re-run.
-python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
-
-# 3. First live two-tenant window, with a real Triton container.
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
-
-# 4. Are both tenants really sharing the GPU? IN A SECOND TERMINAL, while
-#    check 3 is in its contention window. Want "PASS: all 2 ...".
-scripts/check_mps_clients.sh
-
-# 5. Is the video actually being sent? input_sequence_length in the
-#    thousands, not ~30.
-bench coloc --gpu rtx_pro6000 --colocation cross-vlm-prefill-vs-llm --solo-only
-```
-
-Only then start the study below and leave it running.
-
-Check 4 is the only one with no automated backstop: a CV tenant outside MPS
-still records `environment.mps.detected: true`, so nothing warns you.
-`environment.mps.container_pipe_directory` is the field that settles it —
-`null` means the container could not have joined.
-
----
-
 ## Step 9 — Run the study
+
+**Do not start this until Steps 5-8 have passed.** It is hours of GPU time,
+and each of those steps fails in a way that would otherwise waste all of it.
 
 **Prompt:**
 > "Work through the contention study phase by phase and summarise each."

@@ -427,3 +427,48 @@ def test_align_traces_pct_helper():
     assert at._pct([10, 20, 30, 40, 50], 50) == 30
     assert at._pct([], 95) is None
     assert at._pct([100], 95) == 100
+
+
+# ── summary CLI wiring ──────────────────────────────────────────────────────
+
+def test_summary_cli_exposes_gpu_option():
+    """Regression: an `@app.command()` was orphaned above a section comment, so
+    Typer registered the next function it found (`_pct(vals, p)`) and `main()`
+    was never registered. `bench summary --gpu X` died with "No such option:
+    --gpu", which also broke the auto-regen at the end of every sweep and coloc.
+    """
+    from typer.testing import CliRunner
+    from benchmarks import summary as S
+    res = CliRunner().invoke(S.app, ["--help"])
+    assert res.exit_code == 0
+    assert "--gpu" in res.output
+    assert "vals" not in res.output
+
+
+def test_summary_written_for_contention_only_results(tmp_path, monkeypatch):
+    """Regression: `bench coloc` writes only coloc manifests, never the
+    single-model aggregate rows, so a complete contention study exited 2 with
+    "no result rows found" and produced no summary at all."""
+    from typer.testing import CliRunner
+    from benchmarks import summary as S
+
+    gpu_dir = tmp_path / "rtx_pro6000"
+    gpu_dir.mkdir()
+    monkeypatch.setattr(S, "_load_aggregate_rows", lambda d: [])
+    monkeypatch.setattr(S, "_load_per_scenario", lambda d: {})
+    monkeypatch.setattr(S, "_coloc_section", lambda d: ["## 10. Contention analysis", ""])
+
+    res = CliRunner().invoke(S.app, ["--gpu", "rtx_pro6000", "--results-dir", str(tmp_path)])
+    assert res.exit_code == 0, res.output
+    assert "## 10. Contention analysis" in (gpu_dir / "summary.md").read_text()
+
+
+def test_summary_still_exits_when_there_is_nothing_at_all(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from benchmarks import summary as S
+    (tmp_path / "rtx_pro6000").mkdir()
+    monkeypatch.setattr(S, "_load_aggregate_rows", lambda d: [])
+    monkeypatch.setattr(S, "_load_per_scenario", lambda d: {})
+    monkeypatch.setattr(S, "_coloc_section", lambda d: [])
+    res = CliRunner().invoke(S.app, ["--gpu", "rtx_pro6000", "--results-dir", str(tmp_path)])
+    assert res.exit_code == 2
