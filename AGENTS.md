@@ -349,10 +349,21 @@ specifically about **two or more models resident at the same time**.
 
 ## Build status
 
-**Built, never run on hardware.** All eight build steps are complete: 39
-colocations covering all seven phases of the study, 272 unit tests, no
-VRAM pre-flight issues. What remains is validation, and it needs a GPU — start
-at [reference/gpu-validation.md](reference/gpu-validation.md).
+**Built; hardware validation started 2026-08-04 on 2× RTX PRO 6000.** All
+eight build steps are complete: 39 colocations covering all seven phases, 357
+unit tests, no VRAM pre-flight issues.
+
+Validated so far: the Phase 0 gate (2.07× overlap, CoV 1.8% → 1 rep), the
+solo LLM baseline, the per-tenant VRAM cap genuinely reaching vLLM (0.45, not
+0.90), a Triton CV container loading and joining MPS, and `nvlink: false`.
+**Not yet: any two-tenant contention window**, and therefore no degradation
+ratio has ever been produced.
+
+First hardware contact found eight bugs that the unit tests could not reach —
+the CV tenant never joined MPS, and fixing that exposed a second failure where
+it then could not initialise CUDA at all. Both were in the seam between a
+correct function and its caller. Details and the remaining open items:
+[reference/gpu-validation.md](reference/gpu-validation.md).
 
 **This table is the handoff record** — read it first, update it as you complete
 a step, and commit the change.
@@ -362,11 +373,11 @@ a step, and commit the change.
 | 1 | Customer brief + test data staged (`workspace/contention/`) | ✅ done |
 | 1b | Design decisions recorded (`reference/`) | ✅ done |
 | 2 | Video clips → H.264 at spec | ✅ done (`clip_3s_224.mp4` 224²/3f, `clip_10s_720p.mp4` 720p/40f, both H.264) |
-| 3 | Phase-0 concurrency probe + clock policy | ✅ built (`scripts/gpu_concurrency_probe.py` + unit tests). Validated on PRO 6000: MPS off → 0.28× (serialises, gate FAIL); MPS on → 1.94× (gate PASS); variance CoV 0.4% → 1 rep/scenario. Clock pinning itself stays a pre-flight step; the probe records clocks + fails on throttle |
+| 3 | Phase-0 concurrency probe + clock policy | ✅ built + **re-validated on hardware 2026-08-04**: overlap 2.07× at 0.95× latency, CoV 1.8% → 1 rep/scenario, no throttle. (Earlier reference: MPS off → 0.28× gate FAIL; MPS on → 1.94×.) Fixed here: `pgrep -x` could never match the 23-char daemon name (comm truncates to 15), so a good MPS run recorded `isolation: "none"`. Clock pinning stays a pre-flight step and is **not yet applied on this host** |
 | 4 | Co-tenancy result schema + per-request timestamps | ✅ done |
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
 | 6 | `bench coloc` orchestrator | ✅ HTTP path live-validated (`benchmarks/coloc.py`, `bench coloc`, 27 unit tests). End-to-end solo run on PRO 6000 via config: orchestrator launched the server, held t0, ran one DCGM sampler, aiperf-streamed 58 reqs → `llm.ndjson` (epoch ts + TTFT + ITL), achieved_rps 4.02 vs offered 4.0, no throttle. Pinned the real aiperf `{metadata,metrics}` schema. **Note:** contention tenants need `--streaming` (done) and a vllm backend **variant without the `--gpu-memory-utilization=0.90` pin** in `extra_args`, else per-tenant caps can't take effect. Triton CV tenant server side is step 7 |
-| 7 | Triton CV tenants | ✅ done (`benchmarks/triton_cv.py`: CVModelSpec registry, config.pbtxt builder, Triton model-repo layout, perf_analyzer wrapper; `scripts/build_triton_cv_repo.py`: ONNX + TRT export paths; `coloc.py`: Triton lifecycle, CSV parsing, docker-inspect mutex. 75 unit tests pass) |
+| 7 | Triton CV tenants | ✅ built, and **one container live-validated 2026-08-04**: `yolov8-l` READY in ~2 s, loaded via `--model-control-mode=explicit`, confirmed an MPS client. Needed two fixes invisible to the tests — `coloc` never passed `mps_pipe_dir` (CV ran outside MPS, silently), and the container must run `--user <uid>:<gid>` because MPS servers are per-UID and the image is root. CV plans also now build at the yaml's declared fp16; `trtexec --fp16` is gone in TRT v11 (strongly typed), so precision comes from the ONNX. **Two containers / placement still untested** |
 | 8 | Contention analysis (summary §10, `align_traces.py`) | ✅ done (`scripts/align_traces.py`: aligns all tenant traces to t0, computes overlap window + per-tenant stats; `benchmarks/summary.py` §10: degradation table, contention matrix, safe-operating-envelope section. 92 unit tests pass) |
 
 ### Continuing on another machine

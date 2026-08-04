@@ -85,11 +85,11 @@ bench coloc --gpu rtx_pro6000 --all --resume      # the whole study, one command
 bench summary --gpu rtx_pro6000                             # §10 = contention
 ```
 
-> **Built, not yet run on hardware.** 39 colocations covering all seven phases
-> of the study, under 272 unit tests — but nothing has executed on a GPU yet.
-> Work through
-> [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
-> on first hardware contact.
+> **Hardware validation in progress.** 39 colocations covering all seven
+> phases, under 357 unit tests. The Phase 0 gate, the solo baselines and a
+> Triton CV tenant now run on a PRO 6000 — but **no two-tenant contention
+> window has completed**, so no degradation ratio exists yet. Open items:
+> [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md).
 
 ### 3. NitroGen policy
 
@@ -283,10 +283,14 @@ quantization chain (modelopt calibration → ONNX export → TRT plan compile);
 GPU sampling via DCGM with an nvidia-smi fallback; AIPerf concurrency sweeps;
 and Nsight profiling.
 
-**Built, awaiting hardware validation.** The multi-model contention benchmark —
+**Hardware validation in progress.** The multi-model contention benchmark —
 orchestrator, per-GPU Triton containers, VRAM cap derivation, contention
-analysis, and 39 colocations covering all seven phases of the study. 272 unit
-tests pass, but none of it has run on a GPU. Start at
+analysis, and 39 colocations covering all seven phases of the study. 357 unit
+tests pass. As of 2026-08-04 the Phase 0 gate gives 2.07x overlap on a PRO
+6000, the solo baselines run, and a Triton CV container loads inside MPS —
+but no contention window has completed, so **no degradation ratio has been
+produced yet**. First hardware contact found eight bugs the unit tests could
+not reach; details and what is still open are in
 [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md).
 
 **Placeholders.** The vision encoder is a passthrough and the executor is

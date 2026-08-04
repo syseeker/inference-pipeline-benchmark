@@ -12,10 +12,12 @@ First useful number in about 20 minutes. The full study is hours.
 > that doc explains the one rule everything rests on: between the baseline and
 > the contention run, the neighbour must be the only thing that changed.
 
-> **Nothing in this study has run on a GPU yet.** It is built and unit-tested
-> (272 tests) but every hardware assumption is unverified. Work through
+> **Hardware validation is partway through.** Setup, the Phase 0 gate and the
+> solo baselines are proven on a PRO 6000; no contention window has completed,
+> so no degradation ratio exists yet. Several hardware assumptions are still
+> unverified — work through
 > [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
-> as you go — it is ordered by how much work each assumption invalidates.
+> as you go; it is ordered by how much work each one invalidates.
 
 ---
 

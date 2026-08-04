@@ -46,30 +46,49 @@ Everything here is one-time. Recurring per-run checks live in SKILL.md's
 
 Cheap, fast, and everything below depends on them.
 
-### 1.1 Phase 0 gate, re-run
+### 1.1 Phase 0 gate, re-run — ✅ ANSWERED 2026-08-04
 
 ```bash
 python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 ```
 
-Already passed once (MPS off → 0.28×, MPS on → 1.94×, CoV 0.4%). Re-run it
-because the machine may not be the same one. **If it fails, stop** — every
-number below becomes a statement about the time-slice scheduler rather than
-about contention.
+Re-run on a 2× PRO 6000 box (driver 595.71.05): **PASS. Overlap 2.07× at
+0.95× latency, CoV 1.8% → `recommended_reps: 1`.** Better than the original
+1.94×. Note `solo_gpu_util_p50` was 46%, so the probe had headroom — 2.07×
+says the tenants genuinely overlap, not that real models will not contend.
 
-Also run the variant that was never run: **VLM prefill + CV**. It is the
-sharpest contention pair in the study and the one most likely to expose a
-scheduling surprise.
+The repetition policy for the study is therefore **1 rep**, except
+`cross-memory-pressure-kv29`, which keeps `repetitions: 3` deliberately
+(bimodality, see 5.2).
 
-### 1.2 A single colocation, end to end
+This run also exposed the bug in the probe's own MPS detection: it used
+`pgrep -x`, which matches comm, truncated by the kernel to 15 chars, so the
+23-char daemon name never matched and a good MPS run recorded
+`isolation: "none"`. Fixed to `pgrep -f`, with a regression test.
+
+Still not run: the **VLM prefill + CV** variant — the sharpest contention pair
+in the study and the one most likely to expose a scheduling surprise.
+
+### 1.2 A single colocation, end to end — ⚠️ IN PROGRESS
 
 ```bash
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
 ```
 
-The only path with any live validation behind it is a *solo* HTTP run. A
-two-tenant window with a real Triton container has never executed. Expect to
-debug here rather than at the far end of a sweep.
+Expect to debug here rather than at the far end of a sweep — and that is what
+happened. Both solo baselines now run; the two-tenant window has still not
+completed, so this item stays open.
+
+What the solo LLM baseline established:
+
+- `achieved_rps` 3.91 against `offered_rps` 4.0 — the driver is not the
+  bottleneck, so ratios measured at this rate mean something.
+- `gpu_memory_utilization: 0.45` in the manifest — **the per-tenant cap
+  override does reach vLLM**, closing the Tier 3 item that called it out as a
+  live bug whose fix was unverified. It is not silently 0.90.
+
+Two bugs blocked the CV baseline, both now fixed and both invisible to the
+unit tests — see 3.1.
 
 ### 1.3 The null test — the harness checking itself
 
@@ -144,51 +163,94 @@ baselines before believing any ratio.
 
 All of this is asserted in unit tests as *strings*. No test has run Docker.
 
-| Assumption | Where | How to check |
+| Assumption | Where | State |
 |---|---|---|
-| `--gpus device=N` pins one card | `triton_cv.build_triton_serve_cmd` | Launch two containers, confirm each sees one GPU |
-| Ports `base + 10*device` (8100 / 8110) | `triton_cv.triton_ports` | Two live containers, no bind conflict |
-| `--model-control-mode=explicit` + `--load-model=` | same | Each container loads *only* its own models |
-| Symlinking staged weights into another device's repo | `coloc._link_staged_weight` | GPU 1's container loads a model exported once into GPU 0's repo |
-| `perf_analyzer -u localhost:8110` | `coloc.triton_tenant_url` | Driver reaches the second container |
-| `CUDA_VISIBLE_DEVICES` pins vLLM tenants | `coloc.build_server_env` | `nvidia-smi` shows the process on the intended card |
-| The cap override actually reaches vLLM | `coloc._override_flag` | **Confirm the server logs the tenant's cap, not 0.90.** This was a live bug; the fix is unverified against a real vLLM |
-| One sampler per occupied card | `coloc.occupied_devices` | A `place-*` run must produce a `gpu_sampler` block with keys `"0"` AND `"1"`; a single-GPU run must have only `"0"` |
-| `nvidia-smi topo -m` capture | `coloc.capture_interconnect` | Manifest `environment.interconnect.nvlink_detected` should be `false` on this box — **this is the check that confronts the yaml's `nvlink: false`** |
-| MPS detection | `coloc.capture_mps` | With MPS running, `environment.mps.detected` must be `true`. If a multi-tenant run records the no-MPS warning, stop — Phase 0 measured 0.28× with MPS off |
+| The cap override actually reaches vLLM | `coloc._override_flag` | ✅ **confirmed.** Solo LLM baseline manifest records `gpu_memory_utilization: 0.45`, not 0.90 |
+| MPS detection | `coloc.capture_mps` | ✅ **confirmed** — `environment.mps.detected: true`. But see 3.1: detection was never the hard part |
+| Container joins MPS | `triton_cv.build_triton_serve_cmd` | ❌ **was broken, now fixed** — see 3.1 |
+| `--model-control-mode=explicit` + `--load-model=` | same | ✅ one container loads only `yolov8-l`; `READY` in ~2 s |
+| `--gpus device=N` pins one card | same | ⚠️ partial — one container sees exactly 1 device. **Two containers still untested** |
+| One sampler per occupied card | `coloc.occupied_devices` | ⚠️ partial — single-GPU run has only `"0"`, as required. The `place-*` two-key case is untested |
+| `nvidia-smi topo -m` capture | `coloc.capture_interconnect` | ✅ see 4.1 |
+| Ports `base + 10*device` (8100 / 8110) | `triton_cv.triton_ports` | ⬜ needs two live containers |
+| Symlinking staged weights into another device's repo | `coloc._link_staged_weight` | ⬜ untested |
+| `perf_analyzer -u localhost:8110` | `coloc.triton_tenant_url` | ⬜ untested |
+| `CUDA_VISIBLE_DEVICES` pins vLLM tenants | `coloc.build_server_env` | ⬜ untested |
 
-That last one matters most. The old code silently dropped the per-tenant cap
-so both tenants launched at 0.90 and the second OOMed — while the pre-flight
-called the plan fine. The fix is correct in tests; confirm vLLM honours it.
+### 3.1 The two MPS bugs, and why the tests could not see them
+
+Recorded because the *shape* of them generalises: both were in the seam
+between a correct function and its caller, which is exactly what a unit suite
+of pure functions cannot reach.
+
+**The CV tenant never joined MPS.** `build_triton_serve_cmd` had always
+accepted `mps_pipe_dir`, and a unit test asserted it honoured it — but
+`_ensure_server` never passed it. So every CV tenant ran on its own context
+and time-sliced against the LLM. Nothing warned: `capture_mps()` inspects the
+*host* daemon, which is genuinely running, so the manifest said
+`mps.detected: true`. New field `environment.mps.container_pipe_directory`
+now records what the container was actually given; `null` means it could not
+have joined.
+
+**Then passing the pipe made Triton fail outright.** The image runs as root,
+MPS servers are per-UID, and a non-root control daemon cannot spawn one for a
+different UID. Every model came back `UNAVAILABLE: unable to get number of
+CUDA devices`, `cuInit` → 805. Fixed with `--user <uid>:<gid>`. `--ipc=host`
+was tried and is **not** required. `--pid=host` does not help.
+
+The lesson for the remaining ⬜ rows: a passing assertion about the *string*
+a builder returns says nothing about whether the caller passes the argument,
+and nothing about whether the flag is sufficient. Verify at the seam.
+
+**`scripts/check_mps_clients.sh`** exists now for exactly this and should be
+run during any window whose ratios matter. `nvidia-smi` cannot answer the
+question: on Volta and later each MPS client keeps its own address space and
+lists as its own process, so separate `vllm` and `tritonserver` entries are
+what a *correctly shared* GPU looks like.
 
 ---
 
 ## Tier 4 — hardware facts assumed from the config file
 
-### 4.1 Interconnect
+### 4.1 Interconnect — ✅ ANSWERED 2026-08-04
 
 ```bash
 nvidia-smi topo -m
 ```
 
-`rtx_pro6000.yaml` records `nvlink: false`. If true, cross-GPU traffic is
-PCIe Gen5 and **tensor-parallel results would be dominated by interconnect
-rather than by contention** — which is why no TP colocations were written.
-Confirm before adding any. If NVLink is in fact present, TP becomes worth
-measuring and that decision should be revisited.
+**`PIX` between GPU0 and GPU1 — no NVLink.** The yaml's `nvlink: false` is
+correct, and it is now measured rather than assumed. Cross-GPU traffic is
+PCIe Gen5 x16, so tensor-parallel results here would be dominated by the
+interconnect rather than by contention: **the decision to write no TP
+colocations stands.** Revisit only on a box where `topo -m` shows `NV#`.
+
+Also on the record for this host, since neither is reconstructable later and
+both bear on published numbers:
+
+- **ECC is enabled** on both cards. It costs some effective bandwidth. Fixed
+  and consistent, so no ratio is distorted — but `dinov2-base` is the
+  bandwidth aggressor and its absolute figures are ECC-on figures.
+- **CUDA forward compatibility is active** in the Triton container (CUDA 13.3
+  via the compat shim against a 595.71.05 kernel driver). Supported, and it
+  works, but it applies to every CV tenant for the whole study.
+  `capture_environment()` does not record either of these today.
 
 ### 4.2 MPS with several containers
 
-Phase 0 validated MPS with one Triton container. The placement study runs
-**two** containers plus two vLLM processes against one MPS control daemon.
-Confirm the pipe is shared correctly and that Phase 0's 1.94× overlap still
-holds under that shape.
+One Triton container is now confirmed as an MPS client (3.1). The placement
+study runs **two** containers plus two vLLM processes against one control
+daemon. Confirm the pipe is shared correctly under that shape, and that the
+Phase 0 overlap still holds.
 
 ### 4.3 Clocks
 
 Pin power limit first, then `nvidia-smi -lgc` at 60–80% of max boost. Confirm
 no `clocks_throttle_reasons.active` fires during a run — a throttled run is
 thermodynamics, not contention, and must not be published as a finding.
+
+**Not yet applied on this host.** The Phase 0 probe reported no throttle
+reasons at stock clocks (600 W limit, 2430 MHz max boost, 27 °C idle), but
+that is not the same as having pinned them.
 
 ---
 
