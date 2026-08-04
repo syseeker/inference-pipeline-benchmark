@@ -88,6 +88,16 @@ KV cache budget **16 GB**
 
 ## Phase 3 — Mixed pairings at one fixed load
 
+> **The ILM tenant's numbers are provisional.** `kosmos-2.5` is configured at
+> 0.2 requests per second, and its measured solo ceiling on this hardware is
+> **0.133** — it achieved 0.133 against an offered 0.2 with 312 ms of server
+> queueing, alone on the card. A tenant already saturated in its own baseline
+> cannot show degradation: a neighbour arriving only deepens a queue that was
+> there anyway, so its ratio returns near 1.0 for the wrong reason. This affects
+> `mix-ilm-cv`, `mix-vlm-ilm` and `mix-full`, and `same-ilm` in Phase 2. The
+> rate wants dropping to about 0.1 for a future run; the ILM rows from the first
+> pass should be read as "it ran", not as a contention result.
+
 **Customer's intent.** Fixed concurrency (c4/rps50), vary model composition across all 8 mix types
 
 **Question this answers.** What does each realistic pairing cost, measured at one fixed load?
