@@ -334,9 +334,13 @@ models:
     role: "contention-vlm-video"
     notes: "Official AWQ. Native video input — carries the VLM prefill-burst dimension."
     weights_gb: 7.0             # 8.3B AWQ ≈ 0.3× BF16, plus the FP16 vision tower
+    # 32768, not 16384: the 10s/720p clip in vlm_video_long expands to 19184
+    # tokens, so at 16384 EVERY request came back 400 "Input length (19184)
+    # exceeds model's maximum context length" — measured, not estimated.
+    # A video VLM's context has to fit the video it is given.
     backend_args:
-      vllm: ["--max-model-len=16384"]
-      sglang: ["--context-length=16384"]
+      vllm: ["--max-model-len=32768"]
+      sglang: ["--context-length=32768"]
 
   # Customer pick that cannot serve the dimension it was chosen for. Kept —
   # it loads and serves IMAGE workloads fine — but video rounds skip with a

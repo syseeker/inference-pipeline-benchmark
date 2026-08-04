@@ -47,6 +47,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -602,6 +603,12 @@ def _map_request_record(obj: dict[str, Any]) -> dict[str, Any] | None:
     tokens = _metric_value(metrics, "output_sequence_length")
     if tokens is None:
         tokens = _metric_value(metrics, "output_token_count")
+    # A rejected request still gets a record, with an `error` block and no
+    # latency metrics. Marking it ok would turn a run where every request
+    # 400'd into a baseline with a plausible achieved_rps and null latencies —
+    # which is exactly what happened to the first qwen2.5-vl-7b window
+    # (178/178 rejected for exceeding max-model-len, recorded as clean).
+    err = obj.get("error") or {}
     return {
         "t_start_ms": float(start_ns) / 1e6,                         # epoch ns → ms
         "t_end_ms": (float(end_ns) / 1e6) if end_ns is not None else None,
@@ -609,7 +616,9 @@ def _map_request_record(obj: dict[str, Any]) -> dict[str, Any] | None:
         "itl_ms": _metric_value(metrics, "inter_token_latency"),     # ms (streaming only)
         "e2e_ms": e2e_ms,
         "output_tokens": int(tokens) if tokens is not None else None,
-        "ok": True,
+        "ok": not err,
+        "error_code": err.get("code"),
+        "error_message": (err.get("message") or None),
     }
 
 
@@ -622,6 +631,9 @@ def achieved_rps(records: list[dict[str, Any]]) -> float | None:
     """
     if records and records[0].get("measured_rps") is not None:
         return records[0]["measured_rps"]
+    # Successful requests only: a rejected request is not throughput. Counting
+    # errors here reported achieved ~= offered for a window that served nothing.
+    records = [r for r in records if r.get("ok", True)]
     stamps = [r["t_end_ms"] for r in records if r.get("t_end_ms") is not None]
     starts = [r["t_start_ms"] for r in records if r.get("t_start_ms") is not None]
     if len(stamps) < 2 or not starts:
@@ -780,6 +792,41 @@ def environment_warnings(coloc: Colocation, environment: dict[str, Any] | None) 
     return warnings
 
 
+def trace_warnings(traces: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """Per-tenant request failures, which no other check surfaces.
+
+    A tenant whose requests are all rejected still produces a full trace, a
+    manifest and a directory; before this existed it also produced an
+    achieved_rps indistinguishable from a healthy run. The first
+    qwen2.5-vl-7b baseline had 178/178 requests rejected with HTTP 400
+    ("Input length (19184) exceeds model's maximum context length (16384)")
+    and was recorded as a clean solo baseline — which every later window
+    would then have computed its degradation ratios against.
+    """
+    out: list[str] = []
+    for name, recs in sorted(traces.items()):
+        if not recs:
+            continue
+        bad = [r for r in recs if not r.get("ok", True)]
+        if not bad:
+            continue
+        codes = sorted({r.get("error_code") for r in bad if r.get("error_code")})
+        msg = next((r.get("error_message") for r in bad if r.get("error_message")), "")
+        detail = f" HTTP {'/'.join(str(c) for c in codes)}." if codes else ""
+        frac = f"{len(bad)}/{len(recs)}"
+        if len(bad) == len(recs):
+            out.append(
+                f"tenant {name!r}: ALL {frac} requests failed.{detail} This run measured "
+                f"nothing and must not be used as a baseline or a window. {msg[:300]}"
+            )
+        else:
+            out.append(
+                f"tenant {name!r}: {frac} requests failed.{detail} achieved_rps counts "
+                f"only the successful ones. {msg[:200]}"
+            )
+    return out
+
+
 # ─────────────────────────── manifest / result layout ──────────────────────
 
 @dataclass
@@ -853,6 +900,7 @@ def build_manifest(
     throttle_reasons: list[str] | None = None,
     achieved: dict[str, float | None] | None = None,
     environment: dict[str, Any] | None = None,
+    traces: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """The self-describing record for one colocation window.
 
@@ -896,7 +944,8 @@ def build_manifest(
         "gpu_sampler": {str(dev): summ for dev, summ in sorted(
             (sampler_summaries or {}).items(), key=lambda kv: int(kv[0]))},
         "environment": environment or {},
-        "warnings": environment_warnings(coloc, environment),
+        "warnings": (environment_warnings(coloc, environment)
+                     + trace_warnings(traces or {})),
         "throttle_reasons": sorted(throttle_reasons or []),
     }
 
@@ -1119,9 +1168,11 @@ class ColocationOrchestrator:
             manifest = build_manifest(
                 coloc, t0_epoch_ms=t0_epoch_ms, gpu=self.gpu,
                 sampler_summaries=sampler_summaries, achieved=achieved,
-                environment=environment,
+                environment=environment, traces=traces,
             )
             paths.manifest.write_text(json.dumps(manifest, indent=2))
+            for w in manifest.get("warnings", []):
+                print(f"  [warn] {w}", file=sys.stderr)
             return manifest
         finally:
             for h in servers:

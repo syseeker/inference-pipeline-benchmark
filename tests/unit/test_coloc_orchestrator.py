@@ -1273,3 +1273,63 @@ def test_capture_mps_records_what_containers_actually_got(tmp_path, monkeypatch)
     got = coloc.capture_mps()
     assert got["control_daemon_running"] is True
     assert got["container_pipe_directory"] is None
+
+
+# ── request failures must not read as a healthy run ─────────────────────────
+#
+# Regression: the first qwen2.5-vl-7b baseline had 178/178 requests rejected
+# with HTTP 400 ("Input length (19184) exceeds model's maximum context length
+# (16384)"). aiperf logged "All 178 inference request(s) failed"; the harness
+# wrote a manifest with achieved_rps 1.01, every trace row ok=true and every
+# latency null. Every later window would have computed its ratios against it.
+
+def _rec(start_ns, end_ns, *, error=None, latency=None):
+    obj = {"metadata": {"request_start_ns": start_ns, "request_end_ns": end_ns,
+                        "benchmark_phase": "profiling", "was_cancelled": False},
+           "metrics": ({"request_latency": {"value": latency}} if latency else {})}
+    if error:
+        obj["error"] = error
+    return obj
+
+
+def test_rejected_request_is_not_marked_ok():
+    err = {"code": 400, "type": "Bad Request", "message": "Input length (19184) exceeds"}
+    rec = coloc._map_request_record(_rec(1_000_000_000, 1_000_000_000, error=err))
+    assert rec["ok"] is False
+    assert rec["error_code"] == 400
+    assert "19184" in rec["error_message"]
+
+
+def test_successful_request_still_ok():
+    rec = coloc._map_request_record(_rec(1_000_000_000, 2_000_000_000, latency=12.5))
+    assert rec["ok"] is True and rec["error_code"] is None
+
+
+def test_achieved_rps_ignores_failed_requests():
+    """A window that served nothing must not report a healthy rate."""
+    failed = [{"t_start_ms": float(i), "t_end_ms": float(i), "ok": False} for i in range(100)]
+    assert coloc.achieved_rps(failed) is None
+
+    mixed = [{"t_start_ms": 0.0, "t_end_ms": 1000.0, "ok": True},
+             {"t_start_ms": 0.0, "t_end_ms": 2000.0, "ok": True},
+             {"t_start_ms": 0.0, "t_end_ms": 500.0, "ok": False}]
+    assert coloc.achieved_rps(mixed) == pytest.approx(1.0)
+
+
+def test_trace_warning_when_every_request_failed():
+    traces = {"vlm": [{"ok": False, "error_code": 400,
+                       "error_message": "Input length (19184) exceeds model's maximum"}] * 3}
+    (w,) = coloc.trace_warnings(traces)
+    assert "ALL 3/3" in w and "HTTP 400" in w
+    assert "must not be used as a baseline" in w
+    assert "19184" in w
+
+
+def test_trace_warning_for_partial_failure():
+    traces = {"llm": [{"ok": True}] * 8 + [{"ok": False, "error_code": 500}] * 2}
+    (w,) = coloc.trace_warnings(traces)
+    assert "2/10" in w and "ALL" not in w
+
+
+def test_no_trace_warning_for_a_clean_run():
+    assert coloc.trace_warnings({"llm": [{"ok": True}] * 5}) == []
