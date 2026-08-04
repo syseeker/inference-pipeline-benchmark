@@ -87,7 +87,7 @@ bench setup --backend vllm
 bench setup --backend sglang      # only if you'll run secondary-backend-llm-*
 
 # Can this box actually download every model? One HEAD request each, no GPU.
-python scripts/check_model_access.py --gpu rtx_pro6000
+python3 scripts/check_model_access.py --gpu rtx_pro6000
 ```
 
 Each backend gets its own venv (`.venv-vllm`, …) which the orchestrator
@@ -95,14 +95,27 @@ activates for you.
 
 **If any model comes back `GATED`:**
 
-```bash
-.venv-vllm/bin/hf auth login     # `hf`, not `huggingface-cli`; in the venv, not on PATH
-```
+1. Log in with a read token from <https://huggingface.co/settings/tokens>:
 
-Then open each blocked model's page and accept its licence, same account.
-Logging in alone does not grant access.
+   ```bash
+   .venv-vllm/bin/hf auth login    # `hf`, not `huggingface-cli`; in the venv, not on PATH
+   ```
 
-Re-run the check until it exits 0.
+2. Open each gated model's page **while signed in as that same account** and
+   click *Agree and access repository*. On `rtx_pro6000` there are two:
+
+   - <https://huggingface.co/google/gemma-2-9b-it>
+   - <https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct> — a form, and
+     approval is not instant
+
+3. Re-check until it exits 0:
+
+   ```bash
+   python3 scripts/check_model_access.py --gpu rtx_pro6000
+   ```
+
+`403 — logged in, licence not accepted` means step 2 is outstanding; `401 —
+not logged in` means step 1 is.
 
 ---
 
@@ -141,7 +154,7 @@ docker run --rm --gpus all -v "$PWD/$REPO/yolov8-l/1":/w \
 # 4. Docker wrote model.plan as root; Triton must be able to read it.
 sudo chown -R "$(id -u):$(id -g)" "$REPO"
 
-python scripts/build_contention_prompts.py --check
+python3 scripts/build_contention_prompts.py --check
 ```
 
 **What to expect:** `config.pbtxt` **and** `1/model.plan` under
@@ -228,7 +241,7 @@ time-slice scheduler rather than about GPU contention.
 
 **CLI:**
 ```bash
-python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
+python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 ```
 
 **What to expect:** aggregate throughput **> 1.0×** with MPS on. The reference
@@ -442,7 +455,7 @@ up to 7; this study is scoped to 2 GPUs.
 **CLI:**
 ```bash
 bench summary --gpu rtx_pro6000
-python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_dir>/
+python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_dir>/
 ```
 
 The **Contention analysis** section of `summary.md` gives three things (numbered §10 alongside a single-model sweep, §1 in a contention-only results dir):
@@ -527,7 +540,7 @@ The two do not interact.
 | Symptom | Cause | Action |
 |---|---|---|
 | `Command 'bench' not found` | CLI not installed | Step 0 |
-| `server not ready within budget` after ~600s, server log shows `GatedRepoError` / 401 | Model licence not accepted | `python scripts/check_model_access.py --gpu rtx_pro6000`, then Step 2 |
+| `server not ready within budget` after ~600s, server log shows `GatedRepoError` / 401 | Model licence not accepted | `python3 scripts/check_model_access.py --gpu rtx_pro6000`, then Step 2 |
 | `huggingface-cli: command not found` | Renamed to `hf`, and it is in the venv | `.venv-vllm/bin/hf auth login` |
 | `ModuleNotFoundError: ultralytics` | CV export deps missing, or wrong interpreter | `.venv-vllm/bin/pip install -r requirements-contention.txt`, and run the exporter with `.venv-vllm/bin/python` (Step 3) |
 | Phase 0 gives ~0.28× | MPS not active | Step 4. Do not proceed |

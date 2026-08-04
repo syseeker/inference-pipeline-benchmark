@@ -138,11 +138,15 @@ bench setup --backend sglang        # only if a colocation names sglang
 #     401s on config.json, exits, and the run waits out its full 600s
 #     readiness budget before saying "server not ready". Once per affected
 #     colocation. On rtx_pro6000: gemma2-9b and llama3.1-8b, both Phase 4.
-python scripts/check_model_access.py --gpu rtx_pro6000
-#     If GATED: `.venv-vllm/bin/hf auth login` (`hf`, not `huggingface-cli` —
-#     renamed in huggingface_hub 0.34; it is in the venv, not on PATH), THEN
-#     accept each licence at its model page with the same account. Logging in
-#     alone does not grant access.
+python3 scripts/check_model_access.py --gpu rtx_pro6000
+#     If GATED: (1) `.venv-vllm/bin/hf auth login` with a read token from
+#     https://huggingface.co/settings/tokens — `hf`, not `huggingface-cli`,
+#     and it is in the venv, not on PATH. (2) Accept the licence on each
+#     gated model's page as the same account:
+#       https://huggingface.co/google/gemma-2-9b-it
+#       https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct  (form, not instant)
+#     (3) Re-run this check until it exits 0. 403 = logged in but licence not
+#     accepted; 401 = not logged in.
 
 # 2. CV export deps. Not in requirements.txt / pyproject.toml on purpose —
 #    contention-only. `bench setup` does NOT install them. Needs a
@@ -184,14 +188,14 @@ echo get_default_active_thread_percentage | nvidia-cuda-mps-control   # expect 1
 # 5. Workload payloads. The .jsonl are committed, so this only verifies them —
 #    but a missing one silently drops --input-file and every LLM/VLM tenant
 #    runs on synthetic prompts instead of yours.
-python scripts/build_contention_prompts.py --check
+python3 scripts/build_contention_prompts.py --check
 ```
 
 ### The run
 
 ```bash
 # Phase 0 — GATE. Do this first and stop if it fails.
-python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
+python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 #   Confirms tenants genuinely overlap on the GPU rather than time-slicing.
 #   Also measures run-to-run variance (5x) — that sets the repetition policy.
 
@@ -222,7 +226,7 @@ bench coloc --gpu rtx_pro6000 --colocation place-p1
 bench summary --gpu rtx_pro6000                                # contention section
 # Runs land in coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/, shared
 # solo baselines in coloc/_baselines/solo-<backend>-<model>@<rps>-<hash>/.
-python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>/<run_dir>/
+python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>/<run_dir>/
 ```
 
 ## Pre-flight checks (do not skip)
