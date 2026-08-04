@@ -246,9 +246,14 @@ python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation
    never sends the video, so `cross-vlm-prefill-vs-llm` would run as a
    text-only workload and still produce plausible numbers.
 8. **Confirm the video is actually being sent.** Run
-   `cross-vlm-prefill-vs-llm` solo for ~30s and check the VLM tenant's
-   `input_sequence_length` is in the thousands, not ~30. That single number
-   separates "40-frame prefill burst" from "silently text".
+   `cross-vlm-prefill-vs-llm` solo and check `http_req_data_sent` in the
+   tenant's `profile_export.jsonl`: **~2,000 KB** per request for a 10s/720p
+   clip, against ~0.1 KB for a text tenant. **Do NOT use
+   `input_sequence_length`** — aiperf tokenizes the text only and never counts
+   multimodal expansion, so it reports ~29 for a request whose true length is
+   19,184 tokens (measured: vLLM rejected these exact requests at
+   `--max-model-len=16384`). Reading ~29 as "video not sent" is the wrong
+   conclusion from a correct run.
 9. **Confirm every tenant joined MPS.** `bench coloc` holds its terminal, so
    run this from a **second terminal** during a *contention* window (solo
    baselines run first and have only one tenant). Every tenant PID must appear

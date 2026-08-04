@@ -336,15 +336,27 @@ Do this before the VLM experiments, not after.
 bench coloc --gpu rtx_pro6000 --colocation cross-vlm-prefill-vs-llm --solo-only
 ```
 
-**What to expect:** the VLM tenant's `input_sequence_length` **in the
-thousands** — a 40-frame clip expands to several thousand tokens.
+**Check `http_req_data_sent`, not `input_sequence_length`:**
 
-**If it is ~30, the video is not being sent** and you are measuring a
-text-only workload. That means aiperf's `video` field is not reaching vLLM the
-way we assumed — most likely vLLM needs `--allowed-local-media-path`, which
-nothing in the yaml currently sets. This is the single most important check in
-the walkthrough: the whole prefill-burst premise depends on it, and it fails
-silently rather than loudly.
+```bash
+D=benchmarks/results/rtx_pro6000/coloc/_baselines/solo-vllm-qwen2.5-vl-7b@1-*/
+grep -o '"http_req_data_sent": {"value": [0-9.]*' $D/vlm.aiperf/profile_export.jsonl | head -3
+```
+
+**Want ~2,000 KB per request.** A text tenant sends ~0.1 KB, so the clip is
+four orders of magnitude larger and there is no ambiguity. TTFT corroborates
+it: 152 ms here against 40 ms for a text tenant on the same box.
+
+**`input_sequence_length` cannot answer this question.** aiperf tokenizes the
+text only and never counts multimodal expansion, so it reports ~29 for a video
+request whose true length is 19,184 tokens — measured, from vLLM rejecting
+these exact requests at `--max-model-len=16384`. Reading ~29 as "the video is
+not being sent" is the wrong conclusion from a correct run.
+
+If `http_req_data_sent` really is ~0.1 KB, the media is not reaching aiperf:
+check the workload's `data:` file exists (Step 3's payload check) rather than
+reaching for vLLM's `--allowed-local-media-path`, which is not how this
+harness delivers video — it inlines the clip as a `data:` URL.
 
 ---
 
@@ -547,7 +559,7 @@ The two do not interact.
 | Phase 0 reports `isolation: "none"` with MPS clearly running | `CUDA_MPS_PIPE_DIRECTORY` not exported in that shell | Step 4 — export it, re-run |
 | CV tenant fails to load | Triton model repo not built, or built to `model.onnx` while `config.pbtxt` says `backend: "tensorrt"` | Step 3 — run the `trtexec` step, or rebuild with `--triton-backend onnx` |
 | Ratios plausible but `nvidia-smi` shows separate `tritonserver` + `vllm` processes | CV container never joined MPS | Step 4 — export `CUDA_MPS_PIPE_DIRECTORY` in the shell running `bench coloc`; check `mps.container_pipe_directory` in the manifest |
-| VLM `input_sequence_length` ~30 | Video not being sent | Step 8; check `--allowed-local-media-path` |
+| VLM `http_req_data_sent` ~0.1 KB instead of ~2000 KB | Video not reaching aiperf | Step 8 — check the workload's `data:` file exists. `input_sequence_length` is text-only and reads ~29 even when the video IS sent; it is not the check |
 | Tenant 2 OOMs at startup | VRAM caps don't fit | `--dry-run`; check the derived caps in the manifest |
 | `achieved_rps` << `offered_rps` even solo | Load generator is the bottleneck | Lower the rate, or check the client host isn't CPU-saturated |
 | Ratios ≈ 1.0 everywhere | Load too low to contend | Raise the offered rate |
