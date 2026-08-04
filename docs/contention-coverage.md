@@ -306,8 +306,19 @@ should be raised with them directly.
 
 Two further picks are kept but degraded, and the customer should know:
 
-- **`paddleocr`** — its TensorRT path pins TRT 8.6.1.6 + CUDA 11.8, which cannot coexist with Triton 26.07's stack. Served on the Triton **Python backend**, unoptimised, rather than not at all.
-- **`kosmos-2.5`** — no vLLM or SGLang implementation exists. Also Triton Python backend.
+- **`paddleocr`** — its TensorRT path pins TRT 8.6.1.6 + CUDA 11.8, which cannot coexist with Triton 26.07's stack. Would be served on the Triton **Python backend**, unoptimised, rather than not at all. **No colocation references it**, so nothing is built for it today.
+- **`kosmos-2.5`** — no vLLM or SGLang implementation exists (confirmed against `ModelRegistry.get_supported_archs()`; the arch is `Kosmos2_5ForConditionalGeneration`). Triton Python backend, and **now working** — see below.
+
+### `kosmos-2.5`, as built 2026-08-04
+
+Named by 4 colocations (`same-ilm`, `mix-ilm-cv`, `mix-vlm-ilm`, `mix-full`) and, until this date, servable by none of them: it was absent from the `CV_MODELS` registry and had no `model.py`, so every one of those colocations failed at its first CV tenant.
+
+What it needed beyond the `model.py` the layout always referenced: the stock `tritonserver:26.07-py3` image ships **numpy and nothing else** — no torch, no transformers, no pillow — so a Python-backend model cannot import what it needs. `docker/Dockerfile.triton-python` builds the derived image (11 GB), and the image is chosen per container so TensorRT-only repos stay on the stock one.
+
+Two consequences the customer should know:
+
+- **Its Triton input is a trigger, not the image.** `perf_analyzer` can only synthesise tensors of the declared shape, and kosmos-2.5 consumes pix2struct-style `flattened_patches` of (4096, 770) — random floats there are not a document, and generation against them terminates erratically. `model.py` preprocesses the workload's real document and prompts once at load and replays them per request. This also satisfies the standing rule to hold a CV tenant's input fixed so measured variance is contention rather than content.
+- **It is driven at 0.2 rps, not the 2 rps originally specified.** Measured: 2205 ms per 256-token request, i.e. ~0.45 rps from one instance. The original rate was 4x its ceiling, and `same-ilm` swept `[1, 2, 4, 8]` — every point past saturation. A tenant pinned at its ceiling cannot show degradation, because a neighbour arriving only deepens its queue. Raising the rate means raising `instance_count`, which changes the tenant's VRAM claim and therefore what the colocation measures; that is a different experiment.
 
 Neither is a contention finding. If these two look slow in the results, that
 is the serving path, not the neighbour.
@@ -316,11 +327,14 @@ is the serving path, not the neighbour.
 
 ## What is outstanding
 
-**Construction is done.** As of 2026-08-03 everything on the original
+**Construction is done; hardware validation is under way** (started
+2026-08-04 on 2x RTX PRO 6000 — see
+[gpu-validation.md](../skills/gpu-contention-benchmark/reference/gpu-validation.md)
+for what has and has not been confirmed). As of 2026-08-03 everything on the original
 outstanding list is built — VRAM cap sizing, the four `same-*` colocations,
 the Phase 6 dual baseline, the memory-pressure curve, `mix-full`, per-GPU
 Triton containers and the Phase 5 placement study. **39 colocations** resolve
-with no VRAM pre-flight issues, under **341 unit tests**.
+with no VRAM pre-flight issues, under **389 unit tests**.
 
 What remains is **validation, not construction** — and it needs hardware.
 Nothing here has ever run on a GPU. The weight figures that set every derived
