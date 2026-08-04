@@ -23,8 +23,9 @@ First useful number in about 20 minutes. The full study is hours.
 
 - 1× or 2× NVIDIA GPUs. Written against RTX PRO 6000 Blackwell (96 GB, SM_120).
 - **MPS available and startable.** Without it the tenants time-slice instead of
-  overlapping and the whole study measures the scheduler. Phase 0 will catch it.
-- Docker, for the Triton CV tenants.
+  overlapping and the whole study measures the scheduler. Step 4 sets it up and
+  Phase 0 (Step 6) is the gate that proves it.
+- Docker, for the Triton CV tenants — and for the `trtexec` plan build in Step 3.
 - ~150 GB free disk for the model checkpoints in the roster.
 - `git`, `python>=3.10`, `pip`.
 - One of: Claude Code / Codex / Cursor.
@@ -89,32 +90,88 @@ activates for you.
 
 ## Step 3 — Build the CV models and check the payloads
 
-**This is the step that silently breaks everything if skipped.** The
-orchestrator writes each CV model's `config.pbtxt` but cannot produce its
-weights, so an unbuilt repo means every CV tenant fails to load — minutes into
-a window you're paying for.
+Nothing else builds the CV weights. An unbuilt repo means every CV tenant fails
+to load, minutes into a window you are paying for.
 
 **Prompt:**
 > "Build the Triton CV model repo for yolov8-l and dinov2-base, and verify the
 > contention workload payloads are present."
 
-**CLI:**
+**CLI** — four commands per model, in order:
+
 ```bash
-python scripts/build_triton_cv_repo.py --model yolov8-l    --triton-backend tensorrt \
-       --repo-root benchmarks/results/rtx_pro6000/triton_repo
-python scripts/build_triton_cv_repo.py --model dinov2-base --triton-backend tensorrt \
-       --repo-root benchmarks/results/rtx_pro6000/triton_repo
+REPO=benchmarks/results/rtx_pro6000/triton_repo
+
+# 1. CV export deps. `bench setup` does not install these.
+.venv-vllm/bin/pip install -r requirements-contention.txt
+
+# 2. Export the ONNX. Must be a torch-capable venv, not system python.
+.venv-vllm/bin/python scripts/build_triton_cv_repo.py --model yolov8-l \
+       --triton-backend tensorrt --repo-root "$REPO"
+.venv-vllm/bin/python scripts/build_triton_cv_repo.py --model dinov2-base \
+       --triton-backend tensorrt --repo-root "$REPO"
+
+# 3. Build the plan. The script PRINTS this command per model and does not run
+#    it — a plan built outside the container will not load inside it. Copy the
+#    printed command; the shapes differ per model.
+docker run --rm --gpus all -v "$PWD/$REPO/yolov8-l/1":/w \
+  nvcr.io/nvidia/tritonserver:26.07-py3 \
+  trtexec --onnx=/w/model.onnx --saveEngine=/w/model.plan \
+    --minShapes=images:1x3x640x640 --optShapes=images:8x3x640x640 \
+    --maxShapes=images:8x3x640x640
+
+# 4. Docker wrote model.plan as root; Triton must be able to read it.
+sudo chown -R "$(id -u):$(id -g)" "$REPO"
 
 python scripts/build_contention_prompts.py --check
 ```
 
-**What to expect:** a model directory per CV model under `triton_repo/`, and
-`prompts in sync` from the payload check. The `.jsonl` are committed, so the
-check should pass without writing anything.
+**What to expect:** `config.pbtxt` **and** `1/model.plan` under
+`triton_repo/<model>/`, and `prompts in sync` from the payload check.
+
+`--triton-backend onnx` skips the `trtexec` step, at the cost of the optimised
+path.
 
 ---
 
-## Step 4 — Dry-run the plan (no GPU needed)
+## Step 4 — Turn on MPS
+
+Without MPS the tenants time-slice the card instead of sharing it, and every
+number describes the scheduler. Step 6 is the gate that proves it.
+
+**Prompt:**
+> "Start MPS and confirm the daemon is up."
+
+**CLI:**
+```bash
+# 1. Persist the pipe dir. Every later shell needs it — it is how the pipe
+#    reaches the Triton containers, which cannot join MPS without it.
+cat >> ~/.bashrc <<'EOF'
+export CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+export CUDA_MPS_LOG_DIRECTORY=/var/log/nvidia-mps
+EOF
+source ~/.bashrc
+
+# 2. Start the daemon.
+sudo mkdir -p "$CUDA_MPS_LOG_DIRECTORY" && sudo chown "$(id -u):$(id -g)" "$CUDA_MPS_LOG_DIRECTORY"
+nvidia-cuda-mps-control -d
+
+# 3. Verify. Use the control socket, not pgrep.
+echo get_default_active_thread_percentage | nvidia-cuda-mps-control   # expect 100.0
+echo "$CUDA_MPS_PIPE_DIRECTORY"                                       # expect /tmp/nvidia-mps
+```
+
+**Do not set `CUDA_VISIBLE_DEVICES`.** Unset, the daemon serves every card —
+correct on 1, 4 or 8 GPUs. Setting it pins MPS to a fixed list and silently
+excludes the rest. Per-tenant placement is the yaml's `device:` key.
+
+The daemon does not survive a reboot; the `~/.bashrc` exports do.
+
+**Rollback:** `echo quit | nvidia-cuda-mps-control`
+
+---
+
+## Step 5 — Dry-run the plan (no GPU needed)
 
 Before spending a minute of GPU time, resolve every run and execute every
 pre-flight without launching anything.
@@ -128,19 +185,21 @@ bench coloc --gpu rtx_pro6000 --all --dry-run          # the whole study
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run   # just one
 ```
 
-**What to expect:** `[ok] coloc: plan: 39 colocation(s) → 163 run(s) (72 solo
-baseline(s) + 91 contention window(s))` for the whole study; `1 colocation(s) →
-3 run(s) (2 solo baseline(s) + 1 contention window(s))` for `mix-llm-cv`. A
-non-zero exit with `PRE-FLIGHT WOULD BLOCK THIS RUN` means a VRAM budget that
-cannot fit or a missing payload — fix it before proceeding. `--json` gives the
-per-run plan, including the directory each run will land in.
+**What to expect:**
 
-All 39 colocations were dry-run clean on a GPU-less box as of 2026-08-03, so a
-failure here is a local setup problem, not a config problem.
+```
+[ok] coloc: plan: 39 colocation(s) → 163 run(s) (72 solo baseline(s) + 91 contention window(s))
+```
+
+`mix-llm-cv` alone gives `1 colocation(s) → 3 run(s)`. Add `--json` for the
+per-run plan and the directory each run will land in.
+
+A non-zero exit with `PRE-FLIGHT WOULD BLOCK THIS RUN` means a VRAM budget that
+cannot fit or a missing payload. Fix it before proceeding.
 
 ---
 
-## Step 5 — Phase 0, the gate
+## Step 6 — Phase 0, the gate
 
 **Stop here if it fails.** Everything downstream becomes a statement about the
 time-slice scheduler rather than about GPU contention.
@@ -164,7 +223,7 @@ repetition policy for the rest of the study.
 
 ---
 
-## Step 6 — One colocation end-to-end
+## Step 7 — One colocation end-to-end
 
 **Prompt:**
 > "Run the mix-llm-cv colocation and show me the degradation ratios."
@@ -182,6 +241,25 @@ bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
 | solo | yolov8-l @50 rps, alone |
 | contention | both together |
 
+**Open a second terminal.** The command above holds this one until all three
+windows finish. Then check that the tenants are really sharing the GPU:
+
+```bash
+scripts/check_mps_clients.sh
+```
+
+It prints one of four verdicts:
+
+| | Meaning |
+|---|---|
+| `IDLE` | Nothing on the GPU. Between windows — re-run in a moment |
+| `PASS` … `Only one tenant` | A solo baseline. Correct, but not the check you want |
+| `PASS: all 2 GPU process(es) are MPS clients` | **This is the one.** The contention window is sharing properly |
+| `FAIL` | A tenant is outside MPS and time-slicing — this window's ratios are void. Re-check `CUDA_MPS_PIPE_DIRECTORY` from Step 4 |
+
+Keep re-running it until you see the 2-tenant `PASS`. The two solo baselines
+run first, so early on `IDLE` and 1-tenant `PASS` are both expected.
+
 **What to expect on disk**, under `benchmarks/results/rtx_pro6000/coloc/`:
 
 ```
@@ -190,20 +268,31 @@ _baselines/solo-triton-yolov8-l@50-d2b34069/  manifest.json  cv.ndjson
 mix-llm-cv/coloc-llm@4-cv@50-8a1c39f2/        manifest.json  llm.ndjson  cv.ndjson
 ```
 
-Contention windows live under their colocation id. Solo baselines live in the
-shared `_baselines/` directory, because a baseline belongs to the study rather
-than to whichever colocation asked for it first — that is what lets one
-baseline serve many colocations and what lets `--resume` recognise it. The
-directory name is `<tenant>@<rps>` plus a short hash of the run's identity, so
-`rps_sweep` / `vary` windows never collide; repetitions add `-r2`, `-r3`.
+**Check in each `manifest.json`:**
 
-Check in the manifest: `achieved_rps` close to `offered_rps` (if not, the load
-generator was the bottleneck, not the GPU), `gpu_sampler` with a `"0"` key, and
-an `environment` block recording interconnect and MPS.
+- `achieved_rps` close to `offered_rps` — if not, the load generator was the
+  bottleneck, not the GPU
+- `gpu_sampler` has a `"0"` key
+- `environment.mps.container_pipe_directory` is not `null`
+
+### Then lock the compute mode
+
+Now that a CV tenant is confirmed inside MPS, `EXCLUSIVE_PROCESS` makes any
+process that cannot reach MPS fail loudly instead of joining as an unmeasured
+tenant.
+
+```bash
+echo quit | nvidia-cuda-mps-control
+sudo nvidia-smi -c EXCLUSIVE_PROCESS    # add -i N to scope to one card
+nvidia-cuda-mps-control -d
+```
+
+Revert with `sudo nvidia-smi -c DEFAULT`. Neither the mode nor the daemon
+survives a reboot.
 
 ---
 
-## Step 7 — Confirm the video is actually being sent
+## Step 8 — Confirm the video is actually being sent
 
 Do this before the VLM experiments, not after.
 
@@ -230,7 +319,7 @@ silently rather than loudly.
 
 ## Before you start the long run — 15 minutes that de-risk the night
 
-Do **not** lead with `--all`. These four checks cost a quarter of an hour and
+Do **not** lead with `--all`. These five checks cost a quarter of an hour and
 each one fails in a way that would otherwise waste the whole study:
 
 ```bash
@@ -243,16 +332,25 @@ python scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 # 3. First live two-tenant window, with a real Triton container.
 bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
 
-# 4. Is the video actually being sent? input_sequence_length in the
+# 4. Are both tenants really sharing the GPU? IN A SECOND TERMINAL, while
+#    check 3 is in its contention window. Want "PASS: all 2 ...".
+scripts/check_mps_clients.sh
+
+# 5. Is the video actually being sent? input_sequence_length in the
 #    thousands, not ~30.
 bench coloc --gpu rtx_pro6000 --colocation cross-vlm-prefill-vs-llm --solo-only
 ```
 
 Only then start the study below and leave it running.
 
+Check 4 is the only one with no automated backstop: a CV tenant outside MPS
+still records `environment.mps.detected: true`, so nothing warns you.
+`environment.mps.container_pipe_directory` is the field that settles it —
+`null` means the container could not have joined.
+
 ---
 
-## Step 8 — Run the study
+## Step 9 — Run the study
 
 **Prompt:**
 > "Work through the contention study phase by phase and summarise each."
@@ -286,7 +384,7 @@ colocation at run 50 must not cost you the other 113.
 
 ---
 
-## Step 9 — Two GPUs
+## Step 10 — Two GPUs
 
 Only worth doing once the single-GPU numbers exist — the whole point is the
 comparison.
@@ -321,7 +419,7 @@ up to 7; this study is scoped to 2 GPUs.
 
 ---
 
-## Step 10 — Interpret
+## Step 11 — Interpret
 
 **Prompt:**
 > "Summarise the contention results and tell me which pairings are deployable."
@@ -404,9 +502,12 @@ The two do not interact.
 | Symptom | Cause | Action |
 |---|---|---|
 | `Command 'bench' not found` | CLI not installed | Step 0 |
-| Phase 0 gives ~0.28× | MPS not active | Start MPS, re-run. Do not proceed |
-| CV tenant fails to load | Triton model repo not built | Step 3 |
-| VLM `input_sequence_length` ~30 | Video not being sent | Step 7; check `--allowed-local-media-path` |
+| `ModuleNotFoundError: ultralytics` | CV export deps missing, or wrong interpreter | `.venv-vllm/bin/pip install -r requirements-contention.txt`, and run the exporter with `.venv-vllm/bin/python` (Step 3) |
+| Phase 0 gives ~0.28× | MPS not active | Step 4. Do not proceed |
+| Phase 0 reports `isolation: "none"` with MPS clearly running | `CUDA_MPS_PIPE_DIRECTORY` not exported in that shell | Step 4 — export it, re-run |
+| CV tenant fails to load | Triton model repo not built, or built to `model.onnx` while `config.pbtxt` says `backend: "tensorrt"` | Step 3 — run the `trtexec` step, or rebuild with `--triton-backend onnx` |
+| Ratios plausible but `nvidia-smi` shows separate `tritonserver` + `vllm` processes | CV container never joined MPS | Step 4 — export `CUDA_MPS_PIPE_DIRECTORY` in the shell running `bench coloc`; check `mps.container_pipe_directory` in the manifest |
+| VLM `input_sequence_length` ~30 | Video not being sent | Step 8; check `--allowed-local-media-path` |
 | Tenant 2 OOMs at startup | VRAM caps don't fit | `--dry-run`; check the derived caps in the manifest |
 | `achieved_rps` << `offered_rps` even solo | Load generator is the bottleneck | Lower the rate, or check the client host isn't CPU-saturated |
 | Ratios ≈ 1.0 everywhere | Load too low to contend | Raise the offered rate |

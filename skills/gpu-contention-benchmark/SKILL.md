@@ -123,16 +123,44 @@ export PATH="$HOME/venv/bin:$PATH"
 bench setup --backend vllm
 bench setup --backend sglang        # only if a colocation names sglang
 
-# 2. CV models into a Triton model repo. NOTHING ELSE DOES THIS — the
+# 2. CV export deps. Not in requirements.txt / pyproject.toml on purpose —
+#    contention-only. `bench setup` does NOT install them. Needs a
+#    torch-capable venv; system python gives ModuleNotFoundError: ultralytics.
+.venv-vllm/bin/pip install -r requirements-contention.txt
+
+# 3. CV models into a Triton model repo. NOTHING ELSE DOES THIS — the
 #    orchestrator writes each model's config.pbtxt but cannot produce the
 #    weights, so an unbuilt repo means every CV tenant fails to load.
 #    One invocation per (model, backend) a colocation references.
-python scripts/build_triton_cv_repo.py --model yolov8-l   --triton-backend tensorrt \
-       --repo-root benchmarks/results/rtx_pro6000/triton_repo
-python scripts/build_triton_cv_repo.py --model dinov2-base --triton-backend tensorrt \
-       --repo-root benchmarks/results/rtx_pro6000/triton_repo
+.venv-vllm/bin/python scripts/build_triton_cv_repo.py --model yolov8-l \
+       --triton-backend tensorrt --repo-root benchmarks/results/rtx_pro6000/triton_repo
+.venv-vllm/bin/python scripts/build_triton_cv_repo.py --model dinov2-base \
+       --triton-backend tensorrt --repo-root benchmarks/results/rtx_pro6000/triton_repo
 
-# 3. Workload payloads. The .jsonl are committed, so this only verifies them —
+#    With --triton-backend tensorrt that is only HALF the build: the script
+#    exports model.onnx and PRINTS a trtexec command it deliberately does not
+#    run (a host-built plan will not load in the container). Run the printed
+#    command per model, or use --triton-backend onnx to get a one-step build.
+#    config.pbtxt + model.onnx alone = Triton fails to load at the first window.
+
+# 4. MPS. Without it tenants time-slice and the study measures the scheduler.
+#    Do NOT set CUDA_VISIBLE_DEVICES — unset, the daemon serves every card,
+#    which is what you want on 1, 4 or 8 GPUs. Setting it pins MPS to a fixed
+#    list and silently excludes the rest.
+#    Persist the pipe dir rather than exporting it once: it must be set in
+#    whichever shell later runs `bench coloc`, because that is how the pipe
+#    reaches the Triton containers, which cannot join MPS without it.
+echo 'export CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps' >> ~/.bashrc
+source ~/.bashrc
+nvidia-cuda-mps-control -d
+echo get_default_active_thread_percentage | nvidia-cuda-mps-control   # expect 100.0
+#    Verify with the control socket, NOT pgrep: the daemon's name is 23 chars
+#    and comm truncates to 15, so `pgrep -x nvidia-cuda-mps-control` never
+#    matches a running daemon. `pgrep -f` does.
+#    Export the pipe dir in the SAME shell as `bench coloc` — that is how it
+#    reaches the Triton containers, which must bind-mount it to join MPS.
+
+# 5. Workload payloads. The .jsonl are committed, so this only verifies them —
 #    but a missing one silently drops --input-file and every LLM/VLM tenant
 #    runs on synthetic prompts instead of yours.
 python scripts/build_contention_prompts.py --check
@@ -203,6 +231,23 @@ python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>
    `cross-vlm-prefill-vs-llm` solo for ~30s and check the VLM tenant's
    `input_sequence_length` is in the thousands, not ~30. That single number
    separates "40-frame prefill burst" from "silently text".
+9. **Confirm every tenant joined MPS.** `bench coloc` holds its terminal, so
+   run this from a **second terminal** during a *contention* window (solo
+   baselines run first and have only one tenant). Every tenant PID must appear
+   in an MPS client list:
+   ```bash
+   scripts/check_mps_clients.sh      # want: PASS: all 2 GPU process(es) are MPS clients
+   ```
+   It prints `IDLE` between windows, a 1-tenant `PASS` during a solo baseline,
+   and `FAIL` naming any GPU process that is not an MPS client.
+   **Do not judge this from `nvidia-smi` alone**: on
+   Volta and later each MPS client keeps its own address space and lists as its
+   own process, so separate `tritonserver` and `vllm` entries are what a
+   correctly shared GPU looks like. A host daemon running is also not evidence —
+   a container only joins if `CUDA_MPS_PIPE_DIRECTORY` is bind-mounted in, so
+   `environment.mps.detected` can be `true` while the CV tenant is outside MPS
+   entirely. `environment.mps.container_pipe_directory` is the manifest field
+   that answers it; `null` means it could not have joined.
 
 ## Failure recovery
 
