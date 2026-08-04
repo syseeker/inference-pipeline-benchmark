@@ -682,7 +682,7 @@ A run that loads only proves the cap is *sufficient*, not that the estimate is
 outside. Snapshot `nvidia-smi --query-gpu=memory.used` after each server reports
 ready, or add a memory-used field to the sampler, and Tier 2 becomes checkable.
 
-### Three colocations are missing `kv_budget_gb`, and all three need it
+### Two colocations are missing `kv_budget_gb`, and both need it
 
 `cross-vlm-prefill-vs-llm` and `place-vlm-prefill-split` set no
 `kv_budget_gb`, so no `--kv-cache-memory-bytes` is emitted and the tenants fall
@@ -701,11 +701,6 @@ colocations, which is exactly the case that needs an absolute KV size.
 sit on separate cards, so neither sees the other's memory. Same missing config,
 no symptom — it would fail the moment they shared a GPU.
 
-`cross-memory-pressure-kv29` has the same gap and is the worst case of the
-three: `qwen2.5-72b` (cap 0.69) and `qwen2.5-7b` (cap 0.28) both on device 0,
-**combined 0.97 — 93.1 GB of 96**, with `repetitions: 3`, so it costs three runs
-rather than one.
-
 **Confirmed in this run.** `cross-vlm-prefill-vs-llm` failed exactly as
 predicted, in `llm.server.log`:
 
@@ -717,12 +712,25 @@ Try increasing `gpu_memory_utilization` when initializing the engine.
 The tenant is `gemma-2-9b`, which serves without trouble in `same-llm` — so this
 is the colocation's missing KV reservation, not the model.
 
-By contrast `mix-memory-bound` sets `kv_budget_gb: 6.0` on both of its vLLM
-tenants (caps 0.55 + 0.39 = 0.94) and is correctly configured despite an even
-tighter combined cap. Ceiling height is not the problem; the missing private
-reservation is.
+Add `kv_budget_gb` to both.
 
-Add `kv_budget_gb` to all three. Every other two-vLLM colocation already has one.
+**Do NOT extend this to `cross-memory-pressure-kv03/13/22/29`.** That family
+omits `kv_budget_gb` deliberately, and the yaml says why: the derive-from-budget
+rule exists to hold the KV cache *constant* so a comparison isolates the
+neighbour, but in this family the KV cache **is the swept variable** (3 → 13 →
+22 → 29 GB total, set through explicit caps). Adding a budget there would pin
+the exact quantity under test and flatten the curve.
+
+Its risk is different and is the experiment working as designed: the `kv03`
+rung deliberately starves KV (2.0 GB anchor, 1.0 GB neighbour). If vLLM cannot
+place a single sequence in that, it will emit the same `ValueError` — but that
+would be a **result** (the rung sits below the minimum viable KV on this card),
+not a misconfiguration. Record the rung as "below minimum viable KV" rather than
+fixing it; the cliff it is hunting may simply lie above `kv03`.
+
+The distinction to carry forward: **missing `kv_budget_gb` is a defect only where
+KV is meant to be a controlled constant.** Where KV is the variable, explicit
+caps are correct.
 
 ### `duration_s` propagates through `extends:`, and sweeps multiply it
 
