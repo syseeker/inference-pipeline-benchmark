@@ -1668,16 +1668,39 @@ def _link_staged_weight(src: Path, dest: Path) -> None:
     scripts/build_triton_cv_repo.py exports each model's weights ONE time, into
     the staging repo (= GPU 0's repo). A second card's repo carries only its own
     configs, so without this its version dir is empty and Triton refuses to load
-    the model. Symlink rather than copy: a TensorRT plan is hundreds of MB and
-    both containers only ever read it. Silent when the weights are not staged
-    yet — _wait_ready is where that surfaces, with the export instructions.
+    the model.
+
+    HARD link, not a symlink. The container mounts only its own repo at /models,
+    so a symlink to the staging repo's absolute host path dangles inside it:
+
+      Failed to determine modification time for '/models/yolov8-l/1/model.plan'
+      unable to load plan file to auto complete config
+
+    which is how the two-GPU null test failed on its first run. A hard link is a
+    real directory entry inside the mounted tree and costs no extra disk — both
+    repos are on one filesystem, and both containers only ever read the file.
+    Copy is the fallback for a cross-device layout.
+
+    Siblings come too: a torch-exported ONNX keeps its weights in an external
+    `model.onnx.data` next to the graph, and linking only the file Triton is
+    configured to load would leave the model unloadable for a subtler reason.
+
+    Silent when the weights are not staged yet — _wait_ready is where that
+    surfaces, with the export instructions.
     """
-    if dest.exists() or not src.exists():
+    if not src.exists():
         return
-    try:
-        dest.symlink_to(src)
-    except OSError:
-        shutil.copyfile(src, dest)
+    for f in sorted(src.parent.iterdir()):
+        if not f.is_file():
+            continue
+        target = dest.parent / f.name
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(f, target)
+        except OSError:
+            shutil.copyfile(f, target)
 
 
 def _has_flag(cmd: list[str], flag: str) -> bool:

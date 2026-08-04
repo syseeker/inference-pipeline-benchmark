@@ -1708,3 +1708,44 @@ def test_request_count_scales_with_rate_and_duration():
 def test_request_count_is_never_zero():
     """A sub-1-rps tenant in a short window still has to send something."""
     assert _pa(0.01, 10)[_pa(0.01, 10).index("--request-count") + 1] == "1"
+
+
+# ── per-device weights must exist INSIDE the container ──────────────────────
+#
+# Regression: the second card's repo symlinked to the staging repo's absolute
+# host path, but a container mounts only its own repo at /models, so the link
+# dangled inside it. The two-GPU null test failed on its first run with
+# "Failed to determine modification time for '/models/yolov8-l/1/model.plan'".
+
+def test_staged_weight_is_a_real_file_not_a_symlink(tmp_path):
+    src = tmp_path / "staging" / "m" / "1" / "model.plan"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"plan")
+    dest = tmp_path / "gpu1" / "m" / "1" / "model.plan"
+
+    coloc._link_staged_weight(src, dest)
+
+    assert dest.exists() and not dest.is_symlink(), (
+        "a symlink to the staging repo dangles inside the container"
+    )
+    assert dest.stat().st_nlink == 2, "hard link — no second copy of a 200 MB plan"
+
+
+def test_external_weight_data_is_linked_too(tmp_path):
+    """A torch-exported ONNX keeps its weights in model.onnx.data beside the
+    graph; linking only the configured file leaves the model unloadable."""
+    d = tmp_path / "staging" / "m" / "1"
+    d.mkdir(parents=True)
+    (d / "model.onnx").write_bytes(b"graph")
+    (d / "model.onnx.data").write_bytes(b"weights")
+    dest = tmp_path / "gpu1" / "m" / "1" / "model.onnx"
+
+    coloc._link_staged_weight(d / "model.onnx", dest)
+
+    assert (dest.parent / "model.onnx.data").exists()
+
+
+def test_linking_is_silent_when_nothing_is_staged(tmp_path):
+    coloc._link_staged_weight(tmp_path / "absent" / "model.plan",
+                              tmp_path / "gpu1" / "model.plan")
+    assert not (tmp_path / "gpu1").exists()
