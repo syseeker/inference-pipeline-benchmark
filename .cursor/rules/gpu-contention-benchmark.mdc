@@ -49,7 +49,7 @@ a step, and commit the change.
 | 5 | `colocations:` config schema | ✅ done (rtx_pro6000; 5090/H200 pending) |
 | 6 | `bench coloc` orchestrator | ✅ HTTP path live-validated (`benchmarks/coloc.py`, `bench coloc`, 27 unit tests). End-to-end solo run on PRO 6000 via config: orchestrator launched the server, held t0, ran one DCGM sampler, aiperf-streamed 58 reqs → `llm.ndjson` (epoch ts + TTFT + ITL), achieved_rps 4.02 vs offered 4.0, no throttle. Pinned the real aiperf `{metadata,metrics}` schema. **Note:** contention tenants need `--streaming` (done) and a vllm backend **variant without the `--gpu-memory-utilization=0.90` pin** in `extra_args`, else per-tenant caps can't take effect. Triton CV tenant server side is step 7 |
 | 7 | Triton CV tenants | ✅ built, and **one container live-validated 2026-08-04**: `yolov8-l` READY in ~2 s, loaded via `--model-control-mode=explicit`, confirmed an MPS client. Needed two fixes invisible to the tests — `coloc` never passed `mps_pipe_dir` (CV ran outside MPS, silently), and the container must run `--user <uid>:<gid>` because MPS servers are per-UID and the image is root. CV plans also now build at the yaml's declared fp16; `trtexec --fp16` is gone in TRT v11 (strongly typed), so precision comes from the ONNX. **Two containers / placement still untested** |
-| 8 | Contention analysis (summary §10, `align_traces.py`) | ✅ done (`scripts/align_traces.py`: aligns all tenant traces to t0, computes overlap window + per-tenant stats; `benchmarks/summary.py` §10: degradation table, contention matrix, safe-operating-envelope section. 92 unit tests pass) |
+| 8 | Contention analysis (summary contention section, `align_traces.py`) | ✅ done (`scripts/align_traces.py`: aligns all tenant traces to t0, computes overlap window + per-tenant stats; `benchmarks/summary.py` §10: degradation table, contention matrix, safe-operating-envelope section. 92 unit tests pass) |
 
 ### Continuing on another machine
 
@@ -202,7 +202,7 @@ bench coloc --gpu rtx_pro6000 --colocation mix-full            # all 4 categorie
 bench coloc --gpu rtx_pro6000 --colocation place-isolated      # null test: ratio ~1.0
 bench coloc --gpu rtx_pro6000 --colocation place-p1
 
-bench summary --gpu rtx_pro6000                                # §10 = contention
+bench summary --gpu rtx_pro6000                                # contention section
 # Runs land in coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/, shared
 # solo baselines in coloc/_baselines/solo-<backend>-<model>@<rps>-<hash>/.
 python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation>/<run_dir>/

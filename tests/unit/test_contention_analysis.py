@@ -456,11 +456,11 @@ def test_summary_written_for_contention_only_results(tmp_path, monkeypatch):
     gpu_dir.mkdir()
     monkeypatch.setattr(S, "_load_aggregate_rows", lambda d: [])
     monkeypatch.setattr(S, "_load_per_scenario", lambda d: {})
-    monkeypatch.setattr(S, "_coloc_section", lambda d: ["## 10. Contention analysis", ""])
+    monkeypatch.setattr(S, "_coloc_section", lambda d, **kw: ["## 1. Contention analysis", ""])
 
     res = CliRunner().invoke(S.app, ["--gpu", "rtx_pro6000", "--results-dir", str(tmp_path)])
     assert res.exit_code == 0, res.output
-    assert "## 10. Contention analysis" in (gpu_dir / "summary.md").read_text()
+    assert "## 1. Contention analysis" in (gpu_dir / "summary.md").read_text()
 
 
 def test_summary_still_exits_when_there_is_nothing_at_all(tmp_path, monkeypatch):
@@ -469,6 +469,27 @@ def test_summary_still_exits_when_there_is_nothing_at_all(tmp_path, monkeypatch)
     (tmp_path / "rtx_pro6000").mkdir()
     monkeypatch.setattr(S, "_load_aggregate_rows", lambda d: [])
     monkeypatch.setattr(S, "_load_per_scenario", lambda d: {})
-    monkeypatch.setattr(S, "_coloc_section", lambda d: [])
+    monkeypatch.setattr(S, "_coloc_section", lambda d, **kw: [])
     res = CliRunner().invoke(S.app, ["--gpu", "rtx_pro6000", "--results-dir", str(tmp_path)])
     assert res.exit_code == 2
+
+
+def test_contention_section_numbered_1_when_it_stands_alone(tmp_path, monkeypatch):
+    """A coloc-only results dir has no single-model sections 1-9, so opening at
+    "## 10" reads as though nine sections failed to generate."""
+    from typer.testing import CliRunner
+    from benchmarks import summary as S
+
+    gpu_dir = tmp_path / "g"; gpu_dir.mkdir()
+    monkeypatch.setattr(S, "_load_per_scenario", lambda d: {})
+    monkeypatch.setattr(S, "_load_coloc_runs", lambda d: [{"manifest": {"is_solo": True}}])
+    monkeypatch.setattr(S, "_build_solo_index", lambda r: {})
+    monkeypatch.setattr(S, "_degradation_table", lambda r, i: ["|t|"])
+    monkeypatch.setattr(S, "_contention_matrix", lambda r, i: [])
+    monkeypatch.setattr(S, "_envelope_section", lambda r: ["none"])
+
+    monkeypatch.setattr(S, "_load_aggregate_rows", lambda d: [])
+    CliRunner().invoke(S.app, ["--gpu", "g", "--results-dir", str(tmp_path)])
+    txt = (gpu_dir / "summary.md").read_text()
+    assert "## 1. Contention analysis" in txt and "## 10." not in txt
+    assert "### 1a. Degradation table" in txt

@@ -361,7 +361,7 @@ it as contention.
 
 ## 6. How to read the output
 
-`bench summary --gpu <gpu>` writes a §10 *Contention* section into
+`bench summary --gpu <gpu>` writes a *Contention analysis* section into
 `summary.md`, containing three things:
 
 **The degradation table** — one row per (colocation, tenant): throughput

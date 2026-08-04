@@ -1284,8 +1284,16 @@ def _envelope_section(runs: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _coloc_section(gpu_dir: Path) -> list[str]:
-    """§10 — full contention-analysis section. Empty list if no coloc data."""
+def _coloc_section(gpu_dir: Path, *, number: int = 10) -> list[str]:
+    """The contention-analysis section. Empty list if no coloc data.
+
+    `number` is 10 when the single-model sections 1-9 are present and 1 when
+    they are not: `bench coloc` writes no aggregate rows, so a contention-only
+    summary would otherwise open at "## 10" with nothing above it and read as
+    though nine sections had failed to generate. Callers that cite this section
+    by number must therefore not assume 10 — refer to it as the contention
+    section.
+    """
     runs = _load_coloc_runs(gpu_dir)
     if not runs:
         return []
@@ -1295,7 +1303,7 @@ def _coloc_section(gpu_dir: Path) -> list[str]:
     n_contention = len(runs) - n_solo
 
     lines: list[str] = []
-    lines.append("## 10. Contention analysis")
+    lines.append(f"## {number}. Contention analysis")
     lines.append("")
     lines.append(
         f"{n_solo} solo baseline(s), {n_contention} contention window(s). "
@@ -1303,19 +1311,19 @@ def _coloc_section(gpu_dir: Path) -> list[str]:
     )
     lines.append("")
 
-    lines.append("### 10a. Degradation table")
+    lines.append(f"### {number}a. Degradation table")
     lines.append("")
     lines.extend(_degradation_table(runs, solo_idx))
     lines.append("")
 
     matrix_lines = _contention_matrix(runs, solo_idx)
     if matrix_lines:
-        lines.append("### 10b. Contention matrix")
+        lines.append(f"### {number}b. Contention matrix")
         lines.append("")
         lines.extend(matrix_lines)
         lines.append("")
 
-    lines.append("### 10c. Safe-operating envelope")
+    lines.append(f"### {number}c. Safe-operating envelope")
     lines.append("")
     lines.extend(_envelope_section(runs))
     lines.append("")
@@ -1342,7 +1350,9 @@ def main(
     # under coloc/, never the single-model aggregate rows. Bailing on rows alone
     # threw away a complete set of contention results — every section below is
     # already guarded on `if rows`, so there is nothing to protect against here.
-    coloc_block = _coloc_section(gpu_dir)
+    # Numbered 1 when it stands alone: sections 1-9 are single-model and are
+    # not generated for a contention-only results dir.
+    coloc_block = _coloc_section(gpu_dir, number=10 if rows else 1)
 
     if not rows and not grouped and not coloc_block:
         typer.echo(f"no result rows found under {gpu_dir}", err=True)

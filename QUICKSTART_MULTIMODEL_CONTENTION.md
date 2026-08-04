@@ -402,7 +402,7 @@ bench summary --gpu rtx_pro6000
 python scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_dir>/
 ```
 
-`summary.md` §10 gives three things:
+The **Contention analysis** section of `summary.md` gives three things (numbered §10 alongside a single-model sweep, §1 in a contention-only results dir):
 
 - **Degradation table** — throughput retention and p50/p95/TTFT ratios per
   tenant against its matched solo baseline. The primary result.
@@ -460,7 +460,7 @@ contention windows — and each run then does:
 7. **Write** `manifest.json` plus one `.ndjson` of per-request records per
    tenant.
 
-`bench summary` then reads every manifest under `<gpu>/coloc/` and builds §10.
+`bench summary` then reads every manifest under `<gpu>/coloc/` and builds the contention section.
 
 **`scripts/run_all_scenarios.sh` is not used here.** It is the single-model
 sweep driver and its invariants — one model, kill the server every round —
