@@ -640,6 +640,45 @@ runs in a container and may become the bottleneck itself, which would measure
 the client rather than the GPU. Run the tenant solo at the intended top rate and
 confirm `achieved_rps` still tracks `offered_rps`.
 
+### Two colocations are missing `kv_budget_gb`, and both need it
+
+`cross-vlm-prefill-vs-llm` and `place-vlm-prefill-split` set no
+`kv_budget_gb`, so no `--kv-cache-memory-bytes` is emitted and the tenants fall
+back to `--gpu-memory-utilization` — which is a *total device* target, not a
+private reservation. The second tenant to start computes a negative KV budget
+and dies:
+
+```
+ValueError: No available memory for the cache blocks
+```
+
+That is the same failure `mix-full` had. Both of these are two-vLLM-tenant
+colocations, which is exactly the case that needs an absolute KV size.
+
+`place-vlm-prefill-split` did **not** fail in Phase 5 only because its tenants
+sit on separate cards, so neither sees the other's memory. Same missing config,
+no symptom — it would fail the moment they shared a GPU.
+
+Add `kv_budget_gb` to both. Every other two-vLLM colocation already has one.
+
+### `duration_s` propagates through `extends:`, and sweeps multiply it
+
+`cross-ilm-vs-cv` inherits `duration_s: 600` from `mix-ilm-cv`. That window was
+chosen for kosmos at 0.1 req/s (60 requests); applied to the same colocation's
+200 req/s CV rung it asks for **120,000 requests**, five times what the CV solo
+baseline sent. Both drivers produced no output at that rung and the run was lost.
+
+A window length has to suit the *highest* rung of any sweep that inherits it,
+not just the tenant it was chosen for. Either set `duration_s` explicitly on
+colocations that sweep, or scale the window per rung.
+
+### The driver timeout shares one deadline across tenants
+
+`ColocationOrchestrator.run` computes one deadline for all drivers, so a hung
+driver can consume the budget a healthy sibling was still waiting on. Give each
+driver its own timeout. (Not established as the cause of the `cross-ilm-vs-cv`
+loss above — both drivers produced nothing there — but it is a real weakness.)
+
 ### One repetition is not enough at low utilisation
 
 Phase 0 measured run-to-run variance at 1.8% and set `recommended_reps: 1`. That
