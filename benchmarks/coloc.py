@@ -103,6 +103,17 @@ def preflight_vram(tenants: list[Tenant]) -> list[str]:
     stay ≤ 1.0. An uncapped vLLM tenant is treated as claiming 0.90, because
     that is what it will actually take.
 
+    That sum is a budget check, NOT a statement about how vLLM reads the flag.
+    `--gpu-memory-utilization` is a target for TOTAL device utilisation — vLLM
+    sizes KV from `total * util - torch.cuda.mem_get_info()`, and mem_get_info
+    counts every process on the card — so caps summing under 1.0 does not stop
+    a tenant whose cap is lower than what its neighbours already hold from
+    computing a negative KV budget and dying with "No available memory for the
+    cache blocks". mix-full failed exactly that way while passing this check.
+    The fix is elsewhere: `build_server_cmd` states the KV size absolutely via
+    `--kv-cache-memory-bytes`, which vLLM honours without profiling and without
+    reference to the cap. This function still bounds the total.
+
     The sum is per GPU, not per colocation: two tenants at 0.9 on different
     cards fit fine, and rejecting them would forbid the multi-GPU windows the
     schema now allows. A tensor-parallel tenant charges its fraction in FULL to
@@ -314,10 +325,26 @@ def build_server_cmd(
         return None
 
     cap = tenant.gpu_memory_utilization
+    kv_gb = tenant.kv_budget_gb
     if r.backend == "vllm":
         cmd = [vllm_bin, "serve", r.hf_id, "--port", str(r.port), *r.launch_args]
         if cap is not None:
             cmd = _override_flag(cmd, "--gpu-memory-utilization", str(cap))
+        if kv_gb:
+            # `--gpu-memory-utilization` is a fraction of the WHOLE CARD, not a
+            # private slice: vLLM sizes the KV cache from
+            # `total * util - torch.cuda.mem_get_info()`, and mem_get_info
+            # counts every process on the device. So a tenant whose cap is
+            # lower than what its neighbours already hold computes a negative
+            # budget and dies with "No available memory for the cache blocks" —
+            # which is exactly how mix-full's VLM failed behind a 37 GB LLM,
+            # while the pre-flight said the plan was fine because the caps
+            # summed to under 1.0.
+            #
+            # kv_budget_gb is already the absolute KV size the study means, so
+            # state it directly and stop the cap being load-bearing.
+            cmd = _override_flag(cmd, "--kv-cache-memory-bytes",
+                                 str(int(kv_gb * 1024 ** 3)))
         return cmd
     if r.backend == "sglang":
         cmd = [

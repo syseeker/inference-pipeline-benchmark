@@ -1638,3 +1638,41 @@ def test_achieved_far_below_offered_is_warned():
     c = _window(id="x", tenants=[_cv_tenant(name="cv", model="yolov8-l")])
     (w,) = coloc.rate_warnings(c, {"cv": 1.0})     # offered 50
     assert "under half the offered" in w
+
+
+# ── KV size must be absolute, not a fraction of the card ────────────────────
+#
+# Regression: mix-full's VLM died with "No available memory for the cache
+# blocks" behind a 37 GB LLM, while the pre-flight called the plan fine because
+# the caps summed to under 1.0. `--gpu-memory-utilization` is not a private
+# slice: vLLM sizes KV from `total * util - torch.cuda.mem_get_info()`, and
+# mem_get_info counts every process on the device, so a tenant whose cap is
+# below what its neighbours already hold computes a negative budget.
+# kv_cache_memory_bytes skips profiling entirely and "does not respect the
+# gpu_memory_utilization config" (vLLM's words), which is what makes it
+# order-independent.
+
+def test_vllm_tenant_gets_an_absolute_kv_size(monkeypatch):
+    t = _tenant(name="llm")
+    object.__setattr__(t, "kv_budget_gb", 20.0)
+    cmd = coloc.build_server_cmd(t)
+    assert "--kv-cache-memory-bytes" in cmd
+    assert cmd[cmd.index("--kv-cache-memory-bytes") + 1] == str(int(20.0 * 1024 ** 3))
+
+
+def test_no_kv_flag_when_the_colocation_sets_no_budget():
+    t = _tenant(name="llm")
+    object.__setattr__(t, "kv_budget_gb", None)
+    assert "--kv-cache-memory-bytes" not in coloc.build_server_cmd(t)
+
+
+def test_kv_size_overrides_a_value_inherited_from_launch_args():
+    """Same rule as the VRAM cap: a per-tenant budget is an override, not a
+    fallback behind whatever backends.<b>.extra_args carried in."""
+    t = _tenant(name="llm")
+    object.__setattr__(t.round, "launch_args", ["--kv-cache-memory-bytes=1"])
+    object.__setattr__(t, "kv_budget_gb", 20.0)
+    cmd = coloc.build_server_cmd(t)
+    assert cmd.count("--kv-cache-memory-bytes") + \
+           sum(a.startswith("--kv-cache-memory-bytes=") for a in cmd) == 1
+    assert cmd[cmd.index("--kv-cache-memory-bytes") + 1] == str(int(20.0 * 1024 ** 3))

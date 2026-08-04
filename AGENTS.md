@@ -562,6 +562,16 @@ python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation
 
 1. **VRAM budget.** `sum(tenant gpu_memory_utilization) + CV footprint <= 1.0`.
    vLLM defaults to `0.9` and will take the whole card, starving tenant 2.
+   **But that sum passing does not mean the tenants will start.**
+   `--gpu-memory-utilization` is a target for *total device* utilisation, not a
+   private slice: vLLM sizes KV as `total * util - mem_get_info()`, and
+   `mem_get_info` counts every process on the card. A tenant whose cap is lower
+   than what its neighbours already hold gets a negative budget and dies with
+   `No available memory for the cache blocks` — which is how mix-full's VLM
+   failed behind a 37 GB LLM while this check said the plan was fine. Set
+   `kv_budget_gb` on the colocation; the orchestrator passes it as
+   `--kv-cache-memory-bytes`, which vLLM honours without profiling and
+   independently of the cap or of launch order.
 2. **Clock policy applied.** Power limit first, then `nvidia-smi -lgc` at 60–80%
    of max boost. On GeForce the lock is *advisory* — verify, don't assume.
 3. **No throttle reasons active.** Abort if `clocks_throttle_reasons.active`
