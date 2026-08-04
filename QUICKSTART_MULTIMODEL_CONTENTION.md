@@ -327,17 +327,43 @@ and each of those steps fails in a way that would otherwise waste all of it.
 **Prompt:**
 > "Work through the contention study phase by phase and summarise each."
 
+**What there is to run.** `--all` is the **single-GPU** study — it already
+excludes Phase 5, which is Step 10. Phase 0 is the gate (Step 6) and Phase 1
+is the solo baselines, which every plan generates for itself (72 of the 163
+runs); neither is a command you issue.
+
+| Phase | What it answers | Colocations | Runs |
+|---|---|---|---|
+| **2** — same-category | Do two models of the *same* type contend worst? | `same-llm` `same-cv` `same-vlm` `same-ilm` | 48 |
+| **3** — mixed pairs | The headline pairings, cheapest phase | `mix-llm-cv` `mix-vlm-cv` `mix-ilm-cv` `mix-vlm-ilm` `mix-full` | 12 |
+| **4** — cross-type | Where the load-vs-degradation answers are | `cross-llm-vs-cv-rps` `cross-cv-vs-llm-rps` `cross-ilm-vs-cv` `cross-vlm-prefill-vs-llm` `cross-size-scaling` `cross-arch-validation` `cross-memory-pressure-kv03/kv13/kv22/kv29` | 57 |
+| **6** — secondary | One dimension at a time, `-a` light / `-b` heavy | `mix-memory-bound` `secondary-backend-llm-a/b` `secondary-backend-cv-a/b` `secondary-output-length-a/b` `secondary-input-size-cv-a/b` `secondary-input-size-llm-a/b` `secondary-asymmetry-a/b` `secondary-arrival-a/b` | 49 |
+| **5** — placement | 2 GPUs — **Step 10**, not here | `place-isolated` `place-p1` `place-p2` `place-p3` `place-vlm-prefill-split` | 15 |
+
+Per-phase counts are for that phase alone; they exceed 163 because `--all`
+dedupes baselines shared across phases.
+
 **CLI:**
 ```bash
-# The whole study, one command. ~163 runs; budget several hours.
+# The whole single-GPU study, one command. 163 runs; budget several hours.
 bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 
 # Or phase by phase (--phase is repeatable, and composes):
-bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --resume
-bench coloc --gpu rtx_pro6000 --phase 4 --resume
+bench coloc --gpu rtx_pro6000 --phase 3 --resume                  # start here: 12 runs
+bench coloc --gpu rtx_pro6000 --phase 4 --resume                  # the analytical core
+bench coloc --gpu rtx_pro6000 --phase 2 --phase 6 --resume
 
 # Or name them explicitly (--colocation is repeatable):
 bench coloc --gpu rtx_pro6000 --colocation mix-full --colocation cross-size-scaling
+```
+
+**If the ratios from Step 7 were all ≈1.00×, find the load point first.**
+A rate sweep costs 9 runs and tells you where degradation actually starts;
+without it the whole study can return ≈1.00× everywhere, which reads as "co-location
+is free on this GPU" when it means "nothing was driven hard enough":
+
+```bash
+bench coloc --gpu rtx_pro6000 --colocation cross-cv-vs-llm-rps --resume
 ```
 
 Selecting several colocations builds **one** plan, and solo baselines are
@@ -355,8 +381,12 @@ colocation at run 50 must not cost you the other 113.
 
 ## Step 10 — Two GPUs
 
+**This is Phase 5, and `--all` in Step 9 did not run it** — the single-GPU
+study stops at 39 colocations / 163 runs and holds these back. 5 colocations,
+15 runs.
+
 Only worth doing once the single-GPU numbers exist — the whole point is the
-comparison.
+comparison. Nothing else may be running: both cards are occupied.
 
 **Prompt:**
 > "Run the placement study on both GPUs and tell me which pairing wins."
