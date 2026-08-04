@@ -428,12 +428,25 @@ models:
     # pre-flight — it had no entry, so its footprint was invisible to the cap
     # arithmetic in the four colocations that use it.
     weights_gb: 5.5
-    # MEASURED on PRO 6000: 2205 ms per request at output_tokens=256, i.e.
-    # ~0.45 rps from a single Triton instance. Tenant rates are set below that
-    # deliberately: a tenant pinned at its ceiling cannot show degradation,
-    # because a neighbour arriving only deepens its queue. Raising the rate
-    # needs instance_count raised with it, which changes the tenant's VRAM
-    # claim and so what every colocation using it is measuring.
+    # MEASURED sustained throughput on PRO 6000: 0.133 requests/second from a
+    # single Triton instance, solo on the card, with 312 ms of server queueing.
+    # NOT the ~0.45 that 2205 ms per request implies: arrivals are Poisson, so
+    # they bunch, and a 2.2 s server cannot absorb a burst — the sustainable
+    # rate is well under 1/service_time.
+    #
+    # Tenants run at 0.1 (about 75% utilisation) so the tenant has headroom to
+    # lose. A tenant pinned at its ceiling cannot show degradation: a neighbour
+    # arriving only deepens a queue that was already there, and the ratio comes
+    # back near 1.0 for the wrong reason. At 0.2 it was 150% of capacity and
+    # did exactly that.
+    #
+    # The ILM colocations run a 600 s window because of this rate: at 0.1 rps a
+    # 180 s window yields 18 requests, and a p95 over 18 samples is the
+    # second-worst value rather than a percentile. 600 s gives 60.
+    #
+    # Raising the rate means raising instance_count with it, which changes the
+    # tenant's VRAM claim and therefore what every colocation using it
+    # measures. That is a different experiment, not a tuning knob.
     notes: >-
       Triton PYTHON backend. Absent from vLLM's model registry and there is no
       kosmos*.py in either the vLLM or SGLang tree — the "vLLM supported" note
@@ -890,7 +903,7 @@ colocations:
   # the whole reason the study reports ratios.
   same-ilm:
     phase: 2
-    duration_s: 120
+    duration_s: 600
     isolation: mps
     solo_baselines: auto
     kv_budget_gb: 20.0
@@ -900,7 +913,7 @@ colocations:
         model: kosmos-2.5
         triton_backend: python
         workload: ilm_document
-        load: {pattern: poisson, rps: 0.2}
+        load: {pattern: poisson, rps: 0.1}
       - name: ilm_b
         backend: vllm
         model: qwen2.5-vl-7b       # serving images here, not video
@@ -911,7 +924,7 @@ colocations:
     # rps from one instance, so the old [1,2,4,8] sat entirely above
     # saturation: every point would have measured a queue rather than
     # contention. This walks from headroom through the knee.
-    rps_sweep: {tenant: "*", values: [0.1, 0.2, 0.4, 0.8]}
+    rps_sweep: {tenant: "*", values: [0.03, 0.06, 0.1, 0.2]}
 
   # ── Phase 3 — model type mix ───────────────────────────────────────
   mix-llm-cv:
@@ -962,7 +975,7 @@ colocations:
   # a document model "llm".
   mix-ilm-cv:
     phase: 3
-    duration_s: 120
+    duration_s: 600
     isolation: mps
     solo_baselines: auto
     tenants:
@@ -971,7 +984,7 @@ colocations:
         model: kosmos-2.5
         triton_backend: python
         workload: ilm_document
-        load: {pattern: poisson, rps: 0.2}
+        load: {pattern: poisson, rps: 0.1}
       - name: cv
         backend: triton
         model: yolov8-l
@@ -986,7 +999,7 @@ colocations:
   # Same VLM substitution as `same-vlm`: paligemma2 cannot serve video.
   mix-vlm-ilm:
     phase: 3
-    duration_s: 180
+    duration_s: 600
     isolation: mps
     solo_baselines: auto
     kv_budget_gb: 20.0
@@ -1001,7 +1014,7 @@ colocations:
         model: kosmos-2.5
         triton_backend: python
         workload: ilm_document
-        load: {pattern: poisson, rps: 0.2}
+        load: {pattern: poisson, rps: 0.1}
 
   # All four categories at once — the only 4-tenant window in the study.
   # Every other colocation answers "do these two fit together"; this one
@@ -1017,7 +1030,7 @@ colocations:
   # rather than to a cache that shrank underneath them (§2b).
   mix-full:
     phase: 3
-    duration_s: 180
+    duration_s: 600
     isolation: mps
     solo_baselines: auto
     kv_budget_gb: 20.0
@@ -1037,7 +1050,7 @@ colocations:
         model: kosmos-2.5
         triton_backend: python
         workload: ilm_document
-        load: {pattern: poisson, rps: 0.2}
+        load: {pattern: poisson, rps: 0.1}
       - name: cv
         backend: triton
         model: yolov8-l
