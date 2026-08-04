@@ -1,0 +1,88 @@
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299] 
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299]        █     █     █▄   ▄█
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.20.1
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299]   █▄█▀ █     █     █     █  model   google/gemma-2-9b-it
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:299] 
+(APIServer pid=251372) INFO 08-04 05:29:42 [utils.py:233] non-default args: {'model_tag': 'google/gemma-2-9b-it', 'model': 'google/gemma-2-9b-it', 'max_model_len': 8192, 'gpu_memory_utilization': 0.35, 'max_num_seqs': 32}
+(APIServer pid=251372) Traceback (most recent call last):
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/utils/_http.py", line 403, in hf_raise_for_status
+(APIServer pid=251372)     response.raise_for_status()
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/requests/models.py", line 1167, in raise_for_status
+(APIServer pid=251372)     raise HTTPError(http_error_msg, response=self)
+(APIServer pid=251372) requests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: https://huggingface.co/google/gemma-2-9b-it/resolve/main/config.json
+(APIServer pid=251372) 
+(APIServer pid=251372) The above exception was the direct cause of the following exception:
+(APIServer pid=251372) 
+(APIServer pid=251372) Traceback (most recent call last):
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/transformers/utils/hub.py", line 479, in cached_files
+(APIServer pid=251372)     hf_hub_download(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(APIServer pid=251372)     return fn(*args, **kwargs)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1014, in hf_hub_download
+(APIServer pid=251372)     return _hf_hub_download_to_cache_dir(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1121, in _hf_hub_download_to_cache_dir
+(APIServer pid=251372)     _raise_on_head_call_error(head_call_error, force_download, local_files_only)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1662, in _raise_on_head_call_error
+(APIServer pid=251372)     raise head_call_error
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1550, in _get_metadata_or_catch_error
+(APIServer pid=251372)     metadata = get_hf_file_metadata(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(APIServer pid=251372)     return fn(*args, **kwargs)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1467, in get_hf_file_metadata
+(APIServer pid=251372)     r = _request_wrapper(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 283, in _request_wrapper
+(APIServer pid=251372)     response = _request_wrapper(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 307, in _request_wrapper
+(APIServer pid=251372)     hf_raise_for_status(response)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/huggingface_hub/utils/_http.py", line 420, in hf_raise_for_status
+(APIServer pid=251372)     raise _format(GatedRepoError, message, response) from e
+(APIServer pid=251372) huggingface_hub.errors.GatedRepoError: 401 Client Error. (Request ID: Root=1-6a7178c6-2ae455854773ec246dc1b01d;716b4b51-12fd-4152-af03-5da5411f1a67)
+(APIServer pid=251372) 
+(APIServer pid=251372) Cannot access gated repo for url https://huggingface.co/google/gemma-2-9b-it/resolve/main/config.json.
+(APIServer pid=251372) Access to model google/gemma-2-9b-it is restricted. You must have access to it and be authenticated to access it. Please log in.
+(APIServer pid=251372) 
+(APIServer pid=251372) The above exception was the direct cause of the following exception:
+(APIServer pid=251372) 
+(APIServer pid=251372) Traceback (most recent call last):
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/bin/vllm", line 6, in <module>
+(APIServer pid=251372)     sys.exit(main())
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/cli/main.py", line 92, in main
+(APIServer pid=251372)     args.dispatch_function(args)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/cli/serve.py", line 122, in cmd
+(APIServer pid=251372)     uvloop.run(run_server(args))
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/uvloop/__init__.py", line 69, in run
+(APIServer pid=251372)     return loop.run_until_complete(wrapper())
+(APIServer pid=251372)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=251372)     return await main
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 678, in run_server
+(APIServer pid=251372)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 692, in run_server_worker
+(APIServer pid=251372)     async with build_async_engine_client(
+(APIServer pid=251372)   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=251372)     return await anext(self.gen)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 100, in build_async_engine_client
+(APIServer pid=251372)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=251372)   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=251372)     return await anext(self.gen)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 124, in build_async_engine_client_from_engine_args
+(APIServer pid=251372)     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/engine/arg_utils.py", line 1617, in create_engine_config
+(APIServer pid=251372)     maybe_override_with_speculators(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/transformers_utils/config.py", line 598, in maybe_override_with_speculators
+(APIServer pid=251372)     config_dict, _ = PretrainedConfig.get_config_dict(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/transformers/configuration_utils.py", line 662, in get_config_dict
+(APIServer pid=251372)     config_dict, kwargs = cls._get_config_dict(pretrained_model_name_or_path, **kwargs)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/transformers/configuration_utils.py", line 721, in _get_config_dict
+(APIServer pid=251372)     resolved_config_file = cached_file(
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/transformers/utils/hub.py", line 322, in cached_file
+(APIServer pid=251372)     file = cached_files(path_or_repo_id=path_or_repo_id, filenames=[filename], **kwargs)
+(APIServer pid=251372)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/transformers/utils/hub.py", line 543, in cached_files
+(APIServer pid=251372)     raise OSError(
+(APIServer pid=251372) OSError: You are trying to access a gated repo.
+(APIServer pid=251372) Make sure to have access to it at https://huggingface.co/google/gemma-2-9b-it.
+(APIServer pid=251372) 401 Client Error. (Request ID: Root=1-6a7178c6-2ae455854773ec246dc1b01d;716b4b51-12fd-4152-af03-5da5411f1a67)
+(APIServer pid=251372) 
+(APIServer pid=251372) Cannot access gated repo for url https://huggingface.co/google/gemma-2-9b-it/resolve/main/config.json.
+(APIServer pid=251372) Access to model google/gemma-2-9b-it is restricted. You must have access to it and be authenticated to access it. Please log in.
