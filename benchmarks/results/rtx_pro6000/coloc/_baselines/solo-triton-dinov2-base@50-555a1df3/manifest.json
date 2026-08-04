@@ -7,7 +7,7 @@
   "isolation_mode": "mps",
   "duration_s": 120,
   "n_tenants": 1,
-  "t0_epoch_ms": 1785824271616.0486,
+  "t0_epoch_ms": 1785837272287.1687,
   "devices": [
     0
   ],
@@ -53,20 +53,20 @@
       ],
       "co_tenants": [],
       "offered_rps": 50.0,
-      "achieved_rps": null
+      "achieved_rps": 50.5007
     }
   ],
   "gpu_sampler": {
     "0": {
       "sampler_backend": "dcgm",
-      "n_samples": 10,
-      "mem_bw_util_pct_p50": 0.0,
-      "mem_bw_util_pct_peak": 0.0,
-      "gpu_util_pct_p50": 0.0,
-      "gpu_util_pct_peak": 0.0,
-      "fb_used_peak_gb": 4.0283203125,
-      "power_avg_w": 88.66600000000001,
-      "power_peak_w": 88.823
+      "n_samples": 8653,
+      "mem_bw_util_pct_p50": 0.6,
+      "mem_bw_util_pct_peak": 1.7000000000000002,
+      "gpu_util_pct_p50": 7.0,
+      "gpu_util_pct_peak": 21.0,
+      "fb_used_peak_gb": 0.8984375,
+      "power_avg_w": 91.32985334566067,
+      "power_peak_w": 96.277
     }
   },
   "environment": {
@@ -78,7 +78,7 @@
     },
     "mps": {
       "control_daemon_running": true,
-      "pipe_directory": "/tmp/nvidia-mps",
+      "pipe_directory": null,
       "container_pipe_directory": "/tmp/nvidia-mps",
       "probe_error": null,
       "detected": true

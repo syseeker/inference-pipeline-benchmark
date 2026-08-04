@@ -1,0 +1,247 @@
+{
+  "colocation_id": "mix-full",
+  "phase": 3,
+  "run_label": "coloc:mix-full",
+  "is_solo": false,
+  "gpu": "rtx_pro6000",
+  "isolation_mode": "mps",
+  "duration_s": 600,
+  "n_tenants": 4,
+  "t0_epoch_ms": 1785845464027.2246,
+  "devices": [
+    0
+  ],
+  "tenants": [
+    {
+      "name": "llm",
+      "round": {
+        "backend": "vllm",
+        "model_id": "qwen2.5-7b",
+        "hf_id": "Qwen/Qwen2.5-7B-Instruct",
+        "family": "qwen2.5",
+        "quantization": "bf16",
+        "base_url": "http://localhost:8000/v1",
+        "port": 8000,
+        "launch_args": [
+          "--gpu-memory-utilization=0.90",
+          "--max-num-seqs=32",
+          "--max-model-len=8192"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "http",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "aiperf",
+      "load": {
+        "pattern": "poisson",
+        "rps": 4.0,
+        "output_tokens": 32
+      },
+      "workload": "llm_short",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/llm_short.jsonl"
+        ],
+        "output_tokens": 32
+      },
+      "gpu_memory_utilization": 0.39,
+      "kv_budget_gb": 20.0,
+      "triton_backend": null,
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "kosmos-2.5",
+        "qwen2.5-vl-7b",
+        "yolov8-l"
+      ],
+      "offered_rps": 4.0,
+      "achieved_rps": 3.8192828168765574
+    },
+    {
+      "name": "vlm",
+      "round": {
+        "backend": "vllm",
+        "model_id": "qwen2.5-vl-7b",
+        "hf_id": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+        "family": "qwen2.5-vl",
+        "quantization": "awq",
+        "base_url": "http://localhost:8001/v1",
+        "port": 8001,
+        "launch_args": [
+          "--gpu-memory-utilization=0.90",
+          "--max-num-seqs=32",
+          "--max-model-len=32768"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "http",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "aiperf",
+      "load": {
+        "pattern": "poisson",
+        "rps": 1.0,
+        "output_tokens": 128
+      },
+      "workload": "vlm_video_long",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/vlm_video.jsonl"
+        ],
+        "data": [
+          "workspace/contention/test_data/vlm/clip_10s_720p.mp4"
+        ],
+        "output_tokens": 128
+      },
+      "gpu_memory_utilization": 0.3,
+      "kv_budget_gb": 20.0,
+      "triton_backend": null,
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "kosmos-2.5",
+        "qwen2.5-7b",
+        "yolov8-l"
+      ],
+      "offered_rps": 1.0,
+      "achieved_rps": 0.9674025446843243
+    },
+    {
+      "name": "ilm",
+      "round": {
+        "backend": "triton",
+        "model_id": "kosmos-2.5",
+        "hf_id": "microsoft/kosmos-2.5",
+        "family": "ilm",
+        "quantization": "bf16",
+        "base_url": "http://localhost:8100",
+        "port": 8100,
+        "launch_args": [
+          "--allow-client-shm=true"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "triton",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "perf_analyzer",
+      "load": {
+        "pattern": "poisson",
+        "rps": 0.1,
+        "output_tokens": 256
+      },
+      "workload": "ilm_document",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/ilm_document.jsonl"
+        ],
+        "data": [
+          "workspace/contention/test_data/cv/sample_document.png"
+        ],
+        "output_tokens": 256
+      },
+      "gpu_memory_utilization": null,
+      "kv_budget_gb": null,
+      "triton_backend": "python",
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "qwen2.5-7b",
+        "qwen2.5-vl-7b",
+        "yolov8-l"
+      ],
+      "offered_rps": 0.1,
+      "achieved_rps": 0.0828675
+    },
+    {
+      "name": "cv",
+      "round": {
+        "backend": "triton",
+        "model_id": "yolov8-l",
+        "hf_id": "ultralytics/yolov8l",
+        "family": "cv-detect",
+        "quantization": "fp16",
+        "base_url": "http://localhost:8100",
+        "port": 8100,
+        "launch_args": [
+          "--allow-client-shm=true"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "triton",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "perf_analyzer",
+      "load": {
+        "pattern": "poisson",
+        "rps": 50.0,
+        "output_tokens": null
+      },
+      "workload": "cv_detect_default",
+      "workload_spec": {
+        "data": [
+          "workspace/contention/test_data/cv/sample_640x640.jpg"
+        ]
+      },
+      "gpu_memory_utilization": null,
+      "kv_budget_gb": null,
+      "triton_backend": "tensorrt",
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "kosmos-2.5",
+        "qwen2.5-7b",
+        "qwen2.5-vl-7b"
+      ],
+      "offered_rps": 50.0,
+      "achieved_rps": 50.4959
+    }
+  ],
+  "gpu_sampler": {
+    "0": {
+      "sampler_backend": "dcgm",
+      "n_samples": 14330,
+      "mem_bw_util_pct_p50": 81.3,
+      "mem_bw_util_pct_peak": 100.0,
+      "gpu_util_pct_p50": 100.0,
+      "gpu_util_pct_peak": 100.0,
+      "fb_used_peak_gb": 72.35546875,
+      "power_avg_w": 304.6968575017364,
+      "power_peak_w": 597.43
+    }
+  },
+  "environment": {
+    "interconnect": {
+      "available": true,
+      "error": null,
+      "topo_matrix": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\t0-47\t0\t\tN/A\nGPU1\tPIX\t X \t0-47\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+      "nvlink_detected": false
+    },
+    "mps": {
+      "control_daemon_running": true,
+      "pipe_directory": null,
+      "container_pipe_directory": "/tmp/nvidia-mps",
+      "probe_error": null,
+      "detected": true
+    }
+  },
+  "warnings": [],
+  "throttle_reasons": []
+}

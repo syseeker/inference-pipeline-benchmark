@@ -7,7 +7,7 @@
   "isolation_mode": "mps",
   "duration_s": 120,
   "n_tenants": 2,
-  "t0_epoch_ms": 1785824314397.437,
+  "t0_epoch_ms": 1785837755748.3896,
   "devices": [
     0
   ],
@@ -61,7 +61,7 @@
         "dinov2-base"
       ],
       "offered_rps": 1.0,
-      "achieved_rps": 0.9534942527119217
+      "achieved_rps": 0.9531902356852162
     },
     {
       "name": "cv",
@@ -106,20 +106,20 @@
         "qwen2.5-vl-7b"
       ],
       "offered_rps": 50.0,
-      "achieved_rps": null
+      "achieved_rps": 50.8346
     }
   ],
   "gpu_sampler": {
     "0": {
       "sampler_backend": "dcgm",
-      "n_samples": 2664,
-      "mem_bw_util_pct_p50": 53.45,
+      "n_samples": 11514,
+      "mem_bw_util_pct_p50": 0.6,
       "mem_bw_util_pct_peak": 100.0,
-      "gpu_util_pct_p50": 100.0,
+      "gpu_util_pct_p50": 7.0,
       "gpu_util_pct_peak": 100.0,
-      "fb_used_peak_gb": 52.1474609375,
-      "power_avg_w": 273.5192507507501,
-      "power_peak_w": 599.801
+      "fb_used_peak_gb": 48.1220703125,
+      "power_avg_w": 122.85406409588302,
+      "power_peak_w": 591.355
     }
   },
   "environment": {
@@ -131,7 +131,7 @@
     },
     "mps": {
       "control_daemon_running": true,
-      "pipe_directory": "/tmp/nvidia-mps",
+      "pipe_directory": null,
       "container_pipe_directory": "/tmp/nvidia-mps",
       "probe_error": null,
       "detected": true
