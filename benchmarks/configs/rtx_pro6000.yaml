@@ -1029,7 +1029,7 @@ colocations:
   # ── Phase 4 — cross-type contention: sweep the neighbour's load ────
   # The knee in the subject's latency against CV rate is the disruption
   # threshold; where achieved_rps < offered_rps is the envelope boundary.
-  cross-llm-vs-cv:
+  cross-llm-vs-cv-rps:
     phase: 4
     extends: mix-llm-cv
     rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}

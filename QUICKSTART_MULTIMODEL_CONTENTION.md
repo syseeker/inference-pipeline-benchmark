@@ -410,14 +410,14 @@ The **Contention analysis** section of `summary.md` gives three things (numbered
   ways**; contention is not symmetric, and the asymmetry is usually the most
   actionable finding.
 
-  This is why the `cross-*` pairs are not duplicates. `cross-llm-vs-cv` and
+  This is why the `cross-*` pairs are not duplicates. `cross-llm-vs-cv-rps` and
   `cross-cv-vs-llm-rps` share the same two tenants and differ only in which
   one's rate is swept — the names read `victim-vs-aggressor`, so the aggressor
   is the one that moves:
 
   | Colocation | Sweeps | Held fixed | Answers |
   |---|---|---|---|
-  | `cross-llm-vs-cv` | cv `1 → 200` rps | llm @4 | how much CV load costs the LLM |
+  | `cross-llm-vs-cv-rps` | cv `1 → 200` rps | llm @4 | how much CV load costs the LLM |
   | `cross-cv-vs-llm-rps` | llm `1 → 64` rps | cv @50 | how much LLM load costs the CV |
 - **Safe-operating envelope** — where `achieved_rps` fell below `offered_rps`.
   That is the deployment limit, and it comes free from open-loop load.

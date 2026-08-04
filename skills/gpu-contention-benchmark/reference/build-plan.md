@@ -733,7 +733,7 @@ colocations:
         driver: perf_analyzer
 
   # ---- Phase 4: sweep the neighbour's load --------------------------------
-  cross-llm-vs-cv:
+  cross-llm-vs-cv-rps:
     phase: 4
     extends: mix-llm-cv
     rps_sweep: {tenant: cv, values: [1, 10, 50, 200]}

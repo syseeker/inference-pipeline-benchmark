@@ -195,7 +195,7 @@ bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --solo-only
 
 # Phases 2-6 — by phase, or by name (both flags repeatable)
 bench coloc --gpu rtx_pro6000 --phase 3 --phase 4
-bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv     # rate sweep
+bench coloc --gpu rtx_pro6000 --colocation cross-llm-vs-cv-rps     # rate sweep
 bench coloc --gpu rtx_pro6000 --colocation mix-full            # all 4 categories
 
 # Phase 5 — placement, 2 GPUs

@@ -73,7 +73,7 @@ def test_run_label_pairs_with_summary_cross_run_deltas(cfg):
 def test_identical_baselines_are_deduped_across_a_sweep(cfg):
     """The LLM tenant's load is constant across an rps_sweep of the CV tenant,
     so it needs one baseline, not four."""
-    runs = _coloc_runs(cfg, "cross-llm-vs-cv")
+    runs = _coloc_runs(cfg, "cross-llm-vs-cv-rps")
     llm_solos = [r for r in runs if r.is_solo and r.tenants[0].name == "llm"]
     cv_solos = [r for r in runs if r.is_solo and r.tenants[0].name == "cv"]
 
@@ -99,7 +99,7 @@ def test_baseline_load_matches_the_contention_load(cfg):
 
 
 def test_rps_sweep_expands_only_the_named_tenant(cfg):
-    colocs = [r for r in _coloc_runs(cfg, "cross-llm-vs-cv") if not r.is_solo]
+    colocs = [r for r in _coloc_runs(cfg, "cross-llm-vs-cv-rps") if not r.is_solo]
     assert len(colocs) == 4
     by_name = [{t.name: t.load.rps for t in c.tenants} for c in colocs]
     assert [d["cv"] for d in by_name] == [1.0, 10.0, 50.0, 200.0]
