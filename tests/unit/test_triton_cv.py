@@ -19,11 +19,8 @@ def test_resolve_spec_known_and_unknown():
     spec = tc.resolve_spec("yolov8-l")
     assert spec.hf_id == "ultralytics/yolov8l"
     assert spec.input_dims == [3, 640, 640]
-    try:
-        tc.resolve_spec("kosmos-2.5")
-        assert False, "kosmos-2.5 has no CV spec (python backend)"
-    except ValueError as e:
-        assert "kosmos" in str(e).lower() or "no CV spec" in str(e)
+    with pytest.raises(ValueError):
+        tc.resolve_spec("no-such-model")
 
 
 def test_backend_mapping():
@@ -282,3 +279,60 @@ def test_ipc_host_is_not_used():
     and without it. Kept as a test so it is not re-added on a guess."""
     cmd = tc.build_triton_serve_cmd(Path("/repo"), mps_pipe_dir="/tmp/nvidia-mps")
     assert "--ipc=host" not in cmd
+
+
+# ── python backend (kosmos-2.5) ─────────────────────────────────────────────
+#
+# Regression: kosmos-2.5 was named by 4 colocations but was in neither the
+# CV_MODELS registry nor on disk as a model.py, so every one of them would have
+# failed at the first CV tenant. Kosmos2_5ForConditionalGeneration is in
+# neither vLLM's nor SGLang's registry, so Triton's python backend is the only
+# way to serve it — and the stock Triton image ships numpy alone, no torch or
+# transformers, which is the part nothing recorded.
+
+def test_kosmos_is_registered_as_a_python_backend_model():
+    spec = tc.resolve_spec("kosmos-2.5")
+    assert spec.is_python_backend
+    assert spec.exporter == "none"
+
+
+def test_python_backend_model_has_a_model_py_on_disk():
+    """The repo is not complete without it; Triton reports UNAVAILABLE."""
+    assert tc.python_model_source("kosmos-2.5") is not None
+
+
+def test_python_backend_repo_gets_its_model_py_copied(tmp_path):
+    spec = tc.resolve_spec("kosmos-2.5")
+    layout = tc.write_model_repo(tmp_path, spec, "python", max_batch_size=1)
+    assert layout.weight_file.name == "model.py"
+    assert layout.weight_file.exists()
+    assert "TritonPythonModel" in layout.weight_file.read_text()
+
+
+def test_python_backend_repo_needs_the_derived_image():
+    """torch/transformers are absent from the stock image."""
+    assert tc.image_for_models(["kosmos-2.5"]) == tc.TRITON_PYTHON_IMAGE
+    assert tc.image_for_models(["yolov8-l", "dinov2-base"]) == tc.TRITON_IMAGE
+    # A mixed repo must still get the derived image, or the python model fails.
+    assert tc.image_for_models(["yolov8-l", "kosmos-2.5"]) == tc.TRITON_PYTHON_IMAGE
+
+
+def test_python_backend_io_dtypes_are_not_derived_from_precision():
+    """A trigger in, a string out — neither follows the weight precision."""
+    cfg = tc.build_config_pbtxt(tc.resolve_spec("kosmos-2.5"), "python", max_batch_size=1)
+    assert "TYPE_INT32" in cfg and "TYPE_STRING" in cfg
+
+
+def test_config_parameters_use_repeated_map_entries():
+    cfg = tc.build_config_pbtxt(
+        tc.resolve_spec("kosmos-2.5"), "python", max_batch_size=1,
+        params={"document_path": "/x/doc.png"},
+    )
+    assert 'parameters {\n  key: "document_path"' in cfg
+    assert "parameters [" not in cfg, "map field, not a bracketed list"
+
+
+def test_missing_model_py_is_a_loud_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(tc, "python_model_source", lambda name: None)
+    with pytest.raises(FileNotFoundError, match="model.py"):
+        tc.write_model_repo(tmp_path, tc.resolve_spec("kosmos-2.5"), "python")

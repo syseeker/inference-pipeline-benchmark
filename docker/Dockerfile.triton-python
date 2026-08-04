@@ -1,0 +1,38 @@
+# Triton, plus what the Python backend needs to run a transformers model.
+#
+# The stock nvcr.io/nvidia/tritonserver:26.07-py3 ships numpy and nothing else —
+# no torch, no transformers, no pillow — so a Python-backend model.py importing
+# any of them fails at load with ModuleNotFoundError and the model reports
+# UNAVAILABLE. That is what blocked kosmos-2.5, the study's ILM tenant, which
+# has no vLLM or SGLang implementation and therefore no other serving path.
+#
+# Only the Python-backend models need this. yolov8-l and dinov2-base run
+# TensorRT plans on the stock image, and coloc.py picks the image per repo.
+#
+# Build (~10 min, several GB):
+#   docker build -f docker/Dockerfile.triton-python -t inference-bench/tritonserver:26.07-py3-transformers .
+#
+# The tag is what benchmarks/triton_cv.py:TRITON_PYTHON_IMAGE expects.
+
+FROM nvcr.io/nvidia/tritonserver:26.07-py3
+
+# cu128 wheels: the base image is CUDA 13.x with forward compatibility enabled,
+# and the cu128 build is the one that loads against this driver. Pinning the
+# index explicitly rather than taking whatever PyPI defaults to keeps a rebuild
+# from silently changing the CUDA runtime underneath the tenant.
+RUN pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch \
+    && pip install --no-cache-dir \
+        "transformers>=4.57,<5" \
+        "pillow>=10.2" \
+        sentencepiece \
+        protobuf
+
+# Fail the BUILD rather than the first CV tenant several minutes into a paid
+# window — the whole reason this image exists is that a missing import here is
+# invisible until Triton reports the model UNAVAILABLE.
+RUN python3 -c "\
+import torch, transformers, PIL;\
+from transformers import Kosmos2_5ForConditionalGeneration;\
+print('torch', torch.__version__, '| transformers', transformers.__version__)"

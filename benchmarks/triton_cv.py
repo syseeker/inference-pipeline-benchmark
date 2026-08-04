@@ -23,6 +23,7 @@ paddleocr). One TensorRT + CUDA environment for all CV models, driven by
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # tritonserver; the -sdk image carries perf_analyzer.
 TRITON_IMAGE = "nvcr.io/nvidia/tritonserver:26.07-py3"
 TRITON_SDK_IMAGE = "nvcr.io/nvidia/tritonserver:26.07-py3-sdk"
+# Python-backend models import torch/transformers, which the stock image does
+# not carry. Built from docker/Dockerfile.triton-python; only repos holding a
+# python-backend model need it, so TensorRT-only repos stay on the stock image.
+TRITON_PYTHON_IMAGE = "inference-bench/tritonserver:26.07-py3-transformers"
+
+# Where the hand-authored model.py files live, one directory per model.
+PYTHON_MODEL_SRC = REPO_ROOT / "benchmarks" / "triton_python_models"
 
 # Triton `backend:` value + the model filename it expects in the version dir.
 _BACKEND_TABLE = {
@@ -61,6 +69,11 @@ class CVModelSpec:
     # test_cv_spec_precision_matches_the_gpu_yaml, because the two registries
     # are separate and nothing else would notice them drifting apart.
     precision: str = "fp16"         # fp16 | fp32
+    # Python-backend models do not take a raw pixel tensor and do not return
+    # one, so they set their Triton I/O dtypes explicitly instead of deriving
+    # them from `precision` (which still describes the weights).
+    input_dtype_override: str | None = None
+    output_dtype_override: str | None = None
 
     @property
     def torch_dtype_is_half(self) -> bool:
@@ -68,11 +81,21 @@ class CVModelSpec:
 
     @property
     def input_dtype(self) -> str:
-        return _TRITON_DTYPE[self.precision]
+        return self.input_dtype_override or _TRITON_DTYPE[self.precision]
 
     @property
     def output_dtype(self) -> str:
-        return _TRITON_DTYPE[self.precision]
+        return self.output_dtype_override or _TRITON_DTYPE[self.precision]
+
+    @property
+    def is_python_backend(self) -> bool:
+        """No export path — served by a hand-authored model.py.
+
+        These need torch + transformers inside the Triton container, which the
+        stock image does not carry (it ships numpy and nothing else), so they
+        also need the derived image built by docker/Dockerfile.triton-python.
+        """
+        return self.exporter == "none"
 
 
 # TensorRT v11 makes every network strongly typed and has REMOVED trtexec's
@@ -80,7 +103,7 @@ class CVModelSpec:
 # an fp16 engine has to come from an fp16 export, and the config.pbtxt I/O dtype
 # has to agree with it or Triton rejects the model. Precision is therefore a
 # property of the spec, not a build flag.
-_TRITON_DTYPE = {"fp16": "TYPE_FP16", "fp32": "TYPE_FP32"}
+_TRITON_DTYPE = {"fp16": "TYPE_FP16", "fp32": "TYPE_FP32", "bf16": "TYPE_BF16"}
 
 
 # CV models referenced by the rtx_pro6000 colocations. YOLOv8-l is the primary
@@ -106,7 +129,46 @@ CV_MODELS: dict[str, CVModelSpec] = {
         "dinov2-large", "facebook/dinov2-large", "torch-hf",
         "pixel_values", [3, 224, 224], "last_hidden_state", [257, 1024],
     ),
+    # Python backend: Kosmos2_5ForConditionalGeneration is absent from vLLM's
+    # and SGLang's registries (verified against
+    # ModelRegistry.get_supported_archs()), so Triton is the only path.
+    #
+    # The input is a trigger, not the image. kosmos-2.5's processor emits
+    # pix2struct-style `flattened_patches` of (4096, 770); random values there
+    # are not a document, and the model would generate degenerately against
+    # them — the tenant would be "running" while measuring nothing like the
+    # real workload. model.py instead preprocesses the workload's actual
+    # document and prompts once at load, and each request replays them. That
+    # also satisfies the design rule to hold a CV tenant's input fixed so the
+    # variance measured is contention rather than content.
+    "kosmos-2.5": CVModelSpec(
+        "kosmos-2.5", "microsoft/kosmos-2.5", "none",
+        "TRIGGER", [1], "TEXT", [1],
+        precision="bf16",
+        input_dtype_override="TYPE_INT32",
+        output_dtype_override="TYPE_STRING",
+    ),
 }
+
+
+def image_for_models(models: list[str] | None) -> str:
+    """Which Triton image can serve this set of models.
+
+    A repo holding any python-backend model needs the derived image; anything
+    else runs on the stock one. Chosen per container rather than globally so a
+    GPU serving only TensorRT plans does not pull several GB it cannot use.
+    """
+    for name in models or []:
+        spec = CV_MODELS.get(name)
+        if spec is not None and spec.is_python_backend:
+            return TRITON_PYTHON_IMAGE
+    return TRITON_IMAGE
+
+
+def python_model_source(name: str) -> Path | None:
+    """The checked-in model.py for a python-backend model, if there is one."""
+    p = PYTHON_MODEL_SRC / name / "model.py"
+    return p if p.exists() else None
 
 
 def triton_backend_of(triton_backend: str) -> str:
@@ -160,6 +222,7 @@ class RepoLayout:
 def build_config_pbtxt(
     spec: CVModelSpec, triton_backend: str, *, max_batch_size: int = 8,
     instance_count: int = 1, dynamic_batching: bool = True,
+    params: dict[str, str] | None = None,
 ) -> str:
     """Render a Triton config.pbtxt for a CV model.
 
@@ -171,6 +234,7 @@ def build_config_pbtxt(
     backend = triton_backend_of(triton_backend)
     in_dims = ", ".join(str(d) for d in spec.input_dims)
     out_dims = ", ".join(str(d) for d in spec.output_dims)
+    params = params or {}
     lines = [
         f'name: "{spec.name}"',
         f'backend: "{backend}"',
@@ -198,25 +262,45 @@ def build_config_pbtxt(
     ]
     if dynamic_batching:
         lines.append("dynamic_batching { }")
+    # `parameters` is a protobuf map: one repeated `parameters { }` entry per
+    # key, NOT a bracketed list.
+    for key, value in sorted(params.items()):
+        lines.append("parameters {")
+        lines.append(f'  key: "{key}"')
+        lines.append(f'  value: {{ string_value: "{value}" }}')
+        lines.append("}")
     return "\n".join(lines) + "\n"
 
 
 def write_model_repo(
     repo_root: Path, spec: CVModelSpec, triton_backend: str, *,
     max_batch_size: int = 8, instance_count: int = 1, version: int = 1,
+    params: dict[str, str] | None = None,
 ) -> RepoLayout:
     """Create the model dir + version dir + config.pbtxt (NOT the weights).
 
     The weight file is written by the exporter (needs the CV deps); this lays out
     the structure Triton requires and drops the config in place.
+
+    A python-backend model has no exporter, so its `model.py` IS its weight file
+    and is copied from benchmarks/triton_python_models/<name>/ here — otherwise
+    the repo looks complete while Triton reports the model UNAVAILABLE.
     """
     layout = RepoLayout(repo_root=repo_root, name=spec.name,
                         triton_backend=triton_backend, version=version)
     layout.version_dir.mkdir(parents=True, exist_ok=True)
     layout.config_pbtxt.write_text(
         build_config_pbtxt(spec, triton_backend, max_batch_size=max_batch_size,
-                           instance_count=instance_count)
+                           instance_count=instance_count, params=params)
     )
+    if triton_backend == "python":
+        src = python_model_source(spec.name)
+        if src is None:
+            raise FileNotFoundError(
+                f"{spec.name} is a python-backend model but has no model.py at "
+                f"{PYTHON_MODEL_SRC / spec.name / 'model.py'}"
+            )
+        shutil.copyfile(src, layout.weight_file)
     return layout
 
 
@@ -310,8 +394,9 @@ def build_triton_serve_cmd(
     repo_root: Path, *, device: int | list[int] | None = None,
     http_port: int = 8000, grpc_port: int = 8001,
     metrics_port: int = 8002, shm_size: str = "1g",
-    container_name: str = TRITON_CONTAINER_PREFIX, image: str = TRITON_IMAGE,
+    container_name: str = TRITON_CONTAINER_PREFIX, image: str | None = None,
     mps_pipe_dir: str | None = None, models: list[str] | None = None,
+    extra_mounts: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     """`docker run` for the Triton server hosting the CV model repo on ONE GPU.
 
@@ -337,11 +422,19 @@ def build_triton_serve_cmd(
       - `--shm-size` is Docker's; the Triton flags follow the image.
     """
     dev = resolve_triton_device(device)
+    # Per-container image: a repo holding a python-backend model needs torch and
+    # transformers, which only the derived image carries.
+    image = image or image_for_models(models)
     cmd = [
         "docker", "run", "--rm", "-d", "--name", container_name,
         "--gpus", f"device={dev}", "--shm-size", shm_size, "--network", "host",
         "-v", f"{Path(repo_root).resolve()}:/models",
     ]
+    # Workload payloads a python-backend model.py reads at load (the document
+    # image, the prompt jsonl). Mounted read-only at the same absolute path the
+    # host uses, so config.pbtxt parameters need no translation.
+    for src, dst in (extra_mounts or []):
+        cmd += ["-v", f"{src}:{dst}:ro"]
     if mps_pipe_dir:
         # Share the host MPS control pipe so kernels co-schedule with the LLM.
         #

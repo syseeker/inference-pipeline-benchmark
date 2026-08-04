@@ -1215,10 +1215,12 @@ class ColocationOrchestrator:
         staging = paths.triton_repo_root
         for t in triton_tenants:
             spec = resolve_spec(t.round.model_id)
-            bk = t.triton_backend or "tensorrt"
+            bk = t.triton_backend or ("python" if spec.is_python_backend else "tensorrt")
             repo = paths.triton_repo_root_for(triton_device_of(t))
-            layout = write_model_repo(repo, spec, bk)
-            if repo != staging:
+            layout = write_model_repo(repo, spec, bk, params=_python_model_params(t))
+            # A python-backend model.py IS the weight file and write_model_repo
+            # copies it; there is nothing staged to link.
+            if repo != staging and bk != "python":
                 src = RepoLayout(repo_root=staging, name=spec.name, triton_backend=bk).weight_file
                 _link_staged_weight(src, layout.weight_file)
 
@@ -1256,6 +1258,8 @@ class ColocationOrchestrator:
                 container_name=container,
                 models=_triton_models_on(triton_tenants or [tenant], device),
                 mps_pipe_dir=mps_pipe_dir_for_containers(),
+                extra_mounts=[m for t in (triton_tenants or [tenant])
+                              for m in python_model_mounts(t)],
             )
             # `docker run -d` prints the container id on success and the
             # reason on failure; the latter is the only record of why a CV
@@ -1531,6 +1535,42 @@ def _override_flag(cmd: list[str], flag: str, value: str) -> list[str]:
             continue
         out.append(a)
     return [*out, flag, value]
+
+
+def _python_model_params(tenant: Tenant) -> dict[str, str]:
+    """config.pbtxt `parameters` for a python-backend tenant.
+
+    Its model.py reads the workload's real document and prompts at load rather
+    than taking them per-request, because perf_analyzer can only synthesise a
+    tensor of the declared shape and random pix2struct patches are not a
+    document. Passing the paths through the config keeps the workload the yaml
+    declares as the one actually served.
+    """
+    spec_files = tenant.workload_spec or {}
+    out: dict[str, str] = {"hf_id": tenant.round.hf_id or ""}
+    data = _workload_files(spec_files, "data")
+    prompts = _workload_files(spec_files, "prompts")
+    if data:
+        out["document_path"] = str(data[0])
+    if prompts:
+        out["prompt_path"] = str(prompts[0])
+    tokens = (spec_files or {}).get("output_tokens")
+    if tokens:
+        out["output_tokens"] = str(tokens)
+    return out
+
+
+def python_model_mounts(tenant: Tenant) -> list[tuple[str, str]]:
+    """Host paths a python-backend model.py must be able to open in-container.
+
+    Mounted at the same absolute path, so the config.pbtxt parameters written
+    on the host resolve unchanged inside the container.
+    """
+    mounts = []
+    for key in ("data", "prompts"):
+        for f in _workload_files(tenant.workload_spec or {}, key):
+            mounts.append((str(f), str(f)))
+    return mounts
 
 
 def _workload_input_file(tenant: Tenant) -> Path | None:
