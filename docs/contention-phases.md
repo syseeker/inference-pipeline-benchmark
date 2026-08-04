@@ -592,6 +592,34 @@ absorbs 16× more load at the same memory bandwidth, because continuous batching
 reads the weights once per decode step rather than once per request. Memory
 bandwidth and achieved-vs-offered are the honest signals.
 
+### `gemma-4-31b-it-fp8` cannot be served, and should be pinned out
+
+Its first-ever launch attempt failed:
+
+```
+The checkpoint you are trying to load has model type `gemma4` but Transformers
+does not recognize this architecture.
+```
+
+`transformers` 4.57.6 in `.venv-vllm` has no `gemma4`. The yaml already records
+the same gap for TRT-LLM ("expected `gemma4` arch missing pre-bump") — it holds
+for vLLM too, and was simply never hit because this model had never run.
+
+It takes `same-vlm` with it, since a two-tenant window cannot run one short. Add
+
+```yaml
+unsupported_backends:
+  vllm: "transformers 4.57 has no gemma4 architecture; needs a version bump"
+```
+
+so the colocation skips with a reason rather than failing, then revisit after a
+`transformers` bump. Do not upgrade it under a running study — vLLM pins the
+version, and every other tenant in the roster currently works against it.
+
+This also leaves `same-vlm` with no second VLM. `qwen2.5-vl-7b` is the only
+video-capable model in the roster that serves, so the same-category VLM pair has
+no measurement until either gemma-4 loads or another VLM is added.
+
 ### Sweeps that never reach a knee
 
 | Colocation | Phase | Sweep | Top rung reaches | Suggested |
