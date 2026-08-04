@@ -1192,8 +1192,8 @@ def _degradation_table(
 
     lines: list[str] = []
     hdr = (
-        f"| {'Colocation':<22} | Ph | {'Tenant':<8} | {'Model':<24} | {'Bk':<6} "
-        f"| {'Off RPS':>7} | {'Ach RPS':>7} | {'Thr Ret':>8} "
+        f"| {'Colocation':<22} | Phase | {'Tenant':<8} | {'Model':<24} | {'Backend':<7} "
+        f"| {'Offered rps':>11} | {'Achieved rps':>12} | {'Throughput kept':>15} "
         f"| {'e2e p50':>8} | {'e2e p95':>8} | {'TTFT p95':>9} |"
     )
     sep = "|" + "|".join("-" * (len(c) - 1) + ":" for c in hdr.split("|")[1:-1]) + "|"
@@ -1201,10 +1201,10 @@ def _degradation_table(
     lines.append(sep)
     for r in sorted(rows, key=lambda x: (x["phase"] or 0, x["coloc"], x["tenant"])):
         lines.append(
-            f"| {r['coloc']:<22} | {str(r['phase'] or ''):<2} | {r['tenant']:<8} "
-            f"| {r['model']:<24} | {r['backend']:<6} "
-            f"| {_v(r['offered']):>7} | {_v(r['achieved']):>7} "
-            f"| {_fmt_ratio(r['thr_ret']):>8} "
+            f"| {r['coloc']:<22} | {str(r['phase'] or ''):<5} | {r['tenant']:<8} "
+            f"| {r['model']:<24} | {r['backend']:<7} "
+            f"| {_v(r['offered']):>11} | {_v(r['achieved']):>12} "
+            f"| {_fmt_ratio(r['thr_ret']):>15} "
             f"| {_fmt_ratio(r['e2e_p50_r']):>8} | {_fmt_ratio(r['e2e_p95_r']):>8} "
             f"| {_fmt_ratio(r['ttft_p95_r']):>9} |"
         )
@@ -1308,6 +1308,18 @@ def _coloc_section(gpu_dir: Path, *, number: int = 10) -> list[str]:
     lines.append(
         f"{n_solo} solo baseline(s), {n_contention} contention window(s). "
         "Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%."
+    )
+    lines.append("")
+    lines.append(
+        "- **Offered rps** — the rate the load generator was told to send.\n"
+        "- **Achieved rps** — the rate it actually managed. Below offered means "
+        "the tenant could not keep up; that is the safe-operating-envelope "
+        "boundary, not a measurement error.\n"
+        "- **Throughput kept** — achieved-with-a-neighbour ÷ achieved-alone. "
+        "`1.00×` = the neighbour cost nothing; `0.60×` = it cost 40% of "
+        "throughput.\n"
+        "- **e2e / TTFT ratios** — latency with a neighbour ÷ latency alone. "
+        "Above 1.00× is slower."
     )
     lines.append("")
 
