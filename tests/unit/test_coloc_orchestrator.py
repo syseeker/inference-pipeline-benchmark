@@ -1465,3 +1465,75 @@ def test_wait_ready_times_out_against_the_wrong_model(monkeypatch):
     # would spin for the 600 s default with sleep stubbed out.
     with pytest.raises(RuntimeError, match="expected model"):
         orch._wait_ready(t, timeout_s=0.01)
+
+
+# ── resume matches identity, not directory name ─────────────────────────────
+#
+# Regression: --resume asked only whether this run's exact directory existed,
+# so changing how the directory is named invalidated every result on disk —
+# including results the change had nothing to do with. Putting launch_args into
+# _solo_key rehashed all 72 baselines and re-ran the unchanged ones under new
+# names, leaving duplicate directories with identical contents.
+
+def _manifest_for(tenant, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "tenants": [{
+            "name": tenant.name,
+            "round": {"backend": tenant.round.backend, "model_id": tenant.round.model_id,
+                      "launch_args": list(tenant.round.launch_args or [])},
+            "load": {"pattern": tenant.load.pattern, "rps": tenant.load.rps},
+            "workload": tenant.workload,
+            "devices": list(tenant.devices),
+            "gpu_memory_utilization": tenant.gpu_memory_utilization,
+        }]
+    }))
+
+
+def test_resume_finds_a_baseline_stored_under_a_different_hash(tmp_path):
+    t = _tenant(name="llm")
+    coloc_obj = _window(id="mix-llm-cv", tenants=[t])
+    object.__setattr__(coloc_obj, "is_solo", True)
+    # Written under a name no current hash would produce.
+    _manifest_for(t, tmp_path / "solo-vllm-qwen2.5-7b@4-DEADBEEF" / "manifest.json")
+
+    found = coloc.find_existing_baseline(tmp_path, coloc_obj)
+    assert found is not None and "DEADBEEF" in str(found)
+
+
+def test_resume_does_not_match_a_different_configuration(tmp_path):
+    t = _tenant(name="llm")
+    object.__setattr__(t.round, "launch_args", ["--max-model-len=16384"])
+    _manifest_for(t, tmp_path / "solo-vllm-qwen2.5-7b@4-OLD" / "manifest.json")
+
+    other = _tenant(name="llm")
+    object.__setattr__(other.round, "launch_args", ["--max-model-len=32768"])
+    coloc_obj = _window(id="x", tenants=[other])
+    object.__setattr__(coloc_obj, "is_solo", True)
+
+    assert coloc.find_existing_baseline(tmp_path, coloc_obj) is None, (
+        "a different deployment must still re-run"
+    )
+
+
+def test_resume_ignores_contention_windows(tmp_path):
+    """Only baselines are shared; a window belongs to its colocation."""
+    c = _window(id="mix-llm-cv", tenants=[_tenant(name="llm"), _cv_tenant(name="cv")])
+    object.__setattr__(c, "is_solo", False)
+    assert coloc.find_existing_baseline(tmp_path, c) is None
+
+
+def test_solo_key_from_manifest_round_trips():
+    t = _tenant(name="llm")
+    m = {"tenants": [{
+        "round": {"backend": t.round.backend, "model_id": t.round.model_id,
+                  "launch_args": list(t.round.launch_args or [])},
+        "load": {"pattern": t.load.pattern, "rps": t.load.rps},
+        "workload": t.workload, "devices": list(t.devices),
+        "gpu_memory_utilization": t.gpu_memory_utilization,
+    }]}
+    assert coloc.solo_key_from_manifest(m) == coloc._solo_key(t)
+
+
+def test_solo_key_from_manifest_rejects_multi_tenant():
+    assert coloc.solo_key_from_manifest({"tenants": [{}, {}]}) is None

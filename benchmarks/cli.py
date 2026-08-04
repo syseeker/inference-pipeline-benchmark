@@ -1556,10 +1556,21 @@ def coloc(
         # Progress goes to stderr in EVERY mode: hours of silence is
         # indistinguishable from a hang, and --json keeps stdout to the single
         # status line (see emit's contract).
-        if resume and paths.manifest.exists():
-            typer.echo(f"[{i:>4}/{total}] {c.id:<28} {kind} SKIP (resume) {paths.root}", err=True)
-            skipped.append(str(paths.manifest))
-            continue
+        if resume:
+            found = paths.manifest if paths.manifest.exists() else None
+            if found is None:
+                # Not at this path — but a solo baseline is identified by what it
+                # ran, not by its directory name, so an earlier run under a
+                # different naming scheme still counts. Without this, any change
+                # to the identity hash silently re-runs results that are already
+                # on disk and unchanged.
+                from benchmarks.coloc import find_existing_baseline
+                found = find_existing_baseline(paths.root.parent, c)
+            if found is not None:
+                where = found.parent
+                typer.echo(f"[{i:>4}/{total}] {c.id:<28} {kind} SKIP (resume) {where}", err=True)
+                skipped.append(str(found))
+                continue
         typer.echo(f"[{i:>4}/{total}] {c.id:<28} {kind} {tenants}", err=True)
 
         try:

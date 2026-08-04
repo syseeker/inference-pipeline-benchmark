@@ -985,6 +985,53 @@ def _solo_key(tenant: Tenant) -> tuple:
             tuple(t.round.launch_args or ()))
 
 
+def solo_key_from_manifest(manifest: dict[str, Any]) -> tuple | None:
+    """Reconstruct `_solo_key` from a manifest already on disk.
+
+    The manifest records every field the key is built from, so a baseline can
+    be recognised by what it IS rather than by what its directory is called.
+    Returns None if the manifest is not a single-tenant solo run.
+    """
+    tenants = manifest.get("tenants") or []
+    if len(tenants) != 1:
+        return None
+    t = tenants[0]
+    rnd = t.get("round") or {}
+    load = t.get("load") or {}
+    try:
+        return (rnd.get("backend"), rnd.get("model_id"), t.get("workload"),
+                load.get("pattern"), float(load.get("rps")),
+                tuple(t.get("devices") or []), t.get("gpu_memory_utilization"),
+                tuple(rnd.get("launch_args") or ()))
+    except (TypeError, ValueError):
+        return None
+
+
+def find_existing_baseline(baselines_dir: Path, coloc: Colocation) -> Path | None:
+    """A baseline already on disk that IS this run, whatever it is named.
+
+    `--resume` used to ask only whether this run's exact directory existed, so
+    any change to how the directory is named invalidated every result on disk —
+    including results the change had nothing to do with. Adding launch_args to
+    the key rehashed all 72 baselines and re-ran the ones that had not changed
+    at all. Matching on identity instead makes resume immune to that: the
+    directory name is a label, and the manifest is the record.
+    """
+    if not coloc.is_solo or not coloc.tenants:
+        return None
+    want = _solo_key(coloc.tenants[0])
+    if not baselines_dir.is_dir():
+        return None
+    for m in sorted(baselines_dir.glob("*/manifest.json")):
+        try:
+            got = solo_key_from_manifest(json.loads(m.read_text()))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if got is not None and got == want:
+            return m
+    return None
+
+
 class SoloBaselineCache:
     """Tracks which solo baselines have run this session, so identical baselines
     shared across colocations execute once (iter_colocation dedups only within a
