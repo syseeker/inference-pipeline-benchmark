@@ -1492,7 +1492,13 @@ class ColocationOrchestrator:
         with contextlib.suppress(OSError):
             path = paths.server_log(tenant_name)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body)
+            # APPEND. `docker run -d` already wrote its own output here, and if
+            # the container never started that is the ONLY record of why —
+            # overwriting it with "No such container: triton-cv" destroys the
+            # launch error and leaves a message that explains nothing.
+            with path.open("a") as fh:
+                fh.write("\n--- docker logs ---\n")
+                fh.write(body)
         return "\n".join(body.splitlines()[-15:])
 
     def _close_server_logs(self) -> None:

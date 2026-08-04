@@ -1537,3 +1537,24 @@ def test_solo_key_from_manifest_round_trips():
 
 def test_solo_key_from_manifest_rejects_multi_tenant():
     assert coloc.solo_key_from_manifest({"tenants": [{}, {}]}) is None
+
+
+def test_container_log_capture_appends_rather_than_clobbers(tmp_path, monkeypatch):
+    """Regression: on a readiness timeout, `docker logs` output was written OVER
+    the log, destroying the `docker run` output that is the only record of why a
+    container never started. The user saw "No such container: triton-cv" — the
+    result of the clobbering, not the cause of the failure."""
+    paths = _triton_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    paths.server_log("cv").write_text("docker: launch failed: no such image\n")
+
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    monkeypatch.setattr(
+        coloc.subprocess, "run",
+        lambda *a, **k: types.SimpleNamespace(stdout="Error: No such container", stderr=""),
+    )
+    orch._capture_container_log("triton-cv", paths, "cv")
+
+    body = paths.server_log("cv").read_text()
+    assert "no such image" in body, "the launch error must survive"
+    assert "No such container" in body

@@ -435,6 +435,19 @@ def build_triton_serve_cmd(
     # host uses, so config.pbtxt parameters need no translation.
     for src, dst in (extra_mounts or []):
         cmd += ["-v", f"{src}:{dst}:ro"]
+    # A python-backend model loads its weights from the HuggingFace cache at
+    # startup, inside the container. Without the cache mounted it has nowhere to
+    # read them from and — running as the caller's uid, with no HOME — nowhere
+    # to download them to either, so the model never loads and the container
+    # exits before Triton is ready.
+    if any((CV_MODELS.get(m) or CVModelSpec("", "", "", "", [], "", [])).is_python_backend
+           for m in (models or [])):
+        hf_home = os.environ.get("HF_HOME") or str(Path.home() / ".cache" / "huggingface")
+        cmd += ["-e", f"HF_HOME={hf_home}", "-v", f"{hf_home}:{hf_home}"]
+        token = os.environ.get("HF_TOKEN")
+        if token:
+            cmd += ["-e", f"HF_TOKEN={token}"]
+
     if mps_pipe_dir:
         # Share the host MPS control pipe so kernels co-schedule with the LLM.
         #

@@ -336,3 +336,28 @@ def test_missing_model_py_is_a_loud_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(tc, "python_model_source", lambda name: None)
     with pytest.raises(FileNotFoundError, match="model.py"):
         tc.write_model_repo(tmp_path, tc.resolve_spec("kosmos-2.5"), "python")
+
+
+def test_python_backend_container_gets_the_hf_cache(monkeypatch):
+    """Regression: the container had no HF cache and no HF_HOME, so a
+    python-backend model had nowhere to read its weights from and — running as
+    the caller's uid with no HOME — nowhere to download them to either. The
+    container exited before Triton was ready, and the failure surfaced as a
+    300s readiness timeout naming Docker rather than the cache."""
+    monkeypatch.setenv("HF_HOME", "/hf-cache")
+    cmd = tc.build_triton_serve_cmd(Path("/repo"), models=["kosmos-2.5"])
+    assert "HF_HOME=/hf-cache" in cmd
+    assert "/hf-cache:/hf-cache" in cmd
+
+
+def test_tensorrt_only_container_does_not_mount_the_hf_cache(monkeypatch):
+    monkeypatch.setenv("HF_HOME", "/hf-cache")
+    cmd = tc.build_triton_serve_cmd(Path("/repo"), models=["yolov8-l"])
+    assert not any("HF_HOME" in str(a) for a in cmd)
+
+
+def test_hf_token_is_forwarded_when_set(monkeypatch):
+    """Gated repos need it inside the container too."""
+    monkeypatch.setenv("HF_TOKEN", "hf_xxx")
+    cmd = tc.build_triton_serve_cmd(Path("/repo"), models=["kosmos-2.5"])
+    assert "HF_TOKEN=hf_xxx" in cmd
