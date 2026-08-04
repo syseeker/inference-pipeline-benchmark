@@ -318,7 +318,7 @@ def resolve_spec(model_id: str) -> CVModelSpec:
 # One Triton container per GPU that has CV tenants on it. A single shared
 # container would force every Triton-served model onto one card, which makes two
 # of the three four-tenant/two-GPU pairings in the Phase-5 placement study
-# (docs/contention-coverage.md) inexpressible.
+# (docs/contention-phases.md) inexpressible.
 #
 # Ports: two containers cannot bind the same host port, so each device's block
 # is offset from the configured base by a fixed stride:

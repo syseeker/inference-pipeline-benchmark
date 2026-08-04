@@ -566,7 +566,7 @@ def test_to_dict_is_json_serialisable_and_carries_identity(cfg):
 
 
 # --------------------------------------------------------------------------- #
-# Experiment-design coverage (docs/contention-coverage.md)
+# Experiment-design coverage (docs/contention-phases.md)
 # --------------------------------------------------------------------------- #
 
 

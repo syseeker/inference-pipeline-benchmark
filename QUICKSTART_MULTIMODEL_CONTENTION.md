@@ -590,5 +590,5 @@ The two do not interact.
   interconnect check in Step 1.
 - **4 GPUs.** The `device:` field supports up to 8; this study is scoped to 2.
 - **Adding your own models or colocations.** See
-  [docs/contention-coverage.md](docs/contention-coverage.md) for what exists
+  [docs/contention-phases.md](docs/contention-phases.md) for what exists
   and why, and the `extend-benchmark-config` skill for the schema.

@@ -261,7 +261,7 @@ see [docs/gpu-strategy.md](docs/gpu-strategy.md).
 | File | What's in it |
 |---|---|
 | [docs/contention.md](docs/contention.md) | **Start here.** What a degradation ratio means, why the baseline is the hard part, how the four model types contend, single- and multi-GPU topologies |
-| [docs/contention-coverage.md](docs/contention-coverage.md) | Coverage against the customer's original design — what's built, what's reframed, what's disqualified and why |
+| [docs/contention-phases.md](docs/contention-phases.md) | Per phase: the customer's intent, the colocations built against it with every configured value, what was not implemented and why, and what to observe |
 | [skills/gpu-contention-benchmark/](skills/gpu-contention-benchmark/) | The skill, its design record, and the GPU validation checklist to work through on first hardware contact |
 
 **Agent integration**
