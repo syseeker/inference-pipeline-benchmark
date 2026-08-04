@@ -1303,12 +1303,39 @@ class ColocationOrchestrator:
         except Exception:
             return False
 
-    def _port_serving(self, tenant: Tenant) -> bool:
+    def _serves_this_tenant(self, tenant: Tenant, timeout: float = 3.0) -> bool:
+        """Is the server on this port serving THIS tenant's model?
+
+        Not "is anything answering". Colocation tenants share a backend's port
+        — cross-vlm-prefill-vs-llm puts qwen2.5-vl-7b and gemma2-9b both on
+        8000 — so a bare HTTP 200 means the previous tenant's server has not
+        finished shutting down, and treating it as ready makes the run reuse
+        it: no server launched, no log, and aiperf driving one model's
+        workload against a different model's weights. That completes and
+        writes a normal-looking manifest, so the baseline is silently
+        attributed to the wrong model and every ratio computed against it is
+        wrong. Compare the id before trusting the port.
+        """
         try:
-            with urllib.request.urlopen(self._models_url(tenant), timeout=3) as r:
-                return r.status == 200
+            with urllib.request.urlopen(self._models_url(tenant), timeout=timeout) as r:
+                if r.status != 200:
+                    return False
+                body = json.loads(r.read().decode() or "{}")
         except Exception:
             return False
+        served = {str(m.get("id")) for m in (body.get("data") or []) if isinstance(m, dict)}
+        if not served:
+            return False
+        want = {tenant.round.hf_id, tenant.round.model_id}
+        # vLLM echoes back whatever --served-model-name / model path it was
+        # given, so accept an exact match either way round plus a basename
+        # match for a path-style id.
+        return bool(served & want) or any(
+            s.rsplit("/", 1)[-1] == str(w).rsplit("/", 1)[-1] for s in served for w in want if w
+        )
+
+    def _port_serving(self, tenant: Tenant) -> bool:
+        return self._serves_this_tenant(tenant)
 
     def _wait_ready(self, tenant: Tenant, timeout_s: int | None = None,
                     paths: RunPaths | None = None) -> None:
@@ -1343,13 +1370,23 @@ class ColocationOrchestrator:
         deadline = time.time() + (timeout_s or tenant.round.ready_timeout_s or 600)
         url = self._models_url(tenant)
         while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(url, timeout=5) as r:
-                    if r.status == 200:
-                        return
-            except Exception:
-                time.sleep(2.0)
-        raise RuntimeError(f"tenant {tenant.name!r} server not ready within budget ({url})")
+            # The model id, not just a 200: a 200 from the PREVIOUS tenant's
+            # server would otherwise pass here and the window would measure
+            # the wrong model. See _serves_this_tenant.
+            if self._serves_this_tenant(tenant, timeout=5.0):
+                return
+            time.sleep(2.0)
+        tail = ""
+        if paths is not None:
+            with contextlib.suppress(OSError):
+                log = paths.server_log(tenant.name)
+                if log.exists():
+                    tail = "\n".join(log.read_text().splitlines()[-15:])
+        raise RuntimeError(
+            f"tenant {tenant.name!r} server not ready within budget ({url}); "
+            f"expected model {tenant.round.hf_id!r}"
+            + (f"\nServer log ({paths.server_log(tenant.name)}):\n{tail}" if tail else "")
+        )
 
     def _launch_drivers(self, coloc: Colocation, paths: RunPaths) -> dict[str, subprocess.Popen]:
         from benchmarks.triton_cv import wrap_perf_analyzer_docker

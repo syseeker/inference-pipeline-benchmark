@@ -1403,3 +1403,65 @@ def test_solo_key_still_matches_for_identical_tenants():
     object.__setattr__(a.round, "launch_args", ["--max-model-len=32768"])
     object.__setattr__(b.round, "launch_args", ["--max-model-len=32768"])
     assert coloc._solo_key(a) == coloc._solo_key(b), "dedup across colocations must still work"
+
+
+# ── server reuse must check WHICH model ─────────────────────────────────────
+#
+# Regression: _port_serving and _wait_ready both returned on a bare HTTP 200.
+# Colocation tenants share a backend port — cross-vlm-prefill-vs-llm puts
+# qwen2.5-vl-7b and gemma2-9b both on 8000 — so if the previous tenant's server
+# had not finished shutting down, the next tenant reused it: no server launched,
+# no log, and aiperf driving one model's workload against another model's
+# weights, completing normally and writing a plausible manifest. Whether you got
+# that or a loud timeout depended on shutdown timing.
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._b = json.dumps(payload).encode(); self.status = status
+    def read(self): return self._b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _serving(monkeypatch, ids):
+    monkeypatch.setattr(coloc.urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResp({"data": [{"id": i} for i in ids]}))
+
+
+def test_port_with_another_tenants_model_is_not_reusable(monkeypatch):
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    t = _tenant(name="llm", model="gemma2-9b")
+    _serving(monkeypatch, ["Qwen/Qwen2.5-VL-7B-Instruct-AWQ"])   # the PREVIOUS tenant
+    assert orch._port_serving(t) is False
+
+
+def test_port_with_this_tenants_model_is_reusable(monkeypatch):
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    t = _tenant(name="llm", model="gemma2-9b")
+    _serving(monkeypatch, [t.round.hf_id])
+    assert orch._port_serving(t) is True
+
+
+def test_model_id_matches_on_basename(monkeypatch):
+    """vLLM echoes back whatever path/served-model-name it was given."""
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    t = _tenant(name="llm", model="gemma2-9b")
+    _serving(monkeypatch, ["/models/" + str(t.round.hf_id).rsplit("/", 1)[-1]])
+    assert orch._port_serving(t) is True
+
+
+def test_empty_model_list_is_not_ready(monkeypatch):
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    _serving(monkeypatch, [])
+    assert orch._port_serving(_tenant(name="llm")) is False
+
+
+def test_wait_ready_times_out_against_the_wrong_model(monkeypatch):
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    t = _tenant(name="llm", model="gemma2-9b")
+    _serving(monkeypatch, ["Qwen/Qwen2.5-VL-7B-Instruct-AWQ"])
+    monkeypatch.setattr(coloc.time, "sleep", lambda *_: None)
+    # 0.01, not 0: `timeout_s or ready_timeout_s or 600` treats 0 as unset and
+    # would spin for the 600 s default with sleep stubbed out.
+    with pytest.raises(RuntimeError, match="expected model"):
+        orch._wait_ready(t, timeout_s=0.01)
