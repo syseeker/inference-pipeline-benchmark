@@ -794,6 +794,28 @@ rung is *named* for, rather than deriving caps:
 | `kv22` | 14.4 | 7.8 |
 | `kv29` | 19.2 | 9.7 |
 
+**Confirmed quantitatively across rungs.** The deficit tracks the cap exactly,
+so this is the mechanism rather than a coincidence:
+
+| Rung | neighbour cap | predicted KV | measured KV |
+|---|---|---|---|
+| `kv03` | 0.19 | — | −37.31 GiB |
+| `kv13` | 0.22 | −34.63 GiB | **−34.46 GiB** |
+| `kv22` | 0.26 | −31.0 GiB | (expected to fail) |
+| `kv29` | 0.28 | −29.3 GiB | (expected to fail) |
+
+The `kv13` prediction is just `−37.31 + (0.22 − 0.19) × 96 GB`, and it lands
+within 0.17 GiB.
+
+**Caps are not impossible here, they are unmaintainable.** A neighbour cap of
+~0.73 instead of 0.22 would cover the anchor's resident footprint plus its own
+and would load fine — total-device fractions need not sum to 1.0. The reason to
+reject that is not infeasibility: it is that the second tenant's cap then
+encodes the *first* tenant's footprint and the load order, so the number means
+nothing on its own and silently breaks whenever the anchor's size, quantization
+or KV changes. Swapping the 72B for a 32B would require recomputing a number
+that never mentions the 72B.
+
 `--kv-cache-memory-bytes` is absolute and per-process, so it composes across
 tenants *and* it sets the swept variable directly instead of inferring it from a
 cap. The yaml's objection — that deriving would flatten the curve — applies to
