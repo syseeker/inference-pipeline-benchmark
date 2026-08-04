@@ -448,7 +448,12 @@ def build_perf_analyzer_cmd(
     load = tenant.load
     if not load.is_open_loop:
         raise ValueError(f"tenant {tenant.name!r} (CV) needs an open-loop rps.")
-    rps = int(load.rps)
+    # NOT int(): perf_analyzer accepts fractional rates, and truncating meant a
+    # sub-1 rps tenant was driven at `--request-rate-range 0:0:1` and sent
+    # nothing at all — kosmos-2.5 at 0.2 rps recorded achieved_rps 0.00 in every
+    # colocation while the manifest said ok. Formatted with %g so an integer
+    # rate still renders as "50", not "50.0".
+    rps = f"{load.rps:g}"
     dist = "poisson" if load.pattern == "poisson" else "constant"
     # perf_analyzer -u expects hostname:port, not a full URL with scheme.
     clean_url = url.removeprefix("http://").removeprefix("https://")
@@ -806,6 +811,15 @@ def trace_warnings(traces: dict[str, list[dict[str, Any]]]) -> list[str]:
     out: list[str] = []
     for name, recs in sorted(traces.items()):
         if not recs:
+            # An EMPTY trace is the worst case, not a benign one. Skipping it is
+            # how dinov2-base and kosmos-2.5 both recorded achieved_rps 0.00
+            # with warnings: [] — the driver wrote no output at all, so there
+            # were no records in which to find a failure.
+            out.append(
+                f"tenant {name!r}: NO trace records — the driver produced no output, so this "
+                f"tenant served nothing. Check <run_dir>/{name}.aiperf/ and "
+                f"<run_dir>/{name}.server.log."
+            )
             continue
         bad = [r for r in recs if not r.get("ok", True)]
         if not bad:
@@ -905,6 +919,32 @@ class RunPaths:
         return self.root / "manifest.json"
 
 
+def rate_warnings(coloc: Colocation, achieved: dict[str, float | None]) -> list[str]:
+    """A tenant that achieved nothing, or a small fraction of what was offered.
+
+    Separate from trace_warnings because achieved_rps is the number every
+    degradation ratio divides by: a zero here does not fail the run, it poisons
+    the analysis quietly.
+    """
+    out: list[str] = []
+    for t in coloc.tenants:
+        offered = t.load.rps
+        if not offered:
+            continue
+        got = achieved.get(t.name)
+        if got is None or got <= 0:
+            out.append(
+                f"tenant {t.name!r}: achieved_rps is {got!r} against an offered {offered} — "
+                "it served nothing. This run must not be used as a baseline or a window."
+            )
+        elif got < 0.5 * offered:
+            out.append(
+                f"tenant {t.name!r}: achieved_rps {got:.2f} is under half the offered "
+                f"{offered}. Either the tenant is past its capacity or the driver failed."
+            )
+    return out
+
+
 def build_manifest(
     coloc: Colocation, *, t0_epoch_ms: float, gpu: str,
     sampler_summaries: dict[Any, dict[str, Any]] | None = None,
@@ -956,7 +996,8 @@ def build_manifest(
             (sampler_summaries or {}).items(), key=lambda kv: int(kv[0]))},
         "environment": environment or {},
         "warnings": (environment_warnings(coloc, environment)
-                     + trace_warnings(traces or {})),
+                     + trace_warnings(traces or {})
+                     + rate_warnings(coloc, achieved or {})),
         "throttle_reasons": sorted(throttle_reasons or []),
     }
 
@@ -1292,9 +1333,21 @@ class ColocationOrchestrator:
             device = triton_device_of(tenant)
             container = triton_container_name(device)
             http_port, grpc_port, metrics_port = triton_ports(tenant.round.port, device)
-            if self._triton_container_running(container) or self._triton_ready(http_port):
+            # Reuse only a container that is serving THIS tenant's model.
+            # "the container exists" is not the same question: triton-cv started
+            # for yolov8-l with --model-control-mode=explicit --load-model=yolov8-l
+            # is up and ready, and has never heard of dinov2-base. Reusing it
+            # sent perf_analyzer at a model the server does not have, which
+            # produced no output and an achieved_rps of 0.00 that the manifest
+            # reported as ok.
+            if self._triton_model_ready(http_port, tenant.round.model_id):
                 return ServerHandle(tenant=tenant, proc=None, reused=True,
                                     container_name=None)
+            # A container that is up but serving something else has to go, or
+            # the port is taken and the new one cannot bind.
+            if self._triton_container_running(container):
+                subprocess.run(["docker", "rm", "-f", container],
+                               capture_output=True, timeout=30)
             from benchmarks.triton_cv import build_triton_serve_cmd
             docker_cmd = build_triton_serve_cmd(
                 paths.triton_repo_root_for(device),
@@ -1340,6 +1393,20 @@ class ColocationOrchestrator:
         from benchmarks.triton_cv import triton_ready_url
         try:
             with urllib.request.urlopen(triton_ready_url(port), timeout=3) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _triton_model_ready(self, port: int, model_id: str) -> bool:
+        """Is THIS model loaded and ready on the container at `port`?
+
+        Triton answers per model at /v2/models/<name>/ready, which is the only
+        check that distinguishes "a Triton is running" from "the tenant I am
+        about to drive is being served".
+        """
+        url = f"http://localhost:{port}/v2/models/{model_id}/ready"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
                 return r.status == 200
         except Exception:
             return False

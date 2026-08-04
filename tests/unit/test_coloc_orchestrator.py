@@ -524,7 +524,7 @@ def test_manifest_carries_environment_and_warning():
     m = coloc.build_manifest(_coloc(), t0_epoch_ms=1.0, gpu="g",
                              environment=_env(mps_detected=False))
     assert m["environment"]["mps"]["detected"] is False
-    assert len(m["warnings"]) == 1
+    assert any("no MPS control daemon" in w for w in m["warnings"])
 
 
 # ── solo-baseline cache ─────────────────────────────────────────────────────
@@ -778,15 +778,23 @@ def _fake_docker(monkeypatch, orch):
     launched: list[list[str]] = []
     running: set[str] = set()
 
+    loaded: set[str] = set()
+
     def fake_popen(cmd, **kw):
         launched.append(list(cmd))
         if "--name" in cmd:
             running.add(cmd[cmd.index("--name") + 1])
+        # A container serves exactly the models it was told to load, which is
+        # what makes reuse legitimate for a second tenant on the same device.
+        loaded.update(a.split("=", 1)[1] for a in cmd if a.startswith("--load-model="))
         return types.SimpleNamespace(wait=lambda *a, **k: 0)
 
     monkeypatch.setattr(coloc.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(orch, "_triton_container_running", lambda name: name in running)
     monkeypatch.setattr(orch, "_triton_ready", lambda port: False)
+    # Reuse is decided per MODEL now, so the fake has to track which models the
+    # container it launched actually holds.
+    monkeypatch.setattr(orch, "_triton_model_ready", lambda port, model: model in loaded)
     return launched
 
 
@@ -1558,3 +1566,75 @@ def test_container_log_capture_appends_rather_than_clobbers(tmp_path, monkeypatc
     body = paths.server_log("cv").read_text()
     assert "no such image" in body, "the launch error must survive"
     assert "No such container" in body
+
+
+# ── a running Triton is not necessarily serving YOUR model ──────────────────
+#
+# Regression: the reuse check was `container running OR port ready`, neither of
+# which asks whether this tenant's model is loaded. triton-cv started for
+# yolov8-l with --model-control-mode=explicit --load-model=yolov8-l is up and
+# ready and has never heard of dinov2-base. Reusing it pointed perf_analyzer at
+# a model the server does not have: no output, achieved_rps 0.00, manifest ok.
+# Verified live — on one container, yolov8-l/ready 200 and dinov2-base/ready 400.
+
+def test_triton_reuse_requires_this_model_to_be_ready(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    # Container is up, but only yolov8-l is loaded on it.
+    monkeypatch.setattr(orch, "_triton_container_running", lambda name: True)
+    monkeypatch.setattr(orch, "_triton_model_ready",
+                        lambda port, model: model == "yolov8-l")
+    monkeypatch.setattr(coloc.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+    h = orch._ensure_server(_cv_tenant(name="cv", model="dinov2-base", port=8100), paths)
+    assert h.reused is False, "must not reuse a container that lacks this model"
+    assert launched, "a new container has to be launched"
+
+
+def test_triton_reuse_accepted_when_the_model_is_ready(tmp_path, monkeypatch):
+    paths = _triton_paths(tmp_path)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    _fake_docker(monkeypatch, orch)
+    monkeypatch.setattr(orch, "_triton_model_ready", lambda port, model: True)
+    h = orch._ensure_server(_cv_tenant(name="cv", model="yolov8-l", port=8100), paths)
+    assert h.reused is True
+
+
+def test_sub_one_rps_is_not_truncated_to_zero():
+    """Regression: `int(load.rps)` made 0.2 rps into --request-rate-range 0:0:1,
+    so kosmos-2.5 was driven at zero and served nothing in every colocation."""
+    t = types.SimpleNamespace(
+        name="ilm", load=types.SimpleNamespace(rps=0.2, pattern="poisson", is_open_loop=True))
+    cmd = coloc.build_perf_analyzer_cmd(model="kosmos-2.5", url="localhost:8100",
+                                        tenant=t, duration_s=10)
+    assert cmd[cmd.index("--request-rate-range") + 1] == "0.2:0.2:1"
+
+
+def test_integer_rps_still_renders_without_a_decimal():
+    t = types.SimpleNamespace(
+        name="cv", load=types.SimpleNamespace(rps=50.0, pattern="poisson", is_open_loop=True))
+    cmd = coloc.build_perf_analyzer_cmd(model="yolov8-l", url="localhost:8100",
+                                        tenant=t, duration_s=10)
+    assert cmd[cmd.index("--request-rate-range") + 1] == "50:50:1"
+
+
+def test_empty_trace_is_warned_not_skipped():
+    (w,) = coloc.trace_warnings({"ilm": []})
+    assert "NO trace records" in w and "served nothing" in w
+
+
+def test_zero_achieved_rps_is_warned():
+    c = _window(id="x", tenants=[_cv_tenant(name="cv", model="yolov8-l")])
+    (w,) = coloc.rate_warnings(c, {"cv": 0.0})
+    assert "served nothing" in w
+
+
+def test_achieved_far_below_offered_is_warned():
+    c = _window(id="x", tenants=[_cv_tenant(name="cv", model="yolov8-l")])
+    (w,) = coloc.rate_warnings(c, {"cv": 1.0})     # offered 50
+    assert "under half the offered" in w
