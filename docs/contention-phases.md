@@ -640,6 +640,48 @@ runs in a container and may become the bottleneck itself, which would measure
 the client rather than the GPU. Run the tenant solo at the intended top rate and
 confirm `achieved_rps` still tracks `offered_rps`.
 
+### `cross-size-scaling` varies size and load fraction together
+
+All four rungs are driven at 4 req/s, and all four serve it:
+
+| Tenant | Cap | Quantization | Achieved of 4 req/s |
+|---|---|---|---|
+| `qwen2.5-7b` | 0.39 | bf16 | 3.91 |
+| `qwen2.5-14b` | 0.49 | bf16 | 3.90 |
+| `qwen2.5-32b` | 0.87 | bf16 | 3.88 |
+| `qwen2.5-72b` | 0.66 | awq | 3.90 |
+
+The cap is not monotonic in parameter count — 72B is AWQ 4-bit (~40 GB) and
+32B is bf16 (~65 GB), so the 32B rung is the tightest tenant in the study.
+
+The confound: 4 req/s is about **6% of `qwen2.5-7b`'s measured 62 req/s
+capacity**, but a much larger fraction of 72B's. The sweep therefore changes
+model size and proximity-to-saturation at the same time. If the larger rungs
+degrade more under contention, this design cannot say whether that is because
+they are larger or because they were already closer to their limit.
+
+To separate them, drive each rung at a fixed *fraction* of its own solo
+capacity (measure that first, per rung) rather than at a fixed absolute rate.
+Keep one absolute-rate arm if the customer-facing question is "what happens at
+4 req/s", but do not read the current arm as isolating size.
+
+### `vram_after_load_gb` is not actually recorded
+
+The validation record's Tier 2 assumes it is:
+
+> "The runner already records `vram_after_load_gb` — that is the ground truth.
+> After the first runs, compare and correct."
+
+The GPU sampler writes `mem_bw_util_pct_p50` and `mem_bw_util_pct_peak` and no
+memory-*used* field, so no manifest in this run carries one. Every estimated
+`weights_gb` — including the `65.5` that sets the 32B rung's 0.87 cap — is
+therefore still an estimate, and no number of further runs will correct it.
+
+A run that loads only proves the cap is *sufficient*, not that the estimate is
+*accurate*; a generous estimate and a correct one are indistinguishable from
+outside. Snapshot `nvidia-smi --query-gpu=memory.used` after each server reports
+ready, or add a memory-used field to the sampler, and Tier 2 becomes checkable.
+
 ### Two colocations are missing `kv_budget_gb`, and both need it
 
 `cross-vlm-prefill-vs-llm` and `place-vlm-prefill-split` set no
