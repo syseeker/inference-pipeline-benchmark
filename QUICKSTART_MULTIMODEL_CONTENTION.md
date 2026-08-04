@@ -329,9 +329,6 @@ and each of those steps fails in a way that would otherwise waste all of it.
 
 **CLI:**
 ```bash
-# Check the whole study first — no GPU needed, prints every pre-flight issue.
-bench coloc --gpu rtx_pro6000 --all --dry-run
-
 # The whole study, one command. ~163 runs; budget several hours.
 bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 
