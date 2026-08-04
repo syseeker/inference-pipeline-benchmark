@@ -83,10 +83,35 @@ left unwritten on the assumption it is not.
 ```bash
 bench setup --backend vllm
 bench setup --backend sglang      # only if you'll run secondary-backend-llm-*
+
+# Can this box actually download every model? One HEAD request each, no GPU.
+python scripts/check_model_access.py --gpu rtx_pro6000
 ```
 
 Each backend gets its own venv (`.venv-vllm`, …) which the orchestrator
 activates for you.
+
+**If any model comes back `GATED`**, log in and accept its licence — both, with
+the same account:
+
+```bash
+.venv-vllm/bin/hf auth login      # `hf`, not `huggingface-cli` (renamed in
+                                  # huggingface_hub 0.34); it lives in the venv,
+                                  # not on PATH
+```
+
+Then open each blocked model's page and accept. On `rtx_pro6000` today that is
+`google/gemma-2-9b-it` and `meta-llama/Llama-3.1-8B-Instruct`, both used in
+Phase 4. **Logging in is not enough** — acceptance is per-account per-model, and
+Llama's is a form that takes a few minutes to approve.
+
+The token lands in `~/.cache/huggingface/token` and is shared by every venv, so
+you log in once.
+
+Skipping this does not fail fast: the server starts, gets a 401 fetching
+`config.json`, exits, and the run then waits out its full 600 s readiness budget
+before reporting `server not ready within budget` — once per affected
+colocation.
 
 ---
 
@@ -511,6 +536,8 @@ The two do not interact.
 | Symptom | Cause | Action |
 |---|---|---|
 | `Command 'bench' not found` | CLI not installed | Step 0 |
+| `server not ready within budget` after ~600s, server log shows `GatedRepoError` / 401 | Model licence not accepted | `python scripts/check_model_access.py --gpu rtx_pro6000`, then Step 2 |
+| `huggingface-cli: command not found` | Renamed to `hf`, and it is in the venv | `.venv-vllm/bin/hf auth login` |
 | `ModuleNotFoundError: ultralytics` | CV export deps missing, or wrong interpreter | `.venv-vllm/bin/pip install -r requirements-contention.txt`, and run the exporter with `.venv-vllm/bin/python` (Step 3) |
 | Phase 0 gives ~0.28× | MPS not active | Step 4. Do not proceed |
 | Phase 0 reports `isolation: "none"` with MPS clearly running | `CUDA_MPS_PIPE_DIRECTORY` not exported in that shell | Step 4 — export it, re-run |

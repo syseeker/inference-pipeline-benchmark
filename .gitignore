@@ -68,3 +68,11 @@ Thumbs.db
 # on the instance with scripts/build_nitrogen_scenarios.py — don't commit pixels)
 tests/smoke/scenarios_nitrogen/
 .cache/nitrogen_videos/
+
+# Contention results are tracked so a run can be shown as-is, but NOT the
+# Triton model repo: it is build output (regenerate with
+# scripts/build_triton_cv_repo.py, ~1 min) and two of its files are 165 MB and
+# 169 MB, over GitHub's hard 100 MB per-file limit — the push is rejected, not
+# warned.
+benchmarks/results/*/triton_repo/
+benchmarks/results/*/triton_repo-gpu*/

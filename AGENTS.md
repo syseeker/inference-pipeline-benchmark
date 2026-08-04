@@ -456,6 +456,16 @@ export PATH="$HOME/venv/bin:$PATH"
 bench setup --backend vllm
 bench setup --backend sglang        # only if a colocation names sglang
 
+# 1b. Model access. A gated HF repo does NOT fail at plan time — the server
+#     401s on config.json, exits, and the run waits out its full 600s
+#     readiness budget before saying "server not ready". Once per affected
+#     colocation. On rtx_pro6000: gemma2-9b and llama3.1-8b, both Phase 4.
+python scripts/check_model_access.py --gpu rtx_pro6000
+#     If GATED: `.venv-vllm/bin/hf auth login` (`hf`, not `huggingface-cli` —
+#     renamed in huggingface_hub 0.34; it is in the venv, not on PATH), THEN
+#     accept each licence at its model page with the same account. Logging in
+#     alone does not grant access.
+
 # 2. CV export deps. Not in requirements.txt / pyproject.toml on purpose —
 #    contention-only. `bench setup` does NOT install them. Needs a
 #    torch-capable venv; system python gives ModuleNotFoundError: ultralytics.
