@@ -132,7 +132,7 @@ single-round run on the default model.
 |---|---|---|
 | `2` | combo unsupported per yaml `unsupported_backends` | Drop the offending backend from `--backends`, rerun. Note the reason in the final report. |
 | `3` | runtime crash (OOM, server failed, kernel incompat) | Check `benchmarks/results/<gpu>/server-logs/<backend>.log`. If "Address already in use", another engine is holding the port — kill it, rerun (PR #1 spread nitrogen ports to 5560-5564 per engine to prevent this). |
-| `4` | missing dep / credential | If `bench setup` failed: try the `next_action` hint in its JSON (often "now install: …"). If HF model gated: `huggingface-cli login`. |
+| `4` | missing dep / credential | If `bench setup` failed: try the `next_action` hint in its JSON (often "now install: …"). If HF model gated: `hf auth login`. |
 | `1` | generic | Print the `error.remediation` text and stop. |
 
 ## Optional step 6 — Concurrency curves (HTTP backends only)
@@ -816,7 +816,7 @@ per scenario).
 ## Pre-flight checks the skill MUST run (don't skip)
 
 1. **HF auth** — `hf whoami` reachable. If gated repos refuse, prompt the
-   user for `huggingface-cli login`.
+   user for `hf auth login`.
 2. **Actions root exists + has `SHARD_*/<vid>/<chunk>/metadata.json`**. If
    the user gave a path that's the .tar.gz, untar it first.
 3. **ckpt has `tokenizer_cfg.game_mapping_cfg`?** If non-null, pass
@@ -911,7 +911,7 @@ JSON output. Surface it to the user; don't silently skip.
    for everything except `nitrogen` CPU-mode dev work.
 2. **HF token** — `hf whoami`. Required for gated models
    (Qwen3-VL, Nemotron Omni). The skill should detect 401s in `setup`
-   downstream installs and tell the user to `huggingface-cli login`.
+   downstream installs and tell the user to `hf auth login`.
 3. **JS runtime** — only matters for the `dataset` extra in
    `nitrogen`. If real-frame extraction is the goal and neither `node`
    nor `deno` is on PATH, surface the issue here (prepare-nitrogen-dataset

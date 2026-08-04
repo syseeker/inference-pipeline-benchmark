@@ -30,6 +30,8 @@ First useful number in about 20 minutes. The full study is hours.
 - Docker, for the Triton CV tenants — and for the `trtexec` plan build in Step 3.
 - ~150 GB free disk for the model checkpoints in the roster.
 - `git`, `python>=3.10`, `pip`.
+- **A HuggingFace account**, with the licence accepted for every gated model.
+  Step 2 checks it.
 - One of: Claude Code / Codex / Cursor.
 
 ---
@@ -91,27 +93,16 @@ python scripts/check_model_access.py --gpu rtx_pro6000
 Each backend gets its own venv (`.venv-vllm`, …) which the orchestrator
 activates for you.
 
-**If any model comes back `GATED`**, log in and accept its licence — both, with
-the same account:
+**If any model comes back `GATED`:**
 
 ```bash
-.venv-vllm/bin/hf auth login      # `hf`, not `huggingface-cli` (renamed in
-                                  # huggingface_hub 0.34); it lives in the venv,
-                                  # not on PATH
+.venv-vllm/bin/hf auth login     # `hf`, not `huggingface-cli`; in the venv, not on PATH
 ```
 
-Then open each blocked model's page and accept. On `rtx_pro6000` today that is
-`google/gemma-2-9b-it` and `meta-llama/Llama-3.1-8B-Instruct`, both used in
-Phase 4. **Logging in is not enough** — acceptance is per-account per-model, and
-Llama's is a form that takes a few minutes to approve.
+Then open each blocked model's page and accept its licence, same account.
+Logging in alone does not grant access.
 
-The token lands in `~/.cache/huggingface/token` and is shared by every venv, so
-you log in once.
-
-Skipping this does not fail fast: the server starts, gets a 401 fetching
-`config.json`, exits, and the run then waits out its full 600 s readiness budget
-before reporting `server not ready within budget` — once per affected
-colocation.
+Re-run the check until it exits 0.
 
 ---
 

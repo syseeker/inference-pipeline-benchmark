@@ -47,7 +47,7 @@ JSON output. Surface it to the user; don't silently skip.
    for everything except `nitrogen` CPU-mode dev work.
 2. **HF token** — `hf whoami`. Required for gated models
    (Qwen3-VL, Nemotron Omni). The skill should detect 401s in `setup`
-   downstream installs and tell the user to `huggingface-cli login`.
+   downstream installs and tell the user to `hf auth login`.
 3. **JS runtime** — only matters for the `dataset` extra in
    `nitrogen`. If real-frame extraction is the goal and neither `node`
    nor `deno` is on PATH, surface the issue here (prepare-nitrogen-dataset

@@ -121,7 +121,7 @@ single-round run on the default model.
 |---|---|---|
 | `2` | combo unsupported per yaml `unsupported_backends` | Drop the offending backend from `--backends`, rerun. Note the reason in the final report. |
 | `3` | runtime crash (OOM, server failed, kernel incompat) | Check `benchmarks/results/<gpu>/server-logs/<backend>.log`. If "Address already in use", another engine is holding the port — kill it, rerun (PR #1 spread nitrogen ports to 5560-5564 per engine to prevent this). |
-| `4` | missing dep / credential | If `bench setup` failed: try the `next_action` hint in its JSON (often "now install: …"). If HF model gated: `huggingface-cli login`. |
+| `4` | missing dep / credential | If `bench setup` failed: try the `next_action` hint in its JSON (often "now install: …"). If HF model gated: `hf auth login`. |
 | `1` | generic | Print the `error.remediation` text and stop. |
 
 ## Optional step 6 — Concurrency curves (HTTP backends only)

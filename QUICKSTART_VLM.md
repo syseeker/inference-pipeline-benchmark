@@ -44,7 +44,7 @@ per-model reasons. Swap `rtx_pro6000` → `rtx5090` or `h200` for other GPUs.
   and RTX 5090 with the appropriate `--gpu` flag.
 - ~50 GB free disk (Qwen3-VL-32B-FP8 ≈ 16 GB; models auto-download from HF
   on first `vllm serve`).
-- `git`, `python>=3.10`, `pip`, a HuggingFace account (`huggingface-cli login`).
+- `git`, `python>=3.10`, `pip`, a HuggingFace account (`hf auth login`, from a backend venv).
 - One of: Claude Code / Codex / Cursor.
 
 ---
@@ -334,7 +334,7 @@ latency is high but TTFT is low, decode (output length) is the bottleneck.
 | `bench setup` exit 4 | pip install failed (network, missing system libs) | stderr of the failed step |
 | `bench smoke` exit 3 (runtime) | Server OOM or model download failed | `benchmarks/results/<gpu>/server-logs/<backend>.log` |
 | `bench sweep` skips a row with `[skip]` | `unsupported_backends:` matched for this model+backend | The skip message names the reason + `benchmarks/configs/<gpu>.yaml` |
-| Model download stalls | HF rate-limit or missing login | `huggingface-cli login` then retry |
+| Model download stalls | HF rate-limit or missing login | `hf auth login` then retry |
 | Section 9 (concurrency) missing from summary | No `bench load-test` runs yet | Go back to Step 7 |
 | Video smoke passes but key-phrase coverage = 0 | `expected.json` key_phrases too specific or model answered off-target | Raw response in `benchmarks/results/<gpu>/vllm/<scenario>__<run_id>.json` |
 | `bench profile` port conflict | vLLM already running on that port | Kill it: `pkill -f "vllm serve"` then retry |
