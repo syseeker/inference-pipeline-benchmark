@@ -592,3 +592,64 @@ The two do not interact.
 - **Adding your own models or colocations.** See
   [docs/contention-phases.md](docs/contention-phases.md) for what exists
   and why, and the `extend-benchmark-config` skill for the schema.
+
+---
+
+## Before you believe your own numbers
+
+A run that completes is not the same as a run that measured something. Work
+through these once you have results — each is answerable from the artifacts you
+already have.
+
+### 1. Was the GPU actually busy?
+
+Read `gpu_sampler` in the manifest. On a first pass here, `qwen2.5-7b` at 4
+requests/second held **99% GPU utilisation and 77% memory bandwidth on its own**
+— 32 output tokens means ~128 decode steps per second, each re-reading 15 GB of
+weights, against a card that supplies 1.6 TB/s. Decode is memory-bound, so a
+"small" workload can saturate bandwidth. Meanwhile the second card in a
+placement run sat at **20% utilisation and 1% bandwidth**.
+
+If one tenant is saturated and the rest are idle, the ratios describe that
+asymmetry rather than co-location in general. The rate sweeps
+(`cross-cv-vs-llm-rps`, `cross-llm-vs-cv-rps`) exist to find loads where every
+tenant is doing real work.
+
+### 2. Is the workload the one you care about?
+
+Check the prompts and `output_tokens` in the workload spec. `llm_short` is
+`"What is CUDA?"` with 32 output tokens: prefill is negligible, so it measures a
+nearly pure decode regime. That is a legitimate scenario and not a general one —
+a workload with long prompts contends differently, through prefill compute
+rather than decode bandwidth.
+
+### 3. Is the serving configuration realistic?
+
+The tenants run at `--max-num-seqs=32` while receiving about 4 concurrent
+requests, so the batcher never fills and the model runs at low batch efficiency.
+That is part of *why* it is bandwidth-bound. Real serving batches harder. Either
+raise the offered rate or set the limit to what you actually expect.
+
+### 4. One server or two?
+
+**Two.** Each vLLM tenant is its own `vllm serve` process on its own port, with
+its own CUDA context; vLLM does not serve two models from one process. There is
+no shared scheduler and no shared KV pool — the tenants compete only for
+streaming multiprocessors and memory bandwidth, through MPS. Triton is the
+opposite: one container per GPU serves every CV model placed on that card.
+
+### 5. What is worth tuning in vLLM?
+
+The per-tenant knobs that change a contention result, none of which this study
+currently sets:
+
+| Parameter | Effect on a co-located tenant |
+|---|---|
+| `--max-num-batched-tokens` | The real prefill/decode balance lever. Caps how much prefill work can block decode in one step |
+| `--enable-chunked-prefill` | Splits a large prefill across steps, so a VLM's video burst stops stalling a neighbour's decode |
+| `--enable-prefix-caching` | **Would distort these results** — a workload of three repeated prompts would hit cache almost every request |
+| `--max-num-seqs` | Batch width. Matters only once the offered rate can fill it |
+| `--kv-cache-memory-bytes` | Already set from `kv_budget_gb`. This, not `--gpu-memory-utilization`, is what fixes the cache under co-residency |
+
+Tuning these is worth doing **after** the load points are right. Optimising a
+tenant that is not being asked for real work only changes how idle it looks.
