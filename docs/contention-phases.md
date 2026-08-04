@@ -757,23 +757,54 @@ is the colocation's missing KV reservation, not the model.
 
 Add `kv_budget_gb` to both.
 
-**Do NOT extend this to `cross-memory-pressure-kv03/13/22/29`.** That family
-omits `kv_budget_gb` deliberately, and the yaml says why: the derive-from-budget
-rule exists to hold the KV cache *constant* so a comparison isolates the
-neighbour, but in this family the KV cache **is the swept variable** (3 → 13 →
-22 → 29 GB total, set through explicit caps). Adding a budget there would pin
-the exact quantity under test and flatten the curve.
+**`cross-memory-pressure-kv03/13/22/29` needs a different fix, not this one.**
 
-Its risk is different and is the experiment working as designed: the `kv03`
-rung deliberately starves KV (2.0 GB anchor, 1.0 GB neighbour). If vLLM cannot
-place a single sequence in that, it will emit the same `ValueError` — but that
-would be a **result** (the rung sits below the minimum viable KV on this card),
-not a misconfiguration. Record the rung as "below minimum viable KV" rather than
-fixing it; the cliff it is hunting may simply lie above `kv03`.
+That family omits `kv_budget_gb` deliberately — the yaml says the derive-from-
+budget rule exists to hold KV *constant*, whereas here KV **is** the swept
+variable (3 → 13 → 22 → 29 GB total), so deriving would pin the quantity under
+test. The reasoning is right. The mechanism it chose is not.
 
-The distinction to carry forward: **missing `kv_budget_gb` is a defect only where
-KV is meant to be a controlled constant.** Where KV is the variable, explicit
-caps are correct.
+**Measured: the family cannot work as written.** `kv03` contention failed at the
+neighbour with
+
+```
+Model loading took 14.25 GiB memory
+Available KV cache memory: -37.31 GiB
+ValueError: No available memory for the cache blocks.
+```
+
+The neighbour's allowance is 0.19 × 96 ≈ 17.0 GiB and its weights are 14.25 GiB,
+which on an empty card leaves the ~1 GiB the yaml designed for. It got −37.31,
+and the ~38.3 GiB shortfall is the anchor's 38.77 GiB of weights.
+
+`gpu_memory_utilization` is a **total-device** target. Each tenant subtracts
+everything already resident on the card — including other processes — so a cap
+cannot express "my share". Every rung sets both caps below the *other* tenant's
+footprint, so **all four rungs fail the same way**: 4 colocations × 3
+repetitions = 12 contention runs, with the solo baselines succeeding throughout
+(they are alone on the card, where the arithmetic holds).
+
+The fix keeps the experiment intact. Set `kv_budget_gb` per rung to the KV the
+rung is *named* for, rather than deriving caps:
+
+| Rung | anchor `kv_budget_gb` | neighbour `kv_budget_gb` |
+|---|---|---|
+| `kv03` | 2.0 | 1.0 |
+| `kv13` | 8.7 | 3.9 |
+| `kv22` | 14.4 | 7.8 |
+| `kv29` | 19.2 | 9.7 |
+
+`--kv-cache-memory-bytes` is absolute and per-process, so it composes across
+tenants *and* it sets the swept variable directly instead of inferring it from a
+cap. The yaml's objection — that deriving would flatten the curve — applies to
+deriving caps from a fixed budget, not to setting the budget to the swept value.
+This is strictly more precise than the cap arithmetic, which the 72B weights
+error has already thrown off by ~3 GiB per rung.
+
+The distinction to carry forward:The distinction to carry forward: `gpu_memory_utilization` is unusable for
+apportioning memory between colocated tenants, whatever the intent. Where KV is
+meant to be constant, derive it; where KV is the variable, set it explicitly.
+Either way the knob is `kv_budget_gb`, never the cap.
 
 ### `duration_s` propagates through `extends:`, and sweeps multiply it
 
