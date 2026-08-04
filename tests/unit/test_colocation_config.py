@@ -942,3 +942,48 @@ def test_every_defined_colocation_resolves(cfg):
         runs = _coloc_runs(cfg, name)
         assert runs, f"{name} produced no runs"
         assert any(not r.is_solo for r in runs), f"{name} produced no contention window"
+
+
+# ── one port per HTTP tenant ────────────────────────────────────────────────
+#
+# Regression: `backends.<b>.port` is a BACKEND-wide default, so two tenants on
+# the same backend inherited the same port. The second server took the endpoint
+# and each driver was answered by the other tenant's model — mix-full logged
+# 332/700 and 83/178 requests failing with HTTP 404 "The model ... does not
+# exist", and the survivors were whichever server owned the port at the time.
+
+def test_two_vllm_tenants_get_different_ports():
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-full") if not c.is_solo)
+    http = [t for t in win.tenants if t.round.transport != "triton"]
+    ports = [t.round.port for t in http]
+    assert len(ports) == len(set(ports)), f"HTTP tenants share a port: {ports}"
+    for t in http:
+        assert f":{t.round.port}" in t.round.base_url, "base_url must follow the port"
+
+
+def test_first_tenant_keeps_the_configured_port():
+    """Bumped only on collision, so a single-HTTP-tenant colocation is
+    unchanged and its baseline stays the same deployment."""
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-llm-cv") if not c.is_solo)
+    llm = next(t for t in win.tenants if t.name == "llm")
+    assert llm.round.port == 8000
+
+
+def test_solo_baselines_are_not_re_ported():
+    """A baseline is the reference for the window; shifting its port would make
+    it a different deployment."""
+    cfg = load_gpu_config("rtx_pro6000")
+    for c in iter_colocation(cfg, "mix-full"):
+        if c.is_solo and c.tenants[0].round.transport != "triton":
+            assert c.tenants[0].round.port == 8000
+
+
+def test_triton_tenants_are_left_alone():
+    """Triton is addressed per device, not per tenant — two CV tenants on one
+    card share a container by design."""
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-full") if not c.is_solo)
+    triton = [t.round.port for t in win.tenants if t.round.transport == "triton"]
+    assert triton == [8100, 8100]

@@ -73,7 +73,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -586,6 +586,43 @@ def _resolve_tenant(
     )
 
 
+def _assign_distinct_ports(tenants: list[Tenant]) -> list[Tenant]:
+    """Give every HTTP tenant in a window a port of its own.
+
+    `backends.<b>.port` is a BACKEND-wide default, so two tenants on the same
+    backend inherit the same port. The second server then takes the endpoint
+    and each driver is answered by the other tenant's model: mix-full logged
+    332/700 and 83/178 requests failing with HTTP 404 "The model ... does not
+    exist", and the survivors were whichever server happened to own the port at
+    that moment. Triton already avoids this with a per-device stride; HTTP
+    tenants had no equivalent.
+
+    Ports are bumped only on collision, so the first tenant on a backend keeps
+    the configured port and every single-HTTP-tenant colocation — including
+    every solo baseline — is byte-for-byte unchanged. That matters: the port
+    reaches the launch command, and shifting it for a baseline would make it a
+    different deployment from the window it is the reference for.
+
+    Triton tenants are untouched; they are addressed per device, not per tenant.
+    """
+    used: set[int] = set()
+    out: list[Tenant] = []
+    for t in tenants:
+        if t.round.transport == "triton":
+            out.append(t)
+            continue
+        port = t.round.port
+        while port in used:
+            port += 1
+        used.add(port)
+        if port == t.round.port:
+            out.append(t)
+            continue
+        base = t.round.base_url.replace(f":{t.round.port}", f":{port}")
+        out.append(replace(t, round=replace(t.round, port=port, base_url=base)))
+    return out
+
+
 def _solo_key(t: Tenant) -> tuple:
     """Identity of a solo baseline. A baseline is only valid for a
     contention run at the SAME offered load, so load is part of the key —
@@ -720,10 +757,11 @@ def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:
                     isolation=isolation, phase=phase, is_solo=True,
                 )
 
+        window_tenants = _assign_distinct_ports(tenants)
         for rep in range(1, repetitions + 1):
             pending.append(
                 Colocation(
-                    id=name, tenants=tenants, duration_s=duration_s,
+                    id=name, tenants=window_tenants, duration_s=duration_s,
                     isolation=isolation, phase=phase, is_solo=False,
                     repetition=rep,
                 )
