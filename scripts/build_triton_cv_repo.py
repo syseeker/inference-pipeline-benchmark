@@ -39,14 +39,28 @@ from benchmarks.triton_cv import (  # noqa: E402
 
 
 def export_onnx(spec, dest: Path, *, max_batch_size: int, imgsz: int) -> None:
-    """Export the model's weights to ONNX at `dest`."""
+    """Export the model's weights to ONNX at `dest`, at the spec's precision.
+
+    Precision is baked into the graph here rather than requested at plan-build
+    time: TensorRT v11 networks are strongly typed and `trtexec --fp16` no
+    longer exists, so an fp32 export can only ever produce an fp32 engine no
+    matter what the GPU yaml says. Exporting fp16 needs a GPU on both paths —
+    half-precision ops are largely unimplemented on CPU.
+    """
+    half = spec.torch_dtype_is_half
     if spec.exporter == "ultralytics":
         from ultralytics import YOLO  # noqa: PLC0415
 
         model = YOLO(f"{spec.weights}.pt")   # downloads the .pt on first use
         # dynamic=True → dynamic batch dim so Triton max_batch_size works.
-        out = model.export(format="onnx", dynamic=True, batch=max_batch_size, imgsz=imgsz)
-        shutil.copyfile(out, dest)
+        # quantize=16|32 replaces the deprecated half= arg (ultralytics 8.4.x).
+        # fp16 needs a CUDA device; ultralytics refuses it on CPU.
+        out = model.export(format="onnx", dynamic=True, batch=max_batch_size,
+                           imgsz=imgsz, quantize=16 if half else 32,
+                           device=0 if half else "cpu")
+        # move, not copy: ultralytics writes the .onnx next to the .pt in cwd,
+        # which is the repo root. Copying leaves an 84 MB duplicate behind.
+        shutil.move(out, dest)
     elif spec.exporter == "torch-hf":
         import torch  # noqa: PLC0415
         from transformers import AutoModel  # noqa: PLC0415
@@ -54,11 +68,17 @@ def export_onnx(spec, dest: Path, *, max_batch_size: int, imgsz: int) -> None:
         model = AutoModel.from_pretrained(spec.hf_id).eval()
         c, h, w = spec.input_dims
         dummy = torch.randn(1, c, h, w)
+        if half:
+            model, dummy = model.half().cuda(), dummy.half().cuda()
         torch.onnx.export(
             model, dummy, str(dest),
             input_names=[spec.input_name], output_names=[spec.output_name],
             dynamic_axes={spec.input_name: {0: "batch"}, spec.output_name: {0: "batch"}},
-            opset_version=17,
+            # 18, not 17: torch has no 17 implementation for these ops, so it
+            # exports at 18 and then tries to down-convert — which fails on
+            # Resize and prints a RuntimeError traceback while silently keeping
+            # the 18 graph. Asking for 18 skips the round trip and the noise.
+            opset_version=18,
         )
     else:
         raise ValueError(
@@ -94,14 +114,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f">> exporting {spec.name} → {onnx_tmp} (intermediate ONNX)")
         export_onnx(spec, onnx_tmp, max_batch_size=args.max_batch_size, imgsz=args.imgsz)
         plan = layout.version_dir / model_filename("tensorrt")
+        # .resolve(): docker parses a non-absolute -v source as a NAMED VOLUME,
+        # and a volume name may not contain "/", so a relative --repo-root (the
+        # form the quickstart uses) yields a command that cannot run.
         print(
             "\n>> Build the TensorRT plan INSIDE the Triton container so the TRT "
             "version matches (host trtexec would produce an unloadable plan):\n"
-            f"   docker run --rm --gpus all -v {layout.version_dir}:/w {TRITON_IMAGE} \\\n"
+            f"   docker run --rm --gpus all -v {layout.version_dir.resolve()}:/w {TRITON_IMAGE} \\\n"
             f"     trtexec --onnx=/w/model.onnx --saveEngine=/w/{plan.name} \\\n"
             f"       --minShapes={spec.input_name}:1x{'x'.join(map(str, spec.input_dims))} \\\n"
             f"       --optShapes={spec.input_name}:{args.max_batch_size}x{'x'.join(map(str, spec.input_dims))} \\\n"
-            f"       --maxShapes={spec.input_name}:{args.max_batch_size}x{'x'.join(map(str, spec.input_dims))} --fp16\n"
+            f"       --maxShapes={spec.input_name}:{args.max_batch_size}x{'x'.join(map(str, spec.input_dims))}\n"
+            f"\n   The plan will be {spec.precision} — taken from the ONNX above, not "
+            "from a flag.\n   TensorRT v11 networks are strongly typed and --fp16 has been "
+            "REMOVED; passing\n   it fails with 'Unknown option'. To change precision, "
+            "re-export, don't re-build.\n"
         )
     else:  # python
         print(

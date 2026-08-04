@@ -1199,3 +1199,77 @@ def test_cv_tenant_is_untouched_by_the_materialiser(tmp_path):
                                         input_data=coloc._workload_input_file(cv))
     assert "--input-data" not in cmd
     assert coloc.preflight_workload_payloads([cv]) == []
+
+
+# ── MPS into the Triton container ───────────────────────────────────────────
+#
+# Regression: build_triton_serve_cmd has always accepted `mps_pipe_dir` and
+# test_triton_cv.py asserted it honours it — but _ensure_server never passed it,
+# so in practice every CV tenant ran OUTSIDE MPS and time-sliced against the LLM
+# tenants. `capture_mps()` could not catch it (the host daemon is genuinely
+# running), so the window recorded mps.detected=True and no warning fired.
+# These tests exercise the CALLER, which is where the gap was.
+
+def test_ensure_server_shares_the_mps_pipe_into_the_container(tmp_path, monkeypatch):
+    pipe = tmp_path / "nvidia-mps"
+    pipe.mkdir()
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(pipe))
+
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    t = _cv_tenant(name="cv", model="yolov8-l", port=8100)
+    orch._ensure_server(t, paths, triton_tenants=[t])
+
+    cmd = launched[0]
+    assert f"CUDA_MPS_PIPE_DIRECTORY={pipe}" in cmd
+    assert f"{pipe}:{pipe}" in cmd
+    # And the uid must match the daemon's owner, or the container fails CUDA
+    # init outright — MPS servers are per-UID. See test_triton_cv.py.
+    assert "--user" in cmd
+
+
+def test_ensure_server_omits_mps_flags_when_no_daemon_pipe_exists(tmp_path, monkeypatch):
+    # Points at a path that does not exist — a blind `-v` here would have docker
+    # create it root-owned on every no-MPS box, and still not join anything.
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(tmp_path / "absent"))
+
+    paths = _triton_paths(tmp_path)
+    orch = coloc.ColocationOrchestrator(gpu="rtx_pro6000")
+    launched = _fake_docker(monkeypatch, orch)
+
+    t = _cv_tenant(name="cv", model="yolov8-l", port=8100)
+    orch._ensure_server(t, paths, triton_tenants=[t])
+
+    cmd = launched[0]
+    assert not any("CUDA_MPS_PIPE_DIRECTORY" in str(a) for a in cmd)
+    assert "--ipc=host" not in cmd
+
+
+def test_mps_pipe_dir_falls_back_to_the_documented_default(tmp_path, monkeypatch):
+    # The daemon is normally started with no CUDA_MPS_PIPE_DIRECTORY set, so it
+    # lands on /tmp/nvidia-mps. Requiring the env var would mean the common
+    # setup silently gets no MPS in containers.
+    monkeypatch.delenv("CUDA_MPS_PIPE_DIRECTORY", raising=False)
+    monkeypatch.setattr(coloc, "DEFAULT_MPS_PIPE_DIR", str(tmp_path))
+    assert coloc.mps_pipe_dir_for_containers() == str(tmp_path)
+
+    monkeypatch.setattr(coloc, "DEFAULT_MPS_PIPE_DIR", str(tmp_path / "absent"))
+    assert coloc.mps_pipe_dir_for_containers() is None
+
+
+def test_capture_mps_records_what_containers_actually_got(tmp_path, monkeypatch):
+    pipe = tmp_path / "nvidia-mps"
+    pipe.mkdir()
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(pipe))
+    _fake_run_text(monkeypatch, {"pgrep": ("4242\n", None)})
+    got = coloc.capture_mps()
+    assert got["container_pipe_directory"] == str(pipe)
+
+    # Host daemon up, but nothing shareable — the case that used to read as a
+    # clean MPS run while the CV tenant was in fact on its own context.
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", str(tmp_path / "absent"))
+    got = coloc.capture_mps()
+    assert got["control_daemon_running"] is True
+    assert got["container_pipe_directory"] is None

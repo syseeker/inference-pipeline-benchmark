@@ -7,6 +7,7 @@ backend name or filename makes Triton refuse to load the model. Tested here.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -209,3 +210,75 @@ def test_write_model_repo_creates_structure(tmp_path):
     assert "max_batch_size: 4" in lay.config_pbtxt.read_text()
     # Weights are NOT written by write_model_repo (that's the exporter's job).
     assert not lay.weight_file.exists()
+
+
+# ── precision ───────────────────────────────────────────────────────────────
+#
+# Regression: the CV plans were built fp32 while both models declared
+# quantization: "fp16". Nothing caught it, because precision lived in neither
+# registry — the pipeline exported fp32 ONNX and relied on `trtexec --fp16` to
+# coerce it. TensorRT v11 removed that flag (networks are strongly typed and
+# obey the ONNX), so the coercion silently stopped happening. dinov2-base is
+# the study's designated bandwidth aggressor, so running it fp32 doubles the
+# memory traffic of the single variable the study is built to measure.
+
+def test_config_pbtxt_io_dtype_follows_precision():
+    spec = tc.resolve_spec("yolov8-l")
+    assert spec.precision == "fp16"
+    cfg = tc.build_config_pbtxt(spec, "tensorrt")
+    assert "TYPE_FP16" in cfg
+    assert "TYPE_FP32" not in cfg, "I/O dtype must match the exported graph or Triton rejects the model"
+
+
+def test_config_pbtxt_io_dtype_follows_fp32_precision():
+    from dataclasses import replace
+    spec = replace(tc.resolve_spec("yolov8-l"), precision="fp32")
+    cfg = tc.build_config_pbtxt(spec, "tensorrt")
+    assert "TYPE_FP32" in cfg
+    assert "TYPE_FP16" not in cfg
+
+
+@pytest.mark.parametrize("name", ["yolov8-n", "yolov8-l", "dinov2-base", "dinov2-large"])
+def test_cv_spec_precision_matches_the_gpu_yaml(name):
+    """CVModelSpec and the GPU yaml are separate registries with no link between
+    them. If they disagree the export silently produces an engine at a precision
+    the config never asked for — exactly the failure this test exists to stop."""
+    import yaml
+    cfg = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "benchmarks/configs/rtx_pro6000.yaml").read_text()
+    )
+    declared = (cfg.get("models") or {}).get(name, {}).get("quantization")
+    if declared is None:
+        pytest.skip(f"{name} is not registered in rtx_pro6000.yaml")
+    assert tc.resolve_spec(name).precision == declared, (
+        f"{name}: CVModelSpec says {tc.resolve_spec(name).precision!r}, "
+        f"rtx_pro6000.yaml says {declared!r}"
+    )
+
+
+# ── MPS in the container ────────────────────────────────────────────────────
+#
+# Regression: passing the pipe dir alone made Triton FAIL where it had
+# previously (wrongly) succeeded outside MPS — the container defaults to root,
+# MPS servers are per-UID, and a non-root control daemon cannot spawn a server
+# for a different UID. Live symptom on PRO 6000: every model UNAVAILABLE with
+# "unable to get number of CUDA devices: MPS client failed to connect" and
+# cuInit returning 805. With --user, Triton is READY in ~2s.
+
+def test_mps_pipe_also_sets_user_to_match_the_daemon_uid():
+    cmd = tc.build_triton_serve_cmd(Path("/repo"), mps_pipe_dir="/tmp/nvidia-mps")
+    assert "--user" in cmd, "pipe dir without --user makes the container fail CUDA init entirely"
+    assert cmd[cmd.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+
+
+def test_no_user_flag_when_mps_is_absent():
+    # No MPS, no reason to override the image's user.
+    cmd = tc.build_triton_serve_cmd(Path("/repo"))
+    assert "--user" not in cmd
+
+
+def test_ipc_host_is_not_used():
+    """Verified unnecessary on real hardware: the same CUDA probe passes with
+    and without it. Kept as a test so it is not re-added on a guess."""
+    cmd = tc.build_triton_serve_cmd(Path("/repo"), mps_pipe_dir="/tmp/nvidia-mps")
+    assert "--ipc=host" not in cmd

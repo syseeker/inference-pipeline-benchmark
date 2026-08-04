@@ -140,3 +140,50 @@ def test_cov_zero_for_single_sample():
 
 def test_cov_positive_for_spread():
     assert probe._cov([8.0, 10.0, 12.0]) > 0.0
+
+
+# ── _detect_isolation ───────────────────────────────────────────────────────
+#
+# Regression: the fallback used `pgrep -x nvidia-cuda-mps-control`. `-x` matches
+# against comm, which the kernel truncates to 15 chars (TASK_COMM_LEN), so the
+# 23-char daemon name can never match exactly and a running daemon read as
+# absent — labelling a good MPS run isolation="none", the single fact Phase 0
+# exists to establish. Verified on a live PRO 6000: `pgrep -f` matched pid
+# 33994 while `pgrep -x` exited 1 against the same process.
+
+def test_detect_isolation_matches_full_command_line_not_truncated_comm(monkeypatch):
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        seen.append(list(cmd))
+        import types
+        # Emulate the kernel truncation: an -x probe for the full name finds
+        # nothing, because comm is "nvidia-cuda-mps".
+        matched = "-f" in cmd
+        return types.SimpleNamespace(returncode=0 if matched else 1, stdout="33994\n" if matched else "")
+
+    monkeypatch.delenv("CUDA_MPS_PIPE_DIRECTORY", raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda _: "/usr/bin/nvidia-cuda-mps-control")
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+
+    assert probe._detect_isolation() == "mps"
+    assert seen and "-f" in seen[0], "must match the full argv, not the truncated comm"
+
+
+def test_detect_isolation_reports_none_when_no_daemon(monkeypatch):
+    import types
+    monkeypatch.delenv("CUDA_MPS_PIPE_DIRECTORY", raising=False)
+    monkeypatch.setattr(probe.shutil, "which", lambda _: "/usr/bin/nvidia-cuda-mps-control")
+    monkeypatch.setattr(probe.subprocess, "run",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout=""))
+    assert probe._detect_isolation() == "none"
+
+
+def test_detect_isolation_trusts_pipe_dir_env_without_probing(monkeypatch):
+    monkeypatch.setenv("CUDA_MPS_PIPE_DIRECTORY", "/tmp/nvidia-mps")
+    monkeypatch.setattr(probe.shutil, "which", _boom)
+    assert probe._detect_isolation() == "mps"
+
+
+def _boom(*a, **k):
+    raise AssertionError("must not probe when the pipe dir env is set")

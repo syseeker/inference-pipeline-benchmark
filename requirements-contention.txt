@@ -12,6 +12,11 @@
 
 ultralytics>=8.4        # YOLOv8 export → ONNX
 onnx>=1.16              # CV export graph
+onnxscript              # torch.onnx.export backend for the torch-hf exporter
+                        # (dinov2-base). Not pulled in by onnx or torch; without
+                        # it the export dies on `No module named 'onnxscript'`.
+                        # ultralytics does NOT need it — it has its own export
+                        # path — so yolov8-l succeeds and dinov2-base does not.
 onnxruntime-gpu         # portable CV baseline (ONNX backend parity check)
 tritonclient[grpc,http] # Triton readiness probe + optional client-side checks
 pillow>=10.2            # already present; CV input decode

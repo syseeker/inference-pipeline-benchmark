@@ -22,6 +22,7 @@ paddleocr). One TensorRT + CUDA environment for all CV models, driven by
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,8 +57,30 @@ class CVModelSpec:
     output_name: str
     output_dims: list[int]          # no batch
     weights: str = ""               # ultralytics weight stem, e.g. "yolov8l"
-    input_dtype: str = "TYPE_FP32"
-    output_dtype: str = "TYPE_FP32"
+    # Must match `models.<id>.quantization` in the GPU yaml — asserted by
+    # test_cv_spec_precision_matches_the_gpu_yaml, because the two registries
+    # are separate and nothing else would notice them drifting apart.
+    precision: str = "fp16"         # fp16 | fp32
+
+    @property
+    def torch_dtype_is_half(self) -> bool:
+        return self.precision == "fp16"
+
+    @property
+    def input_dtype(self) -> str:
+        return _TRITON_DTYPE[self.precision]
+
+    @property
+    def output_dtype(self) -> str:
+        return _TRITON_DTYPE[self.precision]
+
+
+# TensorRT v11 makes every network strongly typed and has REMOVED trtexec's
+# --fp16: the builder no longer coerces precision, it obeys the ONNX graph. So
+# an fp16 engine has to come from an fp16 export, and the config.pbtxt I/O dtype
+# has to agree with it or Triton rejects the model. Precision is therefore a
+# property of the spec, not a build flag.
+_TRITON_DTYPE = {"fp16": "TYPE_FP16", "fp32": "TYPE_FP32"}
 
 
 # CV models referenced by the rtx_pro6000 colocations. YOLOv8-l is the primary
@@ -321,8 +344,22 @@ def build_triton_serve_cmd(
     ]
     if mps_pipe_dir:
         # Share the host MPS control pipe so kernels co-schedule with the LLM.
+        #
+        # `--user` is not optional here. MPS servers are per-UID and a non-root
+        # control daemon cannot spawn one for a different UID, so the container's
+        # default root would fail with CUDA error 805 ("MPS client failed to
+        # connect"): the daemon is normally started by the ordinary user running
+        # the study. Matching the caller's uid:gid makes the container a client
+        # of the daemon that already exists. Live-verified on PRO 6000 — as root
+        # every model reports "unable to get number of CUDA devices"; with
+        # --user, Triton is READY in ~2s and appears in get_client_list.
+        #
+        # `--ipc=host` is NOT required — verified by running the same probe with
+        # and without it — so it is deliberately omitted rather than relaxing a
+        # namespace on a guess.
         cmd += ["-e", f"CUDA_MPS_PIPE_DIRECTORY={mps_pipe_dir}",
-                "-v", f"{mps_pipe_dir}:{mps_pipe_dir}"]
+                "-v", f"{mps_pipe_dir}:{mps_pipe_dir}",
+                "--user", f"{os.getuid()}:{os.getgid()}"]
     cmd += [
         image, "tritonserver", "--model-repository=/models",
         f"--http-port={http_port}", f"--grpc-port={grpc_port}",

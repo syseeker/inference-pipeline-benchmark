@@ -383,8 +383,13 @@ def _detect_isolation() -> str:
         return "mps"
     if shutil.which("nvidia-cuda-mps-control"):
         try:
+            # -f, not -x: `pgrep -x` matches against comm, which the kernel
+            # truncates to 15 chars (TASK_COMM_LEN), so the 23-char
+            # "nvidia-cuda-mps-control" can never match exactly and a running
+            # daemon reads as absent. That mislabels a good MPS run as
+            # isolation="none" — the one field Phase 0 exists to establish.
             r = subprocess.run(
-                ["pgrep", "-x", "nvidia-cuda-mps-control"],
+                ["pgrep", "-f", "nvidia-cuda-mps-control"],
                 capture_output=True, text=True, timeout=3,
             )
             if r.returncode == 0:

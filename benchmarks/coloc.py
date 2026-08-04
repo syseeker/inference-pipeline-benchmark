@@ -690,6 +690,29 @@ def capture_interconnect() -> dict[str, Any]:
     }
 
 
+DEFAULT_MPS_PIPE_DIR = "/tmp/nvidia-mps"
+
+
+def mps_pipe_dir_for_containers() -> str | None:
+    """The MPS pipe directory to share into a Triton container, or None.
+
+    A containerised CUDA process only joins the host's MPS control if the pipe
+    directory is bind-mounted in AND named by CUDA_MPS_PIPE_DIRECTORY. Without
+    it the container creates its own context and *time-slices* against the LLM
+    tenants — which still produces plausible-looking numbers, so the failure is
+    silent. `capture_mps()` would not catch it either: it inspects the host
+    daemon, which is genuinely running.
+
+    Resolved rather than required, because the daemon is usually started with
+    no CUDA_MPS_PIPE_DIRECTORY set and therefore lands on the documented
+    default. Returning None when the directory does not exist matters: docker
+    `-v` on a missing host path creates it as a root-owned empty directory, so
+    a blind mount would leave litter on every no-MPS box and still not join.
+    """
+    d = os.environ.get("CUDA_MPS_PIPE_DIRECTORY") or DEFAULT_MPS_PIPE_DIR
+    return d if Path(d).is_dir() else None
+
+
 def capture_mps() -> dict[str, Any]:
     """Evidence that an MPS control daemon exists on this host — nothing more.
 
@@ -712,6 +735,11 @@ def capture_mps() -> dict[str, Any]:
     return {
         "control_daemon_running": daemon,       # True | False | None (could not tell)
         "pipe_directory": pipe_dir,
+        # What a Triton container was actually given. `pipe_directory` above can
+        # be None while the daemon runs fine on the default path, so this is the
+        # field that says whether a containerised tenant could join MPS at all —
+        # the host daemon running tells you nothing about that.
+        "container_pipe_directory": mps_pipe_dir_for_containers(),
         "probe_error": probe_error,
         "detected": bool(daemon) or bool(pipe_dir),
     }
@@ -1154,6 +1182,7 @@ class ColocationOrchestrator:
                 metrics_port=metrics_port,
                 container_name=container,
                 models=_triton_models_on(triton_tenants or [tenant], device),
+                mps_pipe_dir=mps_pipe_dir_for_containers(),
             )
             proc = subprocess.Popen(docker_cmd, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.STDOUT)
