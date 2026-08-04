@@ -426,7 +426,11 @@ def build_triton_serve_cmd(
     # transformers, which only the derived image carries.
     image = image or image_for_models(models)
     cmd = [
-        "docker", "run", "--rm", "-d", "--name", container_name,
+        # No --rm: a container that dies during startup is the case you most
+        # need the logs for, and --rm reaps it before `docker logs` can run —
+        # which is why a dinov2 model-config error surfaced only as "No such
+        # container: triton-cv". _stop_server removes it explicitly instead.
+        "docker", "run", "-d", "--name", container_name,
         "--gpus", f"device={dev}", "--shm-size", shm_size, "--network", "host",
         "-v", f"{Path(repo_root).resolve()}:/models",
     ]

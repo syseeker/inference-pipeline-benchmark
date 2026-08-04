@@ -361,3 +361,12 @@ def test_hf_token_is_forwarded_when_set(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "hf_xxx")
     cmd = tc.build_triton_serve_cmd(Path("/repo"), models=["kosmos-2.5"])
     assert "HF_TOKEN=hf_xxx" in cmd
+
+
+def test_container_is_not_auto_reaped_on_exit():
+    """Regression: --rm destroyed a failed container before `docker logs` could
+    run, so a model-config error ("expected configuration for output 'select'")
+    surfaced only as "No such container: triton-cv"."""
+    cmd = tc.build_triton_serve_cmd(Path("/repo"))
+    assert "--rm" not in cmd
+    assert "-d" in cmd

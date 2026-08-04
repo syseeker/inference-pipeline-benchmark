@@ -1603,10 +1603,12 @@ class ColocationOrchestrator:
 
     def _stop_server(self, handle: ServerHandle) -> None:
         if handle.container_name and not handle.reused:
-            subprocess.run(
-                ["docker", "stop", handle.container_name],
-                capture_output=True, timeout=30,
-            )
+            # Stop, then remove — the container is started without --rm so its
+            # logs survive a startup failure long enough to be captured.
+            subprocess.run(["docker", "stop", handle.container_name],
+                           capture_output=True, timeout=30)
+            subprocess.run(["docker", "rm", "-f", handle.container_name],
+                           capture_output=True, timeout=30)
             return
         if handle.proc is None:
             return

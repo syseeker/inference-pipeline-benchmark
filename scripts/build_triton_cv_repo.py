@@ -38,6 +38,13 @@ from benchmarks.triton_cv import (  # noqa: E402
 )
 
 
+def _mps_dir() -> str:
+    """The MPS pipe directory a GPU container has to share to get a context
+    once the card is in EXCLUSIVE_PROCESS mode."""
+    import os
+    return os.environ.get("CUDA_MPS_PIPE_DIRECTORY") or "/tmp/nvidia-mps"
+
+
 def export_onnx(spec, dest: Path, *, max_batch_size: int, imgsz: int) -> None:
     """Export the model's weights to ONNX at `dest`, at the spec's precision.
 
@@ -70,6 +77,29 @@ def export_onnx(spec, dest: Path, *, max_batch_size: int, imgsz: int) -> None:
         dummy = torch.randn(1, c, h, w)
         if half:
             model, dummy = model.half().cuda(), dummy.half().cuda()
+
+        class _SingleOutput(torch.nn.Module):
+            """Return only the tensor the spec declares.
+
+            A HuggingFace model returns a ModelOutput, and every field of it
+            becomes a graph output — dinov2 emits `last_hidden_state` AND the
+            pooler, which the dynamo exporter names `select`. Triton refuses to
+            load an engine with an output its config.pbtxt does not declare
+            ("expected configuration for output 'select'"), and a config that
+            declares one output cannot describe an engine with two. Exporting
+            exactly what the spec names keeps them in step, and drops a
+            device-to-host copy the study has no use for.
+            """
+
+            def __init__(self, inner, field):
+                super().__init__()
+                self.inner, self.field = inner, field
+
+            def forward(self, x):
+                out = self.inner(x)
+                return getattr(out, self.field) if hasattr(out, self.field) else out[0]
+
+        model = _SingleOutput(model, spec.output_name)
         torch.onnx.export(
             model, dummy, str(dest),
             input_names=[spec.input_name], output_names=[spec.output_name],
@@ -120,7 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "\n>> Build the TensorRT plan INSIDE the Triton container so the TRT "
             "version matches (host trtexec would produce an unloadable plan):\n"
-            f"   docker run --rm --gpus all -v {layout.version_dir.resolve()}:/w {TRITON_IMAGE} \\\n"
+            # --user + the MPS pipe: once the compute mode is EXCLUSIVE_PROCESS
+            # (quickstart Step 7), only MPS clients can get a CUDA context, and
+            # MPS servers are per-UID. Without both, trtexec fails with
+            # CUDA_ERROR_DEVICE_UNAVAILABLE and writes no plan.
+            f"   docker run --rm --gpus all --user $(id -u):$(id -g) \\\n"
+            f"     -e CUDA_MPS_PIPE_DIRECTORY={_mps_dir()} -v {_mps_dir()}:{_mps_dir()} \\\n"
+            f"     -v {layout.version_dir.resolve()}:/w {TRITON_IMAGE} \\\n"
             f"     trtexec --onnx=/w/model.onnx --saveEngine=/w/{plan.name} \\\n"
             f"       --minShapes={spec.input_name}:1x{'x'.join(map(str, spec.input_dims))} \\\n"
             f"       --optShapes={spec.input_name}:{args.max_batch_size}x{'x'.join(map(str, spec.input_dims))} \\\n"
