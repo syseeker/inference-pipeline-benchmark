@@ -1,0 +1,52 @@
+{
+  "data": [
+    {
+      "session_id": "session_000000",
+      "payloads": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "content": "What is CUDA?"
+            }
+          ],
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "stream": true,
+          "max_tokens": 32
+        }
+      ]
+    },
+    {
+      "session_id": "session_000001",
+      "payloads": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Name three GPU architectures."
+            }
+          ],
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "stream": true,
+          "max_tokens": 32
+        }
+      ]
+    },
+    {
+      "session_id": "session_000002",
+      "payloads": [
+        {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Define tensor parallelism in one sentence."
+            }
+          ],
+          "model": "meta-llama/Llama-3.1-8B-Instruct",
+          "stream": true,
+          "max_tokens": 32
+        }
+      ]
+    }
+  ]
+}

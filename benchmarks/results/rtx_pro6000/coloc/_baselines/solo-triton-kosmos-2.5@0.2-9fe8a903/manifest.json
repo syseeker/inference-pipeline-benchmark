@@ -1,0 +1,93 @@
+{
+  "colocation_id": "same-ilm",
+  "phase": 2,
+  "run_label": "solo",
+  "is_solo": true,
+  "gpu": "rtx_pro6000",
+  "isolation_mode": "mps",
+  "duration_s": 600,
+  "n_tenants": 1,
+  "t0_epoch_ms": 1785866003475.8489,
+  "devices": [
+    0
+  ],
+  "tenants": [
+    {
+      "name": "ilm_a",
+      "round": {
+        "backend": "triton",
+        "model_id": "kosmos-2.5",
+        "hf_id": "microsoft/kosmos-2.5",
+        "family": "ilm",
+        "quantization": "bf16",
+        "base_url": "http://localhost:8100",
+        "port": 8100,
+        "launch_args": [
+          "--allow-client-shm=true"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "triton",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "perf_analyzer",
+      "load": {
+        "pattern": "poisson",
+        "rps": 0.2,
+        "output_tokens": 256
+      },
+      "workload": "ilm_document",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/ilm_document.jsonl"
+        ],
+        "data": [
+          "workspace/contention/test_data/cv/sample_document.png"
+        ],
+        "output_tokens": 256
+      },
+      "gpu_memory_utilization": null,
+      "kv_budget_gb": null,
+      "triton_backend": "python",
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [],
+      "offered_rps": 0.2,
+      "achieved_rps": 0.165965
+    }
+  ],
+  "gpu_sampler": {
+    "0": {
+      "sampler_backend": "dcgm",
+      "n_samples": 14334,
+      "mem_bw_util_pct_p50": 0.0,
+      "mem_bw_util_pct_peak": 42.4,
+      "gpu_util_pct_p50": 0.0,
+      "gpu_util_pct_peak": 100.0,
+      "fb_used_peak_gb": 5.3623046875,
+      "power_avg_w": 117.9899637226188,
+      "power_peak_w": 206.264
+    }
+  },
+  "environment": {
+    "interconnect": {
+      "available": true,
+      "error": null,
+      "topo_matrix": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\t0-47\t0\t\tN/A\nGPU1\tPIX\t X \t0-47\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+      "nvlink_detected": false
+    },
+    "mps": {
+      "control_daemon_running": true,
+      "pipe_directory": null,
+      "container_pipe_directory": "/tmp/nvidia-mps",
+      "probe_error": null,
+      "detected": true
+    }
+  },
+  "warnings": [],
+  "throttle_reasons": []
+}

@@ -1,0 +1,42 @@
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299] 
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299]        █     █     █▄   ▄█
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.20.1
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299]   █▄█▀ █     █     █     █  model   RedHatAI/gemma-4-31B-it-FP8-block
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:299] 
+(APIServer pid=1134664) INFO 08-04 15:10:55 [utils.py:233] non-default args: {'model_tag': 'RedHatAI/gemma-4-31B-it-FP8-block', 'model': 'RedHatAI/gemma-4-31B-it-FP8-block', 'max_model_len': 32768, 'gpu_memory_utilization': 0.51, 'max_num_seqs': 32}
+(APIServer pid=1134664) Traceback (most recent call last):
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/bin/vllm", line 6, in <module>
+(APIServer pid=1134664)     sys.exit(main())
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/cli/main.py", line 92, in main
+(APIServer pid=1134664)     args.dispatch_function(args)
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/cli/serve.py", line 122, in cmd
+(APIServer pid=1134664)     uvloop.run(run_server(args))
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/uvloop/__init__.py", line 69, in run
+(APIServer pid=1134664)     return loop.run_until_complete(wrapper())
+(APIServer pid=1134664)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=1134664)     return await main
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 678, in run_server
+(APIServer pid=1134664)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 692, in run_server_worker
+(APIServer pid=1134664)     async with build_async_engine_client(
+(APIServer pid=1134664)   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1134664)     return await anext(self.gen)
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 100, in build_async_engine_client
+(APIServer pid=1134664)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=1134664)   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1134664)     return await anext(self.gen)
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 124, in build_async_engine_client_from_engine_args
+(APIServer pid=1134664)     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/engine/arg_utils.py", line 1627, in create_engine_config
+(APIServer pid=1134664)     model_config = self.create_model_config()
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/engine/arg_utils.py", line 1475, in create_model_config
+(APIServer pid=1134664)     return ModelConfig(
+(APIServer pid=1134664)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/pydantic/_internal/_dataclasses.py", line 121, in __init__
+(APIServer pid=1134664)     s.__pydantic_validator__.validate_python(ArgsKwargs(args, kwargs), self_instance=s)
+(APIServer pid=1134664) pydantic_core._pydantic_core.ValidationError: 1 validation error for ModelConfig
+(APIServer pid=1134664)   Value error, The checkpoint you are trying to load has model type `gemma4` but Transformers does not recognize this architecture. This could be because of an issue with the checkpoint, or because your version of Transformers is out of date.
+(APIServer pid=1134664) 
+(APIServer pid=1134664) You can update Transformers with the command `pip install --upgrade transformers`. If this does not work, and the checkpoint is very new, then there may not be a release version that supports this model yet. In this case, you can get the most up-to-date code by installing Transformers from source with the command `pip install git+https://github.com/huggingface/transformers.git` [type=value_error, input_value=ArgsKwargs((), {'model': ...nderer_num_workers': 1}), input_type=ArgsKwargs]
+(APIServer pid=1134664)     For further information visit https://errors.pydantic.dev/2.13/v/value_error
