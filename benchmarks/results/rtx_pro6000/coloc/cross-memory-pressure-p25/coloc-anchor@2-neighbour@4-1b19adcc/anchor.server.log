@@ -1,0 +1,19 @@
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299] 
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299]        █     █     █▄   ▄█
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.20.1
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299]   █▄█▀ █     █     █     █  model   Qwen/Qwen2.5-72B-Instruct-AWQ
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:299] 
+(APIServer pid=2531477) INFO 08-05 09:24:11 [utils.py:233] non-default args: {'model_tag': 'Qwen/Qwen2.5-72B-Instruct-AWQ', 'model': 'Qwen/Qwen2.5-72B-Instruct-AWQ', 'max_model_len': 8192, 'gpu_memory_utilization': 0.49, 'kv_cache_memory_bytes': 3972844748, 'max_num_seqs': 32}
+(APIServer pid=2531477) INFO 08-05 09:24:11 [model.py:555] Resolved architecture: Qwen2ForCausalLM
+(APIServer pid=2531477) INFO 08-05 09:24:11 [model.py:1680] Using max model len 8192
+(APIServer pid=2531477) INFO 08-05 09:24:12 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+(APIServer pid=2531477) WARNING 08-05 09:24:12 [nixl_utils.py:34] NIXL is not available
+(APIServer pid=2531477) WARNING 08-05 09:24:12 [nixl_utils.py:44] NIXL agent config is not available
+(APIServer pid=2531477) INFO 08-05 09:24:12 [awq_marlin.py:252] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+(APIServer pid=2531477) INFO 08-05 09:24:12 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(APIServer pid=2531477) Parse safetensors files:   0%|          | 0/11 [00:00<?, ?it/s]Parse safetensors files:   9%|▉         | 1/11 [00:00<00:06,  1.54it/s]Parse safetensors files:  18%|█▊        | 2/11 [00:00<00:04,  2.19it/s]Parse safetensors files: 100%|██████████| 11/11 [00:01<00:00, 10.21it/s]Parse safetensors files: 100%|██████████| 11/11 [00:01<00:00, 10.21it/s]
+(APIServer pid=2531477) INFO 08-05 09:24:14 [vllm.py:840] Asynchronous scheduling is enabled.
+(APIServer pid=2531477) INFO 08-05 09:24:14 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
+WARNING 08-05 09:24:20 [nixl_utils.py:34] NIXL is not available
+WARNING 08-05 09:24:20 [nixl_utils.py:44] NIXL agent config is not available

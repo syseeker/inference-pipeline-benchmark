@@ -654,9 +654,18 @@ def _solo_key(t: Tenant) -> tuple:
     KV cache, so the same model at 0.45 and at 0.70 are two different
     deployments. Leave it out and a 2-tenant window and a 4-tenant window
     would share one baseline, and one of them would be compared against a
-    reference that never existed."""
+    reference that never existed.
+
+    `kv_budget_gb` is in the key too, and the cap is no longer sufficient on
+    its own. Once a tenant states its cache absolutely, the cap becomes a
+    derived, 2-dp-rounded consequence — so two genuinely different deployments
+    can round to the same number. cross-memory-pressure's p25 and p50
+    neighbours (0.64 and 1.28 GiB of KV) both derive 0.19, and would have
+    shared one baseline: the p50 contention run would then have been scored
+    against a reference recorded at HALF its cache, reading a 2x KV difference
+    as contention. That is the exact confound this family exists to avoid."""
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
-            tuple(t.devices), t.gpu_memory_utilization)
+            tuple(t.devices), t.gpu_memory_utilization, t.kv_budget_gb)
 
 
 def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:

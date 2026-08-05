@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-77 solo baseline(s), 89 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+79 solo baseline(s), 89 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.

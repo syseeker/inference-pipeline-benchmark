@@ -1,0 +1,134 @@
+2026-08-05 09:18:50.827 - aiperf.cli_runner._single_run - INFO - Starting AIPerf System
+2026-08-05 09:18:50.833 - aiperf.config.resolution.resolvers - INFO - [OK] Tokenizer Qwen/Qwen2.5-7B-Instruct detected
+2026-08-05 09:18:50.833 - aiperf.config.resolution.resolvers - INFO - 1 tokenizer validated | 0.0s
+2026-08-05 09:18:50.833 - aiperf.config.resolution.resolvers - INFO - HF cache hit (skipping prefetch): ['Qwen/Qwen2.5-7B-Instruct']
+2026-08-05 09:18:51.029 - system_controller - INFO - Registered Worker Manager (id: 'worker_manager')
+2026-08-05 09:18:51.029 - system_controller - INFO - Registered Dataset Manager (id: 'dataset_manager')
+2026-08-05 09:18:51.040 - server_metrics_manager - INFO - Server Metrics: Discovered 1 endpoints: ['http://localhost:8000/metrics']
+2026-08-05 09:18:51.048 - GPUTelemetryJSONLWriter_29ed0925 - INFO - GPU telemetry export enabled: /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-vllm-qwen2.5-7b@4-36d5cdb0/neighbour.aiperf/gpu_telemetry_export.jsonl
+2026-08-05 09:18:51.056 - OTelMetricsResultsProcessor_1ec77dcc - INFO - Telemetry streaming is disabled (set --otel-url and/or --mlflow-tracking-uri to enable)
+2026-08-05 09:18:51.056 - records_manager - INFO - OTel metrics streamer is disabled and will not be used: Telemetry streaming is disabled (set --otel-url and/or --mlflow-tracking-uri to enable)
+2026-08-05 09:18:51.057 - RecordExportResultsProcessor_43ce2f4c - INFO - Record metrics export enabled: /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-vllm-qwen2.5-7b@4-36d5cdb0/neighbour.aiperf/profile_export.jsonl
+2026-08-05 09:18:51.147 - system_controller - INFO - Registered Server Metrics Manager (id: 'server_metrics_manager')
+2026-08-05 09:18:51.151 - system_controller - INFO - Registered Gpu Telemetry Manager (id: 'gpu_telemetry_manager')
+2026-08-05 09:18:51.167 - system_controller - INFO - Registered Record Processor (id: 'record_processor_645aa46e')
+2026-08-05 09:18:51.180 - system_controller - INFO - Registered Worker (id: 'worker_cf12ba35')
+2026-08-05 09:18:51.181 - system_controller - INFO - Registered Record Processor (id: 'record_processor_d3541890')
+2026-08-05 09:18:51.181 - system_controller - INFO - Registered Worker (id: 'worker_5b027f2b')
+2026-08-05 09:18:51.188 - system_controller - INFO - Registered Record Processor (id: 'record_processor_2403a276')
+2026-08-05 09:18:51.189 - system_controller - INFO - Registered Record Processor (id: 'record_processor_0192cda2')
+2026-08-05 09:18:51.193 - system_controller - INFO - Registered Record Processor (id: 'record_processor_ca47bcfd')
+2026-08-05 09:18:51.195 - system_controller - INFO - Registered Record Processor (id: 'record_processor_f3f93930')
+2026-08-05 09:18:51.197 - system_controller - INFO - Registered Record Processor (id: 'record_processor_8c16a240')
+2026-08-05 09:18:51.198 - system_controller - INFO - Registered Worker (id: 'worker_e699d24d')
+2026-08-05 09:18:51.199 - system_controller - INFO - Registered Record Processor (id: 'record_processor_c4b5322b')
+2026-08-05 09:18:51.204 - system_controller - INFO - Registered Worker (id: 'worker_419d591a')
+2026-08-05 09:18:51.213 - system_controller - INFO - Registered Worker (id: 'worker_9c12ba99')
+2026-08-05 09:18:51.214 - system_controller - INFO - Registered Worker (id: 'worker_f1b60ec0')
+2026-08-05 09:18:51.215 - system_controller - INFO - Registered Worker (id: 'worker_c95715eb')
+2026-08-05 09:18:51.215 - system_controller - INFO - Registered Worker (id: 'worker_4aca6467')
+2026-08-05 09:18:51.215 - system_controller - INFO - Registered Worker (id: 'worker_97c3746a')
+2026-08-05 09:18:51.219 - system_controller - INFO - Registered Worker (id: 'worker_39bab4f1')
+2026-08-05 09:18:51.220 - system_controller - INFO - Registered Worker (id: 'worker_f89e4fa3')
+2026-08-05 09:18:51.221 - system_controller - INFO - Registered Records Manager (id: 'records_manager')
+2026-08-05 09:18:51.223 - system_controller - INFO - Registered Worker (id: 'worker_463e67d7')
+2026-08-05 09:18:51.224 - system_controller - INFO - Registered Worker (id: 'worker_e8fa6006')
+2026-08-05 09:18:51.225 - system_controller - INFO - Registered Timing Manager (id: 'timing_manager')
+2026-08-05 09:18:51.227 - system_controller - INFO - Registered Worker (id: 'worker_ef5748ed')
+2026-08-05 09:18:51.234 - system_controller - INFO - Registered Worker (id: 'worker_a836df33')
+2026-08-05 09:18:51.234 - system_controller - INFO - Registered Worker (id: 'worker_9e844673')
+2026-08-05 09:18:51.235 - system_controller - INFO - Registered Worker (id: 'worker_a69a7545')
+2026-08-05 09:18:51.238 - system_controller - INFO - Registered Worker (id: 'worker_327522ed')
+2026-08-05 09:18:51.238 - system_controller - INFO - Registered Worker (id: 'worker_964a9d09')
+2026-08-05 09:18:51.252 - system_controller - INFO - Registered Worker (id: 'worker_1ef4db96')
+2026-08-05 09:18:51.258 - system_controller - INFO - Registered Worker (id: 'worker_d4576c33')
+2026-08-05 09:18:51.287 - system_controller - INFO - Registered Worker (id: 'worker_07d2cd40')
+2026-08-05 09:18:51.293 - system_controller - INFO - Registered Worker (id: 'worker_caab4518')
+2026-08-05 09:18:51.302 - system_controller - INFO - Registered Worker (id: 'worker_34554cf2')
+2026-08-05 09:18:51.362 - system_controller - INFO - Registered Worker (id: 'worker_8d157856')
+2026-08-05 09:18:51.368 - system_controller - INFO - Registered Worker (id: 'worker_4489d655')
+2026-08-05 09:18:51.380 - system_controller - INFO - Registered Worker (id: 'worker_f4c648d0')
+2026-08-05 09:18:51.381 - system_controller - INFO - Registered Worker (id: 'worker_55af84db')
+2026-08-05 09:18:51.382 - system_controller - INFO - Registered Worker (id: 'worker_203ac259')
+2026-08-05 09:18:51.382 - system_controller - INFO - Registered Worker (id: 'worker_4ef9bb34')
+2026-08-05 09:18:51.393 - system_controller - INFO - Registered Worker (id: 'worker_ecc9b377')
+2026-08-05 09:18:51.394 - system_controller - INFO - Registered Worker (id: 'worker_ad1d0a8c')
+2026-08-05 09:18:51.525 - system_controller - INFO - AIPerf System is CONFIGURING
+2026-08-05 09:18:51.525 - system_controller - INFO - Configuring all services to start profiling
+2026-08-05 09:18:51.526 - timing_manager - INFO - Waiting for dataset to be configured before configuring timing
+2026-08-05 09:18:51.526 - InferenceResultParser_d35c699e - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - dataset_manager - INFO - Configuring tokenizer(s) for dataset manager
+2026-08-05 09:18:51.526 - InferenceResultParser_f63748bd - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_ecb99081 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_e22525ab - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_a8c0d823 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_ba96cb20 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_d09fe043 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.526 - InferenceResultParser_92f1b2d9 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 09:18:51.535 - server_metrics_manager - INFO - Server Metrics: Capturing baseline metrics...
+2026-08-05 09:18:51.540 - gpu_telemetry_manager - WARNING - GPU Telemetry: http://localhost:9400/metrics is not reachable
+2026-08-05 09:18:51.540 - gpu_telemetry_manager - WARNING - GPU Telemetry: http://localhost:9401/metrics is not reachable
+2026-08-05 09:18:51.541 - system_controller - INFO - DCGM telemetry skipped: no DCGM endpoints reachable
+2026-08-05 09:18:51.555 - http://localhost:8000/metrics - INFO - Skipping unsupported summary metric: http_request_size_bytes
+2026-08-05 09:18:51.555 - http://localhost:8000/metrics - INFO - Skipping unsupported summary metric: http_response_size_bytes
+2026-08-05 09:18:51.556 - system_controller - INFO - Server metrics enabled - 1/1 endpoint(s) reachable.
+2026-08-05 09:18:54.300 - InferenceResultParser_ecb99081 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.77 seconds
+2026-08-05 09:18:54.302 - InferenceResultParser_e22525ab - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.78 seconds
+2026-08-05 09:18:54.305 - dataset_manager - INFO - Tokenizer(s) configured in 2.78 seconds
+2026-08-05 09:18:54.305 - dataset_manager - INFO - Configuring dataset for dataset_manager
+2026-08-05 09:18:54.311 - InferenceResultParser_ba96cb20 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.78 seconds
+2026-08-05 09:18:54.355 - InferenceResultParser_a8c0d823 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.83 seconds
+2026-08-05 09:18:54.358 - InferenceResultParser_d09fe043 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.83 seconds
+2026-08-05 09:18:54.372 - InferenceResultParser_f63748bd - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.85 seconds
+2026-08-05 09:18:54.409 - InferenceResultParser_d35c699e - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 2.88 seconds
+2026-08-05 09:18:54.575 - InferenceResultParser_92f1b2d9 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-7B-Instruct': {'class': 'Qwen2TokenizerFast', 'name_or_path': 'Qwen/Qwen2.5-7B-Instruct'}} in 3.05 seconds
+2026-08-05 09:18:54.646 - CustomDatasetComposer - INFO - Using explicit dataset format: single_turn
+2026-08-05 09:18:54.653 - MemoryMapDatasetBackingStore_004a1579 - INFO - Memory-mapped backing store initialized (streaming to /tmp/aiperf_mmap_9c571f34e7b5/dataset.dat)
+2026-08-05 09:18:54.653 - MemoryMapDatasetBackingStore_004a1579 - INFO - Data file finalized: 2 conversations, 0.01 MB
+2026-08-05 09:18:54.653 - MemoryMapDatasetBackingStore_004a1579 - INFO - Index file created: /tmp/aiperf_mmap_9c571f34e7b5/index.dat
+2026-08-05 09:18:54.654 - dataset_manager - INFO - Backing store finalized: client_type=DatasetClientStoreType.MEMORY_MAP data_file_path=PosixPath('/tmp/aiperf_mmap_9c571f34e7b5/dataset.dat') index_file_path=PosixPath('/tmp/aiperf_mmap_9c571f34e7b5/index.dat') conversation_count=2 total_size_bytes=11294 compressed_data_file_path=None compressed_index_file_path=None compressed_size_bytes=0
+2026-08-05 09:18:54.654 - dataset_manager - INFO - sampling strategy: sequential, unique conversations: 2, unique turn count: 2
+2026-08-05 09:18:54.654 - dataset_manager - INFO - Generating inputs.json file at /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-vllm-qwen2.5-7b@4-36d5cdb0/neighbour.aiperf/inputs.json
+2026-08-05 09:18:54.656 - PhaseOrchestrator_75a708f1 - INFO - Initialized 2 phase(s): ['Warmup', 'Profiling']
+2026-08-05 09:18:54.656 - dataset_manager - INFO - inputs.json file generated in 0.00 seconds
+2026-08-05 09:18:54.807 - dataset_manager - INFO - Dataset client initialized and freed 2 conversations from memory
+2026-08-05 09:18:54.807 - dataset_manager - INFO - Dataset configured in 0.50 seconds
+2026-08-05 09:18:54.808 - system_controller - INFO - All services configured in 3.28 seconds
+2026-08-05 09:18:54.808 - system_controller - INFO - AIPerf System is CONFIGURED
+2026-08-05 09:18:54.809 - server_metrics_manager - INFO - Server Metrics: Started 1 collector(s) successfully
+2026-08-05 09:18:54.810 - system_controller - INFO - All services started profiling successfully
+2026-08-05 09:18:54.810 - system_controller - INFO - AIPerf System is PROFILING
+2026-08-05 09:18:54.811 - RateTiming - INFO - Creating interval generator: pattern=poisson, rate=4.0, smoothness=None
+2026-08-05 09:18:54.811 - PhaseRunner - NOTICE - Phase warmup started | target: 3 requests
+2026-08-05 09:18:54.811 - records_manager - INFO - Credit phase start: warmup
+2026-08-05 09:18:55.777 - PhaseRunner - NOTICE - Phase warmup sending complete | sent=3, completed=0, in_flight=3 | sessions: sent=3, completed=0
+2026-08-05 09:19:01.868 - PhaseRunner - NOTICE - Phase warmup complete | completed=3, cancelled=0, errors=0 | sessions: completed=3, cancelled=0 | elapsed=7.06s
+2026-08-05 09:19:01.869 - RateTiming - INFO - Creating interval generator: pattern=poisson, rate=4.0, smoothness=None
+2026-08-05 09:19:01.869 - PhaseRunner - NOTICE - Phase profiling started | target: 300.0s duration
+2026-08-05 09:19:01.869 - PhaseRunner - INFO - Waiting for event 'profiling phase sending' with timeout of 299.999837061s
+2026-08-05 09:19:01.869 - records_manager - INFO - Credit phase start: profiling
+2026-08-05 09:24:01.870 - PhaseRunner - INFO - Timeout of 299.999837061s elapsed for event 'profiling phase sending'
+2026-08-05 09:24:01.870 - PhaseRunner - NOTICE - Phase profiling sending complete | sent=1,160, completed=1,141, in_flight=19 | sessions: sent=1,160, completed=1,141 | timeout_triggered=True
+2026-08-05 09:24:01.870 - PhaseRunner - INFO - Timeout of 0.0s elapsed for event 'profiling phase credits returned'
+2026-08-05 09:24:01.871 - PhaseRunner - WARNING - Phase profiling timed out, cancelling all credits. Stats: sent=1160, completed=1141, cancelled=0, in_flight=19
+2026-08-05 09:24:01.871 - records_manager - INFO - Sent 1,160 requests. Waiting for all to complete...
+2026-08-05 09:24:01.871 - StickyCreditRouter_ef771e75 - INFO - Sent cancellation requests for 19 in-flight credits across 19 workers
+2026-08-05 09:24:01.871 - PhaseRunner - INFO - Waiting for all cancelled credits to be returned for phase profiling. Need 19 more credits.
+2026-08-05 09:24:01.871 - PhaseRunner - INFO - All cancelled credits returned for phase profiling
+2026-08-05 09:24:01.871 - PhaseRunner - NOTICE - Phase profiling complete | completed=1,141, cancelled=19, errors=0 | sessions: completed=1,141, cancelled=19 | elapsed=300.00s | grace_period_timeout=True
+2026-08-05 09:24:01.872 - PhaseOrchestrator_75a708f1 - NOTICE - All credits completed
+2026-08-05 09:24:01.872 - records_manager - INFO - Received CREDIT_PHASE_COMPLETE message, Phase complete: PhaseRecordsStats(phase=CreditPhase.PROFILING, start_ns=1785921541869435561, sent_end_ns=1785921841870733435, requests_end_ns=1785921841871962409, total_expected_requests=None, expected_duration_sec=None, expected_num_sessions=None, expected_grace_period_sec=None, final_requests_sent=None, final_requests_completed=1141, final_requests_cancelled=19, final_request_errors=0, final_sent_sessions=None, final_completed_sessions=None, final_cancelled_sessions=None, timeout_triggered=True, grace_period_timeout_triggered=True, was_cancelled=False, records_end_ns=None, success_records=1141, error_records=0)
+2026-08-05 09:24:01.872 - records_manager - NOTICE - All requests have completed, please wait for the results to be processed (currently 1,141 of 1,141 records processed)...
+2026-08-05 09:24:01.872 - system_controller - INFO - Received credits complete from 'timing_manager'
+2026-08-05 09:24:01.872 - records_manager - INFO - Processed 1141 valid requests and 0 errors (1141 total).
+2026-08-05 09:24:01.872 - records_manager - INFO - Received all records, processing now...
+2026-08-05 09:24:01.872 - records_manager - INFO - All credits complete, please wait for the results to be processed...
+2026-08-05 09:24:01.873 - server_metrics_manager - INFO - Server Metrics: Profiling complete, capturing final metrics...
+2026-08-05 09:24:01.873 - records_manager - INFO - Waiting 2.0s for server metrics flush period...
+2026-08-05 09:24:03.872 - records_manager - INFO - Processing records results...
+2026-08-05 09:24:03.879 - system_controller - INFO - Waiting for server metrics results...
+2026-08-05 09:24:03.879 - system_controller - INFO - Waiting for server metrics results...
+2026-08-05 09:24:03.916 - records_manager - INFO - _finalize_and_process_results completed
+2026-08-05 09:24:03.918 - system_controller - INFO - All results received, initiating shutdown
+2026-08-05 09:24:04.524 - ExporterManager - INFO - Exporting all records
+2026-08-05 09:24:04.582 - ExporterManager - INFO - Exporting console data

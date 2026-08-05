@@ -1402,3 +1402,27 @@ def test_tenant_level_kv_budget_wins(cfg):
     )
 
 
+
+
+def test_solo_baselines_are_not_shared_across_different_kv_budgets(cfg):
+    """A baseline is only a reference if it ran the same deployment. Once
+    kv_budget_gb sets the cache directly the cap is a rounded consequence, so
+    two different budgets can derive the same cap: cross-memory-pressure's p25
+    and p50 neighbours (0.64 and 1.28 GiB) both round to 0.19. Sharing one
+    baseline would score the p50 contention run against a reference recorded at
+    half its cache — reading a 2x KV difference as contention, in the one family
+    whose entire purpose is to isolate KV.
+    """
+    from benchmarks.scenario_config import _solo_key
+
+    by_key = {}
+    for name in MEMORY_PRESSURE_CURVE:
+        for coloc in _coloc_runs(cfg, name):
+            if not coloc.is_solo:
+                continue
+            for t in coloc.tenants:
+                prev = by_key.setdefault(_solo_key(t), (name, t.name, t.kv_budget_gb))
+                assert prev[2] == t.kv_budget_gb, (
+                    f"{name}/{t.name} (kv={t.kv_budget_gb}) shares a baseline with "
+                    f"{prev[0]}/{prev[1]} (kv={prev[2]})"
+                )
