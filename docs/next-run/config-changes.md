@@ -1,5 +1,11 @@
 # Config changes for the next run
 
+## Status
+
+Items 1–4c are **applied and committed** (`e835c0d`, `763cb92`, and the same-vlm
+swap), and the 11 affected colocations are re-running. Items 5 onward are still
+outstanding — they are tuning, not defects, and none of them blocks a run.
+
 ## What these fixes are worth
 
 The 2026-08-04 run had **27 failures of 147**. The fixes below do not all
@@ -22,7 +28,7 @@ Derived from the 2026-08-04 run on 2× RTX PRO 6000. Nothing here has been
 applied — the run in flight is deliberately left untouched. Rationale for each
 item is in [contention-phases.md](../contention-phases.md#tuning-for-the-next-run).
 
-## 1. Memory-pressure family: caps → `kv_budget_gb` (recovers 12 runs)
+## 1. ✅ APPLIED — Memory-pressure family: caps → `kv_budget_gb` (12 runs)
 
 `gpu_memory_utilization` is a total-device target and subtracts other processes'
 memory, so it cannot apportion a shared card. Measured: `-37.31 GiB`. Replace
@@ -55,7 +61,7 @@ cross-memory-pressure-kv29:
 This sets the swept variable directly instead of inferring it from a cap, so it
 also removes the ~3 GiB per-rung error the 72B weights estimate introduced.
 
-## 2. `weights_gb`: correct the one real outlier
+## 2. ✅ APPLIED — `weights_gb`: correct the one real outlier
 
 Seven of eight are accurate to within 0.10 GiB. Only the AWQ 72B is wrong:
 
@@ -67,7 +73,7 @@ qwen2.5-72b:
 Also rename `weights_gb` or note the unit — the values are GB, vLLM reports GiB,
 and comparing them directly makes every estimate look ~7% high.
 
-## 3. Add `kv_budget_gb` where KV should be constant (recovers 1 run, prevents more)
+## 3. ✅ APPLIED — `kv_budget_gb` where KV should be constant (1 run, prevents more)
 
 Both are two-vLLM colocations; `cross-vlm-prefill-vs-llm` already failed with
 `No available memory for the cache blocks`.
@@ -77,7 +83,7 @@ cross-vlm-prefill-vs-llm:   # add kv_budget_gb to both tenants
 place-vlm-prefill-split:    # same; survived phase 5 only because tenants were on separate cards
 ```
 
-## 4. Pin out `gemma-4-31b-it-fp8` (removes 8 failures, recovers no data)
+## 4. ✅ APPLIED — `same-vlm` swapped to `qwen3-vl-32b-fp8`; gemma-4 pinned out (8 runs)
 
 `transformers` 4.57.6 has no `gemma4` architecture.
 
@@ -90,7 +96,7 @@ gemma-4-31b-it-fp8:
 Takes `same-vlm` with it — that colocation has no second VLM until either
 gemma-4 loads or another video-capable model is added.
 
-## 4b. `.venv-sglang` is broken — the whole SGLang arm produces no data (recovers 4 runs)
+## 4b. ✅ APPLIED — `.venv-sglang` was broken; the whole SGLang arm produced no data (4 runs)
 
 `secondary-backend-llm-a/b` sweep `backend: [vllm, sglang]`. Every SGLang rung
 fails before the server starts, because `import sglang` itself raises:
@@ -116,7 +122,7 @@ Fix in `.venv-sglang` (either, verify with `python -c "import sglang"`):
 Do this **before** the next run — the failure is at import, so every SGLang
 tenant in the matrix is affected, not just phase 6.
 
-## 4c. `triton_backend: python` is not valid for `yolov8-l` (removes 2 failures, recovers no data)
+## 4c. ✅ APPLIED — `triton_backend: python` is not valid for `yolov8-l` (2 runs)
 
 ```yaml
 secondary-backend-cv-a:   # extends mix-llm-cv
@@ -151,6 +157,35 @@ have nothing to do with contention.
 
 Confirm `perf_analyzer` is not itself the bottleneck before exceeding ~600 req/s:
 run the tenant solo at the intended top rate and check `achieved` tracks `offered`.
+
+## 5b. `same-vlm`'s sweep asks for 12x what the tenant can serve
+
+Measured on the first re-run: `qwen3-vl-32b-fp8` on `vlm_video_long` plateaus at
+**~0.33 req/s**, and its weights are 33.64 GiB (against the 35.5 GB / 33.1 GiB
+declared, so the cap is sound).
+
+| Offered | Achieved |
+|---|---|
+| 0.5 | 0.32 |
+| 1.0 | 0.33 |
+
+`same-vlm` sweeps `[0.5, 1, 2, 4]` on both tenants. Three of those four rungs
+sit above the ceiling, so they all deliver ~0.33 and the sweep collapses into
+one load point measured four times. The degradation ratios stay valid — baseline
+and contention share the ceiling — but the rungs stop being a sweep.
+
+This is the same shape as `kosmos-2.5`, whose ~0.133 ceiling led to a configured
+rate of 0.1. Suggested rungs, straddling rather than exceeding the ceiling:
+
+```yaml
+same-vlm:
+  rps_sweep: {tenant: "*", values: [0.05, 0.1, 0.2, 0.3]}
+```
+
+Confirm the ceiling from the solo baselines of this run before fixing the
+values — a 32B VLM decoding long video is the slowest tenant in the study, and
+`qwen2.5-vl-7b` (the other half of the pair) may have a different one, in which
+case the pair needs per-tenant rates rather than a `"*"` sweep.
 
 ## 6. `same-llm`: add an asymmetric arm
 
