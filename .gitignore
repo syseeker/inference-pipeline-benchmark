@@ -7,6 +7,8 @@ __pycache__/
 build/
 dist/
 .venv/
+# .venv-vllm, .venv-sglang - 18.5 GB, never commit
+.venv-*/
 venv/
 env/
 .eggs/
