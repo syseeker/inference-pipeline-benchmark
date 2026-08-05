@@ -273,6 +273,12 @@ so at least one is noise. Either raise the rates (preferred, see §5) or raise
 - **Record TTFT in the coloc summary.** It is the leading indicator of the
   `same-llm` cliff — ITL stays under 2× while TTFT goes 348×. Currently it has to
   be dug out of the aiperf exports by hand.
+- **Pinning KV removes the log line that reports it.** vLLM prints
+  `Available KV cache memory: X GiB` only when it *derives* the cache from a
+  cap. With `--kv-cache-memory-bytes` set it prints nothing, so the ground-truth
+  cache size is no longer recoverable from the log for exactly the tenants whose
+  cache we care most about. Record `kv_budget_gb` into the manifest (it already
+  is) and treat the log line as unavailable for pinned tenants.
 - **Parse `Model loading took X GiB` from the server logs** into the manifest.
   It is the `vram_after_load_gb` ground truth Tier 2 wants, and it is already
   being written — just not collected.
