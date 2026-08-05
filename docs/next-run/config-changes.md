@@ -174,18 +174,39 @@ sit above the ceiling, so they all deliver ~0.33 and the sweep collapses into
 one load point measured four times. The degradation ratios stay valid — baseline
 and contention share the ceiling — but the rungs stop being a sweep.
 
-This is the same shape as `kosmos-2.5`, whose ~0.133 ceiling led to a configured
-rate of 0.1. Suggested rungs, straddling rather than exceeding the ceiling:
+**The pair needs per-tenant rates — a `"*"` sweep cannot serve both.** The solo
+baselines from this run settle it:
+
+| Offered | `qwen2.5-vl-7b` | `qwen3-vl-32b-fp8` |
+|---|---|---|
+| 0.5 | 0.49 | 0.32 |
+| 1.0 | 1.00 | 0.33 |
+| 2.0 | 1.95 | — |
+| 4.0 | 3.88 | — |
+
+The 7B tracks its offered rate to 4 req/s; the 32B is pinned at ~0.33 from 0.5
+upward. That is a **12x** spread at the top rung, so any single sweep either
+saturates the 32B or idles the 7B. Lowering the whole sweep to the 32B's ceiling
+(the obvious fix, and what an earlier draft of this section recommended) would
+run the 7B at under a tenth of its capacity and measure nothing.
+
+Replace the `"*"` sweep with per-tenant rates, each scaled to its own ceiling —
+the same fraction-of-capacity idea as §5, applied within one colocation:
 
 ```yaml
 same-vlm:
-  rps_sweep: {tenant: "*", values: [0.05, 0.1, 0.2, 0.3]}
+  # no rps_sweep: "*" — the tenants are 12x apart
+  tenants:
+    - name: vlm_a   # ceiling ~4+ req/s
+      load: {pattern: poisson, rps: 2}
+    - name: vlm_b   # ceiling ~0.33 req/s
+      load: {pattern: poisson, rps: 0.2}
 ```
 
-Confirm the ceiling from the solo baselines of this run before fixing the
-values — a 32B VLM decoding long video is the slowest tenant in the study, and
-`qwen2.5-vl-7b` (the other half of the pair) may have a different one, in which
-case the pair needs per-tenant rates rather than a `"*"` sweep.
+The asymmetry is already visible in the first contention window: `vlm_a` held at
+0.48 against its 0.49 solo while `vlm_b` fell 0.32 → 0.30. The 7B is barely
+touched and the 32B absorbs the contention — which is a finding, but not one
+this colocation was designed to make.
 
 ## 6. `same-llm`: add an asymmetric arm
 
