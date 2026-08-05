@@ -1,0 +1,89 @@
+{
+  "colocation_id": "secondary-input-size-cv-a",
+  "phase": 6,
+  "run_label": "solo",
+  "is_solo": true,
+  "gpu": "rtx_pro6000",
+  "isolation_mode": "mps",
+  "duration_s": 120,
+  "n_tenants": 1,
+  "t0_epoch_ms": 1785897050432.0115,
+  "devices": [
+    0
+  ],
+  "tenants": [
+    {
+      "name": "cv",
+      "round": {
+        "backend": "triton",
+        "model_id": "yolov8-l",
+        "hf_id": "ultralytics/yolov8l",
+        "family": "cv-detect",
+        "quantization": "fp16",
+        "base_url": "http://localhost:8100",
+        "port": 8100,
+        "launch_args": [
+          "--allow-client-shm=true"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "triton",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "perf_analyzer",
+      "load": {
+        "pattern": "poisson",
+        "rps": 50.0,
+        "output_tokens": null
+      },
+      "workload": "cv_detect_large",
+      "workload_spec": {
+        "data": [
+          "workspace/contention/test_data/cv/sample_1280x1280.jpg"
+        ]
+      },
+      "gpu_memory_utilization": null,
+      "kv_budget_gb": null,
+      "triton_backend": "tensorrt",
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [],
+      "offered_rps": 50.0,
+      "achieved_rps": 49.1741
+    }
+  ],
+  "gpu_sampler": {
+    "0": {
+      "sampler_backend": "dcgm",
+      "n_samples": 2724,
+      "mem_bw_util_pct_p50": 0.4,
+      "mem_bw_util_pct_peak": 1.5,
+      "gpu_util_pct_p50": 8.0,
+      "gpu_util_pct_peak": 25.0,
+      "fb_used_peak_gb": 1.1328125,
+      "power_avg_w": 102.45509140969084,
+      "power_peak_w": 112.79
+    }
+  },
+  "environment": {
+    "interconnect": {
+      "available": true,
+      "error": null,
+      "topo_matrix": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\t0-47\t0\t\tN/A\nGPU1\tPIX\t X \t0-47\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+      "nvlink_detected": false
+    },
+    "mps": {
+      "control_daemon_running": true,
+      "pipe_directory": null,
+      "container_pipe_directory": "/tmp/nvidia-mps",
+      "probe_error": null,
+      "detected": true
+    }
+  },
+  "warnings": [],
+  "throttle_reasons": []
+}

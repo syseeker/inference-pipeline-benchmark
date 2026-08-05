@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-40 solo baseline(s), 34 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+66 solo baseline(s), 70 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -53,6 +53,12 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | mix-vlm-cv             | 3     | vlm      | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈1.00× |   ≈1.03× |   ≈1.02× |    ▲1.13× |
 | mix-vlm-ilm            | 3     | ilm      | kosmos-2.5               | triton  |         0.1 |          0.1 |          ≈1.00× |   ≈1.04× |   ≈1.04× |       n/a |
 | mix-vlm-ilm            | 3     | vlm      | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈0.96× |   ≈1.04× |   ▲1.11× |    ▲1.08× |
+| cross-arch-validation  | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.85× |   ▲2.05× |       n/a |
+| cross-arch-validation  | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.80× |   ▲2.20× |       n/a |
+| cross-arch-validation  | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.84× |   ▲2.01× |       n/a |
+| cross-arch-validation  | 4     | llm      | llama3.1-8b              | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.02× |    ≈1.03× |
+| cross-arch-validation  | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| cross-arch-validation  | 4     | llm      | mistral-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.02× |    ≈1.02× |
 | cross-cv-vs-llm-rps    | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.11× |   ▲1.96× |       n/a |
 | cross-cv-vs-llm-rps    | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.74× |   ▲1.93× |       n/a |
 | cross-cv-vs-llm-rps    | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.17× |       n/a |
@@ -77,6 +83,14 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | cross-llm-vs-cv-rps    | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈1.00× |
 | cross-llm-vs-cv-rps    | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ▲1.09× |   ▲1.09× |    ▲1.10× |
 | cross-llm-vs-cv-rps    | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.03× |
+| cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲2.34× |   ▲2.82× |       n/a |
+| cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.82× |   ▲2.19× |       n/a |
+| cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲2.28× |   ▲2.55× |       n/a |
+| cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.91× |   ▲2.18× |       n/a |
+| cross-size-scaling     | 4     | llm      | qwen2.5-32b              | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ▼0.32× |    ▼0.07× |
+| cross-size-scaling     | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.02× |    ≈1.03× |
+| cross-size-scaling     | 4     | llm      | qwen2.5-72b              | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ▼0.31× |    ▼0.06× |
+| cross-size-scaling     | 4     | llm      | qwen2.5-14b              | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ▼0.32× |    ≈0.99× |
 | place-isolated         | 5     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ≈1.01× |   ≈1.02× |       n/a |
 | place-isolated         | 5     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈1.01× |
 | place-p1               | 5     | cv       | yolov8-l                 | triton  |        50.0 |         50.5 |          ≈1.03× |   ▲1.06× |   ▲1.05× |       n/a |
@@ -93,6 +107,79 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | place-p3               | 5     | vlm      | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈1.00× |   ≈1.02× |   ▲1.12× |    ≈1.03× |
 | place-vlm-prefill-split | 5     | llm      | gemma2-9b                | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈1.01× |
 | place-vlm-prefill-split | 5     | vlm      | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈1.00× |   ≈1.00× |   ≈0.99× |    ≈1.01× |
+| mix-memory-bound       | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.70× |       n/a |
+| mix-memory-bound       | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.88× |   ▼0.34× |    ▲1.86× |
+| mix-memory-bound       | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.77× |   ▲1.79× |    ▲1.73× |
+| secondary-arrival-a    | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.80× |   ▲2.17× |       n/a |
+| secondary-arrival-a    | 6     | cv       | yolov8-l                 | triton  |        50.0 |         50.0 |          ≈1.00× |   ▲1.66× |   ▲2.15× |       n/a |
+| secondary-arrival-a    | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-arrival-a    | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-arrival-b    | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.71× |       n/a |
+| secondary-arrival-b    | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.6 |          ≈0.99× |   ▲2.95× |   ▲3.26× |       n/a |
+| secondary-arrival-b    | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.34× |    ▲1.82× |
+| secondary-arrival-b    | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.89× |   ▼0.34× |    ▲1.83× |
+| secondary-arrival-b    | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.72× |
+| secondary-arrival-b    | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.77× |   ▲1.78× |    ▲1.71× |
+| secondary-asymmetry-a  | 6     | cv       | yolov8-l                 | triton  |        16.0 |         15.6 |          ≈1.00× |   ▲1.65× |   ▲1.91× |       n/a |
+| secondary-asymmetry-a  | 6     | cv       | yolov8-l                 | triton  |         4.0 |          3.9 |          ≈1.00× |   ▲1.66× |   ▲1.97× |       n/a |
+| secondary-asymmetry-a  | 6     | cv       | yolov8-l                 | triton  |        64.0 |         63.5 |          ≈1.00× |   ▲1.83× |   ▲2.16× |       n/a |
+| secondary-asymmetry-a  | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈1.00× |
+| secondary-asymmetry-a  | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈0.98× |
+| secondary-asymmetry-a  | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.03× |    ≈1.03× |
+| secondary-asymmetry-b  | 6     | cv       | yolov8-l                 | triton  |        16.0 |         15.6 |          ≈1.00× |   ▲2.95× |   ▲3.79× |       n/a |
+| secondary-asymmetry-b  | 6     | cv       | yolov8-l                 | triton  |         4.0 |          3.9 |          ≈1.00× |   ▲2.88× |   ▲3.03× |       n/a |
+| secondary-asymmetry-b  | 6     | cv       | yolov8-l                 | triton  |        64.0 |         63.5 |          ≈1.00× |   ▲3.42× |   ▲3.65× |       n/a |
+| secondary-asymmetry-b  | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.87× |   ▼0.34× |    ▲1.78× |
+| secondary-asymmetry-b  | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.87× |   ▼0.34× |    ▲1.81× |
+| secondary-asymmetry-b  | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.35× |    ▲1.85× |
+| secondary-asymmetry-b  | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.73× |   ▲1.74× |    ▲1.65× |
+| secondary-asymmetry-b  | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.72× |   ▲1.72× |    ▲1.65× |
+| secondary-asymmetry-b  | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.80× |   ▲1.81× |    ▲1.75× |
+| secondary-backend-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.18× |       n/a |
+| secondary-backend-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |          n/a |             n/a |      n/a |      n/a |       n/a |
+| secondary-backend-cv-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-backend-cv-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.00× |   ≈1.01× |    ≈1.01× |
+| secondary-backend-cv-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.27× |   ▲3.71× |       n/a |
+| secondary-backend-cv-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |          n/a |             n/a |      n/a |      n/a |       n/a |
+| secondary-backend-cv-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.34× |    ▲1.84× |
+| secondary-backend-cv-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.86× |   ▼0.34× |    ▲1.80× |
+| secondary-backend-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.78× |    ▲1.70× |
+| secondary-backend-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.76× |   ▲1.77× |    ▲1.68× |
+| secondary-backend-llm-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.18× |       n/a |
+| secondary-backend-llm-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.73× |       n/a |
+| secondary-backend-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.88× |   ▼0.34× |    ▲1.83× |
+| secondary-backend-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.73× |
+| secondary-input-size-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲1.78× |   ▲2.21× |       n/a |
+| secondary-input-size-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲1.79× |   ▲2.21× |       n/a |
+| secondary-input-size-cv-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.01× |
+| secondary-input-size-cv-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-input-size-cv-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲3.27× |   ▲3.77× |       n/a |
+| secondary-input-size-cv-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲3.21× |   ▲3.71× |       n/a |
+| secondary-input-size-cv-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.89× |   ▼0.34× |    ▲1.83× |
+| secondary-input-size-cv-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.34× |    ▲1.84× |
+| secondary-input-size-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.72× |
+| secondary-input-size-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.77× |   ▲1.79× |    ▲1.71× |
+| secondary-input-size-llm-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.18× |       n/a |
+| secondary-input-size-llm-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.19× |       n/a |
+| secondary-input-size-llm-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-input-size-llm-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.02× |   ≈1.03× |    ≈1.03× |
+| secondary-input-size-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.33× |   ▲3.86× |       n/a |
+| secondary-input-size-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.71× |       n/a |
+| secondary-input-size-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.95× |   ▲1.96× |    ▲1.86× |
+| secondary-input-size-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.34× |    ▲1.84× |
+| secondary-input-size-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.80× |   ▲1.83× |    ▲1.75× |
+| secondary-input-size-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.71× |
+| secondary-output-length-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.80× |   ▲2.17× |       n/a |
+| secondary-output-length-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.83× |   ▲2.09× |       n/a |
+| secondary-output-length-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
+| secondary-output-length-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.7 |          ≈1.00× |   ≈1.02× |   ≈1.04× |    ▲1.36× |
+| secondary-output-length-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.23× |   ▲3.69× |       n/a |
+| secondary-output-length-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.53× |   ▲4.12× |       n/a |
+| secondary-output-length-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▼0.34× |    ▲1.83× |
+| secondary-output-length-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.67× |   ▲1.97× |   ▲1.99× |    ▲3.47× |
+| secondary-output-length-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.77× |   ▲1.79× |    ▲1.71× |
+| secondary-output-length-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.89× |   ▲2.03× |    ▲1.86× |
 
 ### 1b. Contention matrix
 
@@ -107,6 +194,13 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | kosmos-2.5 | qwen2.5-7b, qwen2.5-vl-7b, yolov8-l | ▲1.38× |
 | kosmos-2.5 | qwen2.5-vl-7b | ≈1.03× |
 | kosmos-2.5 | yolov8-l | ≈0.99× |
+| llama3.1-8b | yolov8-l | ≈1.02× |
+| mistral-7b | yolov8-l | ≈1.02× |
+| qwen2.5-14b | qwen2.5-72b, yolov8-l | ▲1.80× |
+| qwen2.5-14b | yolov8-l | ▼0.32× |
+| qwen2.5-32b | yolov8-l | ▼0.32× |
+| qwen2.5-72b | qwen2.5-14b, yolov8-l | ▼0.56× |
+| qwen2.5-72b | yolov8-l | ▼0.31× |
 | qwen2.5-7b | gemma2-9b | ▲17.44× |
 | qwen2.5-7b | kosmos-2.5, qwen2.5-vl-7b, yolov8-l | ▲1.31× |
 | qwen2.5-7b | yolov8-l | ≈1.02× |
@@ -117,7 +211,13 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | yolov8-l | dinov2-base | ▲1.12× |
 | yolov8-l | kosmos-2.5 | ≈1.01× |
 | yolov8-l | kosmos-2.5, qwen2.5-7b, qwen2.5-vl-7b | ▲1.90× |
-| yolov8-l | qwen2.5-7b | ▲1.81× |
+| yolov8-l | llama3.1-8b | ▲2.05× |
+| yolov8-l | mistral-7b | ▲2.01× |
+| yolov8-l | qwen2.5-14b | ▲2.18× |
+| yolov8-l | qwen2.5-14b, qwen2.5-72b | ▲3.68× |
+| yolov8-l | qwen2.5-32b | ▲2.82× |
+| yolov8-l | qwen2.5-72b | ▲2.55× |
+| yolov8-l | qwen2.5-7b | ▲2.01× |
 
 ### 1c. Safe-operating envelope
 
@@ -125,6 +225,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 | Colocation | Tenant | Model | Offered | Achieved | Retention |
 |---|---|---|---|---|---|
+| secondary-output-length-b | llm | qwen2.5-72b | 2.0 | 0.9 | 0.46× |
 | same-llm | llm_b | gemma2-9b | 64.0 | 34.2 | 0.53× |
 | same-ilm | ilm_a | kosmos-2.5 | 0.0 | 0.0 | 0.61× |
 | same-ilm | ilm_a | kosmos-2.5 | 0.1 | 0.0 | 0.71× |
@@ -143,4 +244,5 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | same-ilm | ilm_a | kosmos-2.5 | 0.1 | 0.1 | 0.83× |
 | cross-ilm-vs-cv | ilm | kosmos-2.5 | 0.1 | 0.1 | 0.83× |
 | same-ilm | ilm_a | kosmos-2.5 | 0.2 | 0.2 | 0.83× |
+| secondary-output-length-a | llm | qwen2.5-7b | 4.0 | 3.7 | 0.93× |
 | cross-ilm-vs-cv | cv | yolov8-l | 1.0 | 0.9 | 0.95× |
