@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-80 solo baseline(s), 96 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+90 solo baseline(s), 110 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -77,6 +77,32 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | cross-cv-vs-llm-rps    | 4     | llm      | qwen2.5-7b               | vllm    |        16.0 |         15.5 |          ≈1.00× |   ≈1.02× |   ≈1.03× |    ≈1.03× |
 | cross-cv-vs-llm-rps    | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
 | cross-cv-vs-llm-rps    | 4     | llm      | qwen2.5-7b               | vllm    |        64.0 |         62.4 |          ≈1.00× |   ≈1.02× |   ≈1.03× |    ▲1.15× |
+| cross-deploy-alone-72b | 4     | llm      | qwen2.5-72b              | vllm    |         2.0 |          1.5 |          ≈1.00× |   ≈1.00× |   ≈1.00× |    ≈1.00× |
+| cross-deploy-alone-7b  | 4     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.8 |          ≈1.00× |   ≈0.99× |   ▼0.83× |    ▼0.45× |
+| cross-deploy-split-s25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.56× |   ▲2.40× |   ▲2.64× |    ▲3.04× |
+| cross-deploy-split-s25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.56× |   ▲2.40× |   ▲2.64× |    ▲3.04× |
+| cross-deploy-split-s25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.56× |   ▲2.40× |   ▲2.64× |    ▲3.04× |
+| cross-deploy-split-s25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.16× |  ▲11.34× |   ▲35.19× |
+| cross-deploy-split-s25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.15× |  ▲11.33× |   ▲35.14× |
+| cross-deploy-split-s25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.15× |  ▲11.33× |   ▲35.13× |
+| cross-deploy-split-s50 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s50 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s50 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s50 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.16× |  ▲11.34× |   ▲35.87× |
+| cross-deploy-split-s50 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.16× |  ▲11.34× |   ▲35.88× |
+| cross-deploy-split-s50 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.15× |  ▲11.33× |   ▲35.84× |
+| cross-deploy-split-s75 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s75 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s75 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.46× |   ▲2.69× |    ▲3.12× |
+| cross-deploy-split-s75 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.14× |  ▲11.31× |   ▲35.64× |
+| cross-deploy-split-s75 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.14× |  ▲11.32× |   ▲35.64× |
+| cross-deploy-split-s75 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.15× |  ▲11.32× |   ▲35.66× |
+| cross-deploy-split-s85 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.44× |   ▲2.67× |    ▲3.09× |
+| cross-deploy-split-s85 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.44× |   ▲2.67× |    ▲3.09× |
+| cross-deploy-split-s85 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.9 |          ▼0.58× |   ▲2.43× |   ▲2.66× |    ▲3.08× |
+| cross-deploy-split-s85 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.16× |  ▲11.32× |   ▲35.10× |
+| cross-deploy-split-s85 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.15× |  ▲11.32× |   ▲35.09× |
+| cross-deploy-split-s85 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.5 |          ▼0.65× |   ▲9.17× |  ▲11.33× |   ▲35.17× |
 | cross-ilm-vs-cv        | 4     | cv       | yolov8-l                 | triton  |         1.0 |          0.9 |          ▲1.15× |   ≈1.02× |   ≈1.02× |       n/a |
 | cross-ilm-vs-cv        | 4     | cv       | yolov8-l                 | triton  |        10.0 |          9.9 |          ≈1.03× |   ≈0.98× |   ≈0.98× |       n/a |
 | cross-ilm-vs-cv        | 4     | cv       | yolov8-l                 | triton  |       200.0 |          n/a |             n/a |      n/a |      n/a |       n/a |
@@ -255,12 +281,14 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | qwen2.5-14b | qwen2.5-72b, yolov8-l | ▲1.80× |
 | qwen2.5-14b | yolov8-l | ▼0.32× |
 | qwen2.5-32b | yolov8-l | ▼0.32× |
+| qwen2.5-72b |  | ≈1.00× |
 | qwen2.5-72b | qwen2.5-14b, yolov8-l | ▼0.85× |
-| qwen2.5-72b | qwen2.5-7b | ▼0.79× |
+| qwen2.5-72b | qwen2.5-7b | ▲1.73× |
 | qwen2.5-72b | yolov8-l | ▼0.31× |
+| qwen2.5-7b |  | ▼0.83× |
 | qwen2.5-7b | gemma2-9b | ▲17.44× |
 | qwen2.5-7b | kosmos-2.5, qwen2.5-vl-7b, yolov8-l | ▲1.31× |
-| qwen2.5-7b | qwen2.5-72b | ▲6.55× |
+| qwen2.5-7b | qwen2.5-72b | ▲8.94× |
 | qwen2.5-7b | yolov8-l | ≈1.02× |
 | qwen2.5-vl-7b | dinov2-base | ≈1.02× |
 | qwen2.5-vl-7b | gemma2-9b | ▲1.32× |
@@ -293,13 +321,38 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | cross-memory-pressure-p25 | neighbour | qwen2.5-7b | 4.0 | 1.1 | 0.27× |
 | same-vlm | vlm_b | qwen3-vl-32b-fp8 | 1.0 | 0.3 | 0.29× |
 | cross-memory-pressure-p25 | anchor | qwen2.5-72b | 2.0 | 0.8 | 0.39× |
+| cross-deploy-split-s25 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s75 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s75 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s25 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s25 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s50 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s75 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s50 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s50 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s85 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s85 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
+| cross-deploy-split-s85 | anchor | qwen2.5-72b | 2.0 | 0.9 | 0.44× |
 | secondary-output-length-b | llm | qwen2.5-72b | 2.0 | 0.9 | 0.46× |
 | same-llm | llm_b | gemma2-9b | 64.0 | 34.2 | 0.53× |
 | cross-memory-pressure-p25 | neighbour | qwen2.5-7b | 4.0 | 2.2 | 0.55× |
 | same-vlm | vlm_b | qwen3-vl-32b-fp8 | 0.5 | 0.3 | 0.60× |
 | same-ilm | ilm_a | kosmos-2.5 | 0.0 | 0.0 | 0.61× |
+| cross-deploy-split-s85 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s25 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s85 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s85 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s25 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s50 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s25 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s50 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s75 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s75 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s50 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
+| cross-deploy-split-s75 | neighbour | qwen2.5-7b | 4.0 | 2.5 | 0.62× |
 | same-ilm | ilm_a | kosmos-2.5 | 0.1 | 0.0 | 0.71× |
 | same-llm | llm_a | qwen2.5-7b | 64.0 | 47.9 | 0.75× |
+| cross-deploy-alone-72b | llm | qwen2.5-72b | 2.0 | 1.5 | 0.76× |
 | cross-llm-vs-cv-rps | cv | yolov8-l | 1.0 | 0.8 | 0.83× |
 | same-cv | cv_a | yolov8-l | 1.0 | 0.8 | 0.83× |
 | same-cv | cv_b | dinov2-base | 1.0 | 0.8 | 0.83× |
