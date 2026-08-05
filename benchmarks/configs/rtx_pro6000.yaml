@@ -38,6 +38,7 @@ tensor_parallel: 1
 models:
   qwen3-vl-32b-fp8:
     hf_id: "Qwen/Qwen3-VL-32B-Instruct-FP8"
+    weights_gb: 35.5              # safetensors total on the hub (33.1 GiB)
     family: "qwen3-vl"
     role: "vlm-headline"
     quantization: "fp8"
@@ -112,6 +113,12 @@ models:
   gemma-4-31b-it-fp8:
     hf_id: "RedHatAI/gemma-4-31B-it-FP8-block"
     family: "gemma-4"
+    # vLLM registers Gemma4ForConditionalGeneration, but transformers 4.57.6
+    # has no `gemma4` arch, so the checkpoint fails to load before any GPU
+    # work. Revisit after a transformers bump — not under a running study,
+    # since vLLM pins it and every other tenant here serves against 4.57.6.
+    unsupported_backends:
+      vllm: "transformers 4.57.6 has no gemma4 architecture; needs a version bump"
     role: "vlm-google"
     quantization: "fp8"
     notes: "Google Gemma 4 31B dense VLM (text+image+video, 256K ctx). RedHatAI FP8-block community quant (Google ships BF16 only). ~31GB at FP8 → fits 96GB with comfortable KV room; cross-vendor twin to qwen3-vl-32b-fp8 and brings the first video-capable modality into the matrix."
@@ -882,13 +889,20 @@ colocations:
 
       - name: vlm_b
         backend: vllm
-        model: gemma-4-31b-it-fp8
+        # Was gemma-4-31b-it-fp8: vLLM registers the arch but transformers
+        # 4.57.6 does not, so it never loaded — 8 failed runs. The customer's
+        # own pick, gemma-vlm-32b, is paligemma2-28b and is image-only, so it
+        # cannot serve vlm_video_long at all (see its unsupported_workloads).
+        # qwen3-vl-32b-fp8 is this roster's other video-capable 32B and serves
+        # today. same-vlm tests same-CATEGORY, not cross-vendor, so a Qwen pair
+        # is not a confound.
+        model: qwen3-vl-32b-fp8
         workload: vlm_video_long
-        # Explicit cap: this model sits outside the contention roster and so
-        # carries no `weights_gb`, which is what derivation needs. 0.51 =
-        # ~31 GB weights + the same 16 GB KV + overhead, so the pair still
-        # holds one KV budget between them even though only one is derived.
-        gpu_memory_utilization: 0.51
+        # No explicit cap now: qwen3-vl-32b-fp8 carries weights_gb, so the cap
+        # derives from the colocation's KV budget and BOTH tenants get an
+        # absolute --kv-cache-memory-bytes. A cap here would be a total-device
+        # target next to a co-resident neighbour, which is what broke
+        # cross-vlm-prefill-vs-llm and the whole memory-pressure family.
         load: {pattern: poisson, rps: 1}
     rps_sweep: {tenant: "*", values: [0.5, 1, 2, 4]}
 

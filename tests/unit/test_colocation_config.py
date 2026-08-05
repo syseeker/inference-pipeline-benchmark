@@ -157,7 +157,11 @@ def test_tenant_names_match_what_they_actually_run(cfg):
     CV = {"yolov8-l", "yolov8-n", "dinov2-base", "dinov2-large",
           "rfdetr-medium", "paddleocr"}
     ILM = {"kosmos-2.5"}
-    VLM = {"qwen2.5-vl-7b", "qwen2.5-vl-72b", "gemma-4-31b-it-fp8"}
+    VLM = {"qwen2.5-vl-7b", "qwen2.5-vl-72b", "gemma-4-31b-it-fp8",
+           # video-capable 32Bs; qwen3-vl-32b-fp8 replaced gemma-4 in same-vlm
+           # once transformers 4.57.6 turned out not to know the gemma4 arch.
+           "qwen3-vl-32b-fp8", "qwen3-vl-32b-bf16", "qwen3-vl-30b-a3b-fp8",
+           "gemma-vlm-32b"}
     # Role names that deliberately describe a position in the experiment
     # rather than a model category.
     ROLE_NAMES = {"anchor", "neighbour", "subject"}
