@@ -27,9 +27,17 @@ specifically about **two or more models resident at the same time**.
 
 ## Build status
 
-**Built; hardware validation started 2026-08-04 on 2× RTX PRO 6000.** All
-eight build steps are complete: 39 colocations covering all seven phases, 357
-unit tests, no VRAM pre-flight issues.
+> **⚠ Before running or redesigning the memory-pressure / deployment family,
+> read [reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md).**
+> Three successive designs of that experiment produced meaningless flat curves,
+> and the cause is the *workload*, not the rung sizing: `llm_long` has two
+> distinct prompts, so prefix caching dedupes 97% of prompt KV and the cache
+> can never fill. That doc also records the `--resume` identity bug that reused
+> baselines from a different deployment three separate times in one day.
+
+**Built and hardware-validated over 2026-08-04/05 on 2× RTX PRO 6000** — 33
+hours, 201 manifests, 428 unit tests. All eight build steps are complete: 41
+colocations covering all seven phases, no VRAM pre-flight issues.
 
 **Phase 3 and Phase 5 are complete** — 12 and 15 runs, all clean. Phase 0's
 gate passes at 2.07× overlap, both null tests return ~1.0, and the harness has
@@ -43,6 +51,20 @@ produced its first real findings:
 - **Placement matters, and the recorded prediction was wrong.** Measured
   P2 (1.46×) beats P1 (1.95×) and P3 (2.19×). Never co-locate the two vLLM
   tenants; then pair the CV tenant with the VLM rather than the LLM.
+
+**Results as of 2026-08-05** — full detail in
+[reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md):
+
+- **The deployment cost.** Adding a `qwen2.5-7b` to a card running a
+  `qwen2.5-72b` costs the 72B **42%** of its throughput and the 7B **35%**,
+  reproducible to two decimals over 12 runs. Treat 42% as an *optimistic*
+  bound — prefill was nearly free (see the warning above).
+- **How you split the memory does not matter.** Identical throughput across a
+  3.4× range of 72B cache. The cost is compute contention, not cache.
+- **KV sizing.** The 72B plateaus above ~7 GiB; the 7B is flat across a 110×
+  cache range and needs under 1 GiB. Provisioning past the knee buys nothing.
+- **Backends tie when unstressed.** SGLang 1.98 vs vLLM 1.97 under three-tenant
+  contention — but only once SGLang stopped self-sizing to 1.7× vLLM's cache.
 
 Phase 2 is under way and has already produced the study's sharpest number:
 two LLMs co-resident cost a near-constant **1.6-1.9x** latency from 1 to 16
@@ -85,6 +107,14 @@ required. On a fresh clone:
    writing measurement code — the open-loop rule and sampler ownership are easy
    to get wrong and invalidate results silently.
 4. Test data is already in `workspace/contention/` (checked in, not ignored).
+5. Read [reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md)
+   for what the hardware actually showed — the headline numbers, the four
+   backend/model gotchas that cost the most time, and the operational traps
+   (`pgrep` matching your own shell, orphaned `VLLM::EngineCore` holding the
+   exclusive-mode context, why two orchestrators must not run concurrently).
+6. Outstanding config changes are queued in
+   [docs/next-run/config-changes.md](../../docs/next-run/config-changes.md),
+   each with the yaml to paste and the runs it recovers.
 
 ## Two rules that are non-negotiable
 
