@@ -102,13 +102,13 @@ def test_missing_selector_exits_generic_with_a_remediation():
 # ── the whole point: one plan, deduped baselines ────────────────────────────
 
 def test_the_whole_study_is_one_plan_with_deduped_baselines():
-    """40 colocations run as ONE plan: 149 runs (64 solo + 85 contention).
+    """41 colocations run as ONE plan: 154 runs (66 solo + 88 contention).
     Run as 39 separate commands it is 237 — 74 redundant baselines, ~3h of GPU."""
     res, payload = _invoke("--all", "--dry-run")
     assert res.exit_code == 0
-    assert payload["data"]["n_runs"] == 149
-    assert payload["data"]["n_solo"] == 64
-    assert payload["data"]["n_coloc"] == 85
+    assert payload["data"]["n_runs"] == 154
+    assert payload["data"]["n_solo"] == 66
+    assert payload["data"]["n_coloc"] == 88
 
 
 def test_a_single_colocation_still_reports_its_own_shape():
@@ -122,13 +122,13 @@ def test_dry_run_reports_preflight_across_the_whole_selection():
     res, payload = _invoke("--all", "--dry-run")
     assert "preflight_issues" in payload["data"]
     assert all("preflight_issues" in p for p in payload["data"]["plan"])
-    assert len(payload["data"]["plan"]) == 149
+    assert len(payload["data"]["plan"]) == 154
 
 
 def test_dry_run_run_dirs_are_unique(tmp_path):
     _, payload = _invoke("--all", "--dry-run", out=tmp_path)
     dirs = [p["run_dir"] for p in payload["data"]["plan"]]
-    assert len(set(dirs)) == len(dirs) == 149
+    assert len(set(dirs)) == len(dirs) == 154
 
 
 def test_run_dirs_do_not_depend_on_which_phase_was_selected(tmp_path):

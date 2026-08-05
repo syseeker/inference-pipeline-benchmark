@@ -1313,6 +1313,15 @@ colocations:
         kv_budget_gb: 14.0
         load: {pattern: poisson, rps: 4}
 
+  # The 72B gets the SMALL share — the mirror of s75, and the case an operator
+  # lands on by giving the "less important" model less memory.
+  cross-deploy-split-s25:
+    phase: 4
+    extends: cross-deploy-split-s50
+    tenants:
+      - {name: anchor,    kv_budget_gb: 7.0}
+      - {name: neighbour, kv_budget_gb: 21.0}
+
   cross-deploy-split-s75:
     phase: 4
     extends: cross-deploy-split-s50

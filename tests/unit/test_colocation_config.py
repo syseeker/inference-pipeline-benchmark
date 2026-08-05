@@ -666,6 +666,7 @@ def test_cross_sweeps_move_one_tenant_and_hold_the_subject(cfg, name):
 # buys 5.7x more tokens on the 7B than on the 72B, so a shared byte figure
 # pressured the two tenants completely differently.
 MEMORY_PRESSURE_CURVE = [
+    "cross-deploy-split-s25",
     "cross-deploy-split-s50",
     "cross-deploy-split-s75",
     "cross-deploy-split-s85",
