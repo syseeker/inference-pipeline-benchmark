@@ -145,6 +145,48 @@ smaller change and loses nothing the study asks about — the question is
 TensorRT-vs-ONNX cost, and a Python-backend YOLO would be slow for reasons that
 have nothing to do with contention.
 
+## 1b. `kv03` is below vLLM's minimum viable KV — the starved end is unreachable
+
+Measured on the re-run: the `kv03` **solo** anchor fails on an empty card at
+`_check_enough_kv_cache_memory`. vLLM requires the cache to hold at least one
+max-length sequence, and it cannot:
+
+```
+qwen2.5-72b: 80 layers, 8 KV heads, head_dim 128
+  KV per token     = 320 KiB
+  one 8192-tok seq = 2.50 GiB      <- the floor
+  kv03 anchor      = 2.00 GiB      <- the rung
+```
+
+| Rung | anchor KV | vs 2.50 GiB floor | neighbour KV | vs 0.44 GiB floor |
+|---|---|---|---|---|
+| `kv03` | 2.0 | **FAIL** | 1.0 | OK |
+| `kv13` | 8.7 | OK | 3.9 | OK |
+| `kv22` | 14.4 | OK | 7.8 | OK |
+| `kv29` | 19.2 | OK | 9.7 | OK |
+
+**This rung never ran as specified, including in the original config.** Under
+the old caps the anchor received **6.69 GiB** — more than three times its stated
+2.0 GB — because the cap was derived from a `weights_gb` that overstated the 72B
+by 3.4 GB, and the surplus silently became cache. Converting to `kv_budget_gb`
+made the config finally provision what it claimed, which is what exposed this.
+
+So the eviction cliff the family is hunting sits **below the reachable range on
+this card**, at least at 8192 context. Three options, in order of preference:
+
+1. **Move the bottom rung up.** The floor is 2.50 GiB, so the tightest feasible
+   2:1 rung is roughly anchor 2.6 / neighbour 1.3 — total 3.9 GB. Rename it
+   `kv04`; the curve keeps its shape and its name stays honest.
+2. **Shorten the anchor's context.** At `--max-model-len 4096` the floor halves
+   to 1.25 GiB and 2.0/1.0 becomes feasible — but context length then differs
+   across rungs, which is a second variable.
+3. **Drop `kv03`.** The curve starts at `kv13`; the starved end goes unmeasured
+   and is documented as out of reach.
+
+Do not simply raise the budget and keep the `kv03` name: the suffix is the
+swept variable, and a rung named for 3 GB that provisions 3.9 is the same class
+of error as the caps that provisioned 6.69.
+
 ## 5. Rates: the configured load is far below capacity
 
 | Colocation | Current sweep | Top rung reaches | Suggested |
