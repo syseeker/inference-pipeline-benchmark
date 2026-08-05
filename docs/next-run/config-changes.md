@@ -259,6 +259,43 @@ still measuring nothing. The eviction cliff appears when usage approaches 100%
 and vLLM starts preempting — that is the event this family exists to find, and
 nothing in the current configuration can reach it.
 
+## 1d. What the redesigned memory-pressure family does and does not measure
+
+The redesign works mechanically — `p25` reaches 99.7% / 100% cache utilisation
+against the old design's 0.4%, and throughput moves. But be precise about the
+claim it supports.
+
+**The neighbour does not shrink anyone's cache.** With `--kv-cache-memory-bytes`
+the cache is pinned identically in the solo and contention arms:
+
+| | achieved | KV usage |
+|---|---|---|
+| anchor solo, 3.7 GiB | 1.27 / 2.0 | 99.9% |
+| anchor colocated, same 3.7 GiB | 0.79 / 0.40 | 99.7% / 99.9% |
+
+Cache size is a **controlled variable**, imposed by a flag. The card is only
+about two-thirds full at `p25` (~61 of 96 GiB) — the starvation is deliberate,
+not a consequence of running out of memory.
+
+So the family measures an **interaction**: at a fixed cache size, what does a
+neighbour cost? The anchor's 1.27 -> 0.79 is SM and bandwidth contention at
+constant cache. The curve p25 -> p130 answers whether that cost grows as the
+cache tightens.
+
+**It does not measure what a production deployment experiences.** There nobody
+pins the cache: you have a card, you add a second model, and each gets what is
+left — the cache shrinks *because* of the neighbour. Decoupling those isolates
+the variable cleanly but drops the mechanism that makes it move in practice.
+If the customer-facing question is "what happens when I add a second model to
+this card", that needs a separate arm where both tenants derive their cache
+from what remains after the other's weights, and the cache size is an OUTCOME
+rather than an input.
+
+**Report the spread, not the mean.** Two `p25` contention repeats gave 0.79 and
+0.40 — 2x apart at identical config. That is the bimodality the yaml predicted
+near the eviction limit, and it is why `repetitions: 3` is set. A single-rep
+number from this family is not meaningful.
+
 ## 5. Rates: the configured load is far below capacity
 
 | Colocation | Current sweep | Top rung reaches | Suggested |
