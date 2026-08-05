@@ -296,6 +296,55 @@ rather than an input.
 near the eviction limit, and it is why `repetitions: 3` is set. A single-rep
 number from this family is not meaningful.
 
+## 1e. Turn prefix caching off before trusting any cache-pressure result
+
+**Ready to apply. ~1.3 h at `repetitions: 1`, ~2.3 h at 3.**
+
+`llm_long` has two distinct prompts and `llm_short` has three, so with prefix
+caching on the prompt KV deduplicates almost entirely: measured hit rate
+**97.4%**, and a working set of ~13,100 tokens where 32 concurrent requests
+should occupy 48,032. That is why three successive designs of the
+memory-pressure experiment produced flat curves, and why `cross-deploy`'s four
+splits all returned 0.88 / 2.48.
+
+Scoped change — a variant, so no other colocation is affected:
+
+```yaml
+backends:
+  vllm:
+    variants:
+      prefix_off: ["--no-enable-prefix-caching"]
+
+cross-deploy-split-s50:      # and s25 / s75 / s85, and both alone-* references
+  tenants:
+    - {name: anchor,    variant: prefix_off, ...}
+    - {name: neighbour, variant: prefix_off, ...}
+```
+
+`--no-enable-prefix-caching` is already used by the `qwen3-vl` models here, so
+it works with this vLLM build.
+
+**Expected effect.** The 72B's working set goes from ~13,100 to ~48,000 tokens
+(14.66 GiB), so `s25` (7 GiB) and `s50` (14 GiB) would bind while `s75` and
+`s85` would not — a real two-point curve instead of a flat line. To get a full
+curve, add rungs below s25.
+
+**And it probably makes the headline number worse.** The 42% / 35% deployment
+cost was measured with prefill essentially free. With realistic prompt
+diversity the cost should rise, so **treat 42% as an optimistic bound**.
+
+**Also drop `repetitions` to 1** for this family. Twelve contention runs
+returned identical values to two decimals; the 3 reps were inherited from
+memory-pressure, where near-cliff bimodality made the spread the finding.
+
+### The deeper fix: more prompts
+
+The variant is a workaround. A 97% prefix hit rate is nothing like production
+traffic, so *every* prefill-sensitive number in this study — TTFT above all —
+is measured against an unrealistically cheap prompt. Adding 20-50 distinct
+prompts per workload would fix it at the source and make the whole matrix more
+representative, at the cost of re-running everything.
+
 ## 5. Rates: the configured load is far below capacity
 
 | Colocation | Current sweep | Top rung reaches | Suggested |
