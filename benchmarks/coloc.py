@@ -374,8 +374,23 @@ def build_server_env(tenant: Tenant) -> dict[str, str]:
 
     A tensor-parallel tenant gets every index it occupies, in ascending order,
     so the backend's local device 0..N-1 map onto exactly those cards.
+
+    PATH carries the tenant's own venv `bin` because `venv_bin` only covers
+    tools *we* name. A server can shell out to a tool of its own: SGLang's
+    default flashinfer attention backend JIT-compiles kernels and invokes
+    `ninja`, which lives in `.venv-sglang/bin` and is not on the orchestrator's
+    PATH. Without this the server dies 15 s in with
+    `FileNotFoundError: 'ninja'` — before loading any weights, so the tenant
+    never becomes ready and the whole SGLang arm of the matrix produces nothing.
     """
-    return {"CUDA_VISIBLE_DEVICES": ",".join(str(d) for d in tenant.devices)}
+    env = {"CUDA_VISIBLE_DEVICES": ",".join(str(d) for d in tenant.devices)}
+    venvs = {"vllm": ".venv-vllm", "sglang": ".venv-sglang", "trtllm": ".venv-trtllm"}
+    venv = venvs.get(tenant.round.backend)
+    if venv:
+        bin_dir = REPO_ROOT / venv / "bin"
+        if bin_dir.is_dir():
+            env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    return env
 
 
 # ─────────────────────────── Triton placement ──────────────────────────────

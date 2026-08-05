@@ -117,7 +117,10 @@ def test_preflight_still_names_uncapped_tenants_per_gpu():
 # ── device placement / CUDA_VISIBLE_DEVICES ─────────────────────────────────
 
 def test_server_env_pins_a_single_device():
-    assert coloc.build_server_env(_tenant(device=3)) == {"CUDA_VISIBLE_DEVICES": "3"}
+    # Not an exact-dict compare: the env also carries PATH, so that a server
+    # can find tools in its own venv (see
+    # test_server_env_puts_the_tenants_venv_bin_on_path).
+    assert coloc.build_server_env(_tenant(device=3))["CUDA_VISIBLE_DEVICES"] == "3"
 
 
 def test_server_env_lists_every_tensor_parallel_device():
@@ -127,7 +130,7 @@ def test_server_env_lists_every_tensor_parallel_device():
 
 def test_server_env_defaults_to_gpu_zero():
     # Every colocation written before placement existed means GPU 0.
-    assert coloc.build_server_env(_tenant(device=None)) == {"CUDA_VISIBLE_DEVICES": "0"}
+    assert coloc.build_server_env(_tenant(device=None))["CUDA_VISIBLE_DEVICES"] == "0"
 
 
 # ── server command builder ──────────────────────────────────────────────────
@@ -1749,3 +1752,34 @@ def test_linking_is_silent_when_nothing_is_staged(tmp_path):
     coloc._link_staged_weight(tmp_path / "absent" / "model.plan",
                               tmp_path / "gpu1" / "model.plan")
     assert not (tmp_path / "gpu1").exists()
+
+
+def test_server_env_puts_the_tenants_venv_bin_on_path():
+    """`venv_bin` only covers tools we name on the command line. A server can
+    shell out to one of its own: SGLang's default flashinfer backend JIT-builds
+    kernels with `ninja`, which lives in .venv-sglang/bin and is not on the
+    orchestrator's PATH. Without it the server dies 15 s in with
+    FileNotFoundError, before loading weights, and the whole SGLang arm of the
+    matrix silently produces nothing.
+    """
+    import os
+    from benchmarks.coloc import REPO_ROOT, build_server_env
+    from benchmarks.scenario_config import load_gpu_config, iter_colocation
+
+    cfg = load_gpu_config("rtx_pro6000")
+    seen = set()
+    for name in cfg["colocations"]:
+        for coloc in iter_colocation(cfg, name):
+            for t in coloc.tenants:
+                env = build_server_env(t)
+                seen.add(t.round.backend)
+                if t.round.backend in ("vllm", "sglang", "trtllm"):
+                    bin_dir = REPO_ROOT / f".venv-{t.round.backend}" / "bin"
+                    if bin_dir.is_dir():
+                        assert env["PATH"].split(os.pathsep)[0] == str(bin_dir), (
+                            f"{name}/{t.name}: {t.round.backend} venv bin must lead PATH"
+                        )
+                else:
+                    # Triton runs in a container; its PATH is the image's.
+                    assert "PATH" not in env, f"{name}/{t.name} should inherit PATH"
+    assert {"vllm", "sglang", "triton"} <= seen, f"coverage gap: {seen}"

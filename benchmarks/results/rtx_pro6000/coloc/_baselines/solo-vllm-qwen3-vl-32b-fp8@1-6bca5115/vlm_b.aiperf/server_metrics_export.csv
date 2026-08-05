@@ -1,0 +1,108 @@
+# AIPerf Server Metrics Export (CSV)
+# aiperf_version: 0.11.0
+# schema_version: 1.0
+# benchmark_id: 832849e7fd65
+# Note: Same benchmark_id and version appear in JSON and Parquet exports
+#
+Endpoint,Type,Metric,Unit,avg,min,max,std,p1,p5,p10,p25,p50,p75,p90,p95,p99,engine,model_name,reason,sleep_state,Description
+localhost:8000,gauge,process_max_fds,,1048576.0000,1048576.0000,1048576.0000,0.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,1048576.0000,,,,,Maximum number of open file descriptors.
+localhost:8000,gauge,process_open_fds,,119.3105,60.0000,180.0000,32.6870,61.0000,65.0000,77.0000,93.0000,116.0000,144.0000,173.0000,177.0000,179.2000,,,,,Number of open file descriptors.
+localhost:8000,gauge,process_resident_memory_bytes,bytes,1926862283.9482,1673453568.0000,2297982976.0000,157127225.5231,1673461760.0000,1674125312.0000,1761976320.0000,1802145792.0000,1910468608.0000,2043179008.0000,2188673024.0000,2207932416.0000,2214248448.0000,,,,,Resident memory size in bytes.
+localhost:8000,gauge,process_start_time_seconds,seconds,1785908395.1700,1785908395.1700,1785908395.1700,0.0000,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,1785908395.1700,,,,,Start time of the process since unix epoch in seconds.
+localhost:8000,gauge,process_virtual_memory_bytes,bytes,27603195317.2347,26365132800.0000,29086109696.0000,456921508.1176,26365132800.0000,26365132800.0000,26948780032.0000,27556536320.0000,27662368768.0000,27811700736.0000,27954307072.0000,28100120576.0000,28491613798.4000,,,,,Virtual memory size in bytes.
+localhost:8000,gauge,vllm:kv_cache_usage_perc,ratio,0.7912,0.0000,0.9016,0.1536,0.0000,0.6606,0.6606,0.7160,0.8464,0.8962,0.9001,0.9001,0.9012,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,KV-cache usage. 1 means 100 percent usage.
+localhost:8000,gauge,vllm:num_requests_running,requests,4.5915,0.0000,5.0000,0.8308,0.0000,4.0000,4.0000,4.0000,5.0000,5.0000,5.0000,5.0000,5.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Number of requests in model execution batches.
+localhost:8000,gauge,vllm:num_requests_waiting,requests,55.2588,0.0000,116.0000,32.4591,0.0000,1.0000,13.0000,30.0000,53.0000,80.0000,107.0000,113.0000,116.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Number of requests waiting to be processed.
+localhost:8000,gauge,vllm:engine_sleep_state,,1.0000,1.0000,1.0000,0.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,1.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,awake,Engine sleep state; awake = 0 means engine is sleeping; awake = 1 means engine is awake; weights_offloaded = 1 means sleep level 1; discard_all = 1 means sleep level 2.
+localhost:8000,gauge,vllm:engine_sleep_state,,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,discard_all,Engine sleep state; awake = 0 means engine is sleeping; awake = 1 means engine is awake; weights_offloaded = 1 means sleep level 1; discard_all = 1 means sleep level 2.
+localhost:8000,gauge,vllm:engine_sleep_state,,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,weights_offloaded,Engine sleep state; awake = 0 means engine is sleeping; awake = 1 means engine is awake; weights_offloaded = 1 means sleep level 1; discard_all = 1 means sleep level 2.
+localhost:8000,gauge,vllm:num_requests_waiting_by_reason,requests,55.2588,0.0000,116.0000,32.4591,0.0000,1.0000,13.0000,30.0000,53.0000,80.0000,107.0000,113.0000,116.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,capacity,,"Number of waiting requests by reason. Reason labels: 'capacity' = waiting for scheduling capacity; 'deferred' = deferred by transient constraints (LoRA budget, KV transfer, blocked status). Sum of all reasons equals vllm:num_requests_waiting."
+localhost:8000,gauge,vllm:num_requests_waiting_by_reason,requests,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,deferred,,"Number of waiting requests by reason. Reason labels: 'capacity' = waiting for scheduling capacity; 'deferred' = deferred by transient constraints (LoRA budget, KV transfer, blocked status). Sum of all reasons equals vllm:num_requests_waiting."
+
+Endpoint,Type,Metric,Unit,total,rate,rate_avg,rate_min,rate_max,rate_std,engine,finished_reason,model_name,source,generation,handler,method,status,Description
+localhost:8000,counter,process_cpu_seconds,seconds,92.8900,0.5158,,,,,,,,,,,,,Total user and system CPU time spent in seconds.
+localhost:8000,counter,http_requests,requests,179.0000,0.9939,,,,,,,,,,/v1/chat/completions,POST,2xx,"Total number of requests by method, status and handler."
+localhost:8000,counter,http_requests,requests,0.0000,0.0000,,,,,,,,,,/v1/models,GET,2xx,"Total number of requests by method, status and handler."
+localhost:8000,counter,python_gc_collections,,80.0000,0.4442,,,,,,,,,0,,,,Number of times this generation was collected
+localhost:8000,counter,python_gc_collections,,8.0000,0.0444,,,,,,,,,1,,,,Number of times this generation was collected
+localhost:8000,counter,python_gc_collections,,0.0000,0.0000,,,,,,,,,2,,,,Number of times this generation was collected
+localhost:8000,counter,python_gc_objects_collected,,2430.0000,13.4923,,,,,,,,,0,,,,Objects collected during gc
+localhost:8000,counter,python_gc_objects_collected,,240.0000,1.3326,,,,,,,,,1,,,,Objects collected during gc
+localhost:8000,counter,python_gc_objects_collected,,0.0000,0.0000,,,,,,,,,2,,,,Objects collected during gc
+localhost:8000,counter,python_gc_objects_uncollectable,,0.0000,0.0000,,,,,,,,,0,,,,Uncollectable objects found during GC
+localhost:8000,counter,python_gc_objects_uncollectable,,0.0000,0.0000,,,,,,,,,1,,,,Uncollectable objects found during GC
+localhost:8000,counter,python_gc_objects_uncollectable,,0.0000,0.0000,,,,,,,,,2,,,,Uncollectable objects found during GC
+localhost:8000,counter,vllm:estimated_flops_per_gpu,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Estimated number of floating point operations per GPU (for Model Flops Utilization calculations).
+localhost:8000,counter,vllm:estimated_read_bytes_per_gpu,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Estimated number of bytes read from memory per GPU (for Model Flops Utilization calculations).
+localhost:8000,counter,vllm:estimated_write_bytes_per_gpu,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Estimated number of bytes written to memory per GPU (for Model Flops Utilization calculations).
+localhost:8000,counter,vllm:external_prefix_cache_hits,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"External prefix cache hits from KV connector cross-instance cache sharing, in terms of number of cached tokens."
+localhost:8000,counter,vllm:external_prefix_cache_queries,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"External prefix cache queries from KV connector cross-instance cache sharing, in terms of number of queried tokens."
+localhost:8000,counter,vllm:generation_tokens,tokens,7685.0000,42.6702,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Number of generation tokens processed.
+localhost:8000,counter,vllm:mm_cache_hits,,178.0000,0.9883,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"Multi-modal cache hits, in terms of number of cached items."
+localhost:8000,counter,vllm:mm_cache_queries,,178.0000,0.9883,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"Multi-modal cache queries, in terms of number of queried items."
+localhost:8000,counter,vllm:num_preemptions,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Cumulative number of preemption from the engine.
+localhost:8000,counter,vllm:prefix_cache_hits,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"Prefix cache hits, in terms of number of cached tokens."
+localhost:8000,counter,vllm:prefix_cache_queries,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,"Prefix cache queries, in terms of number of queried tokens."
+localhost:8000,counter,vllm:prompt_tokens,tokens,724470.0000,4022.5524,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Number of prefill tokens processed.
+localhost:8000,counter,vllm:prompt_tokens_cached,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Number of cached prompt tokens (local + external).
+localhost:8000,counter,vllm:prompt_tokens_by_source,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,external_kv_transfer,,,,,Number of prompt tokens by source.
+localhost:8000,counter,vllm:prompt_tokens_by_source,,0.0000,0.0000,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,local_cache_hit,,,,,Number of prompt tokens by source.
+localhost:8000,counter,vllm:prompt_tokens_by_source,,724470.0000,4022.5524,,,,,0,,Qwen/Qwen3-VL-32B-Instruct-FP8,local_compute,,,,,Number of prompt tokens by source.
+localhost:8000,counter,vllm:request_success,requests,0.0000,0.0000,,,,,0,abort,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Count of successfully processed requests.
+localhost:8000,counter,vllm:request_success,requests,0.0000,0.0000,,,,,0,error,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Count of successfully processed requests.
+localhost:8000,counter,vllm:request_success,requests,60.0000,0.3331,,,,,0,length,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Count of successfully processed requests.
+localhost:8000,counter,vllm:request_success,requests,0.0000,0.0000,,,,,0,repetition,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Count of successfully processed requests.
+localhost:8000,counter,vllm:request_success,requests,0.0000,0.0000,,,,,0,stop,Qwen/Qwen3-VL-32B-Instruct-FP8,,,,,,Count of successfully processed requests.
+
+Endpoint,Type,Metric,Unit,count,count_rate,sum,sum_rate,avg,p1_estimate,p5_estimate,p10_estimate,p25_estimate,p50_estimate,p75_estimate,p90_estimate,p95_estimate,p99_estimate,engine,model_name,handler,method,Description,buckets
+localhost:8000,histogram,http_request_duration_highr_seconds,seconds,179,0.9939,10955.1393,60.8274,61.2019,7.0140,11.1460,15.5619,29.4258,59.5571,91.3014,110.5140,116.9182,122.0415,,,,,Latency with many buckets but no API specific labels. Made for more accurate percentile calculations.,0.01=0;0.025=0;0.05=0;0.075=0;0.1=0;0.25=0;0.5=0;0.75=0;1.0=0;1.5=0;2.0=2;2.5=2;3.0=2;3.5=2;4.0=2;4.5=2;5.0=2;7.5=2;10.0=7;30.0=46;60.0=90;+Inf=179
+localhost:8000,histogram,http_request_duration_seconds,seconds,179,0.9939,10955.1393,60.8274,61.2019,2.2040,7.0202,13.0404,31.1009,61.2019,91.3028,109.3634,115.3836,120.1998,,,/v1/chat/completions,POST,Latency with only few buckets by handler. Made to be only used if aggregation by handler is important.,0.1=0;0.5=0;1.0=0;+Inf=179
+localhost:8000,histogram,http_request_duration_seconds,seconds,0,,,,,,,,,,,,,,,,/v1/models,GET,Latency with only few buckets by handler. Made to be only used if aggregation by handler is important.,0.1=0;0.5=0;1.0=0;+Inf=0
+localhost:8000,histogram,vllm:e2e_request_latency_seconds,seconds,60,0.3331,4126.8354,22.9139,68.7806,12.2958,14.9850,22.4327,38.3855,71.1141,98.9208,112.8380,117.4771,120.7191,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of e2e request latency in seconds.,0.3=0;0.5=0;0.8=0;1.0=0;1.5=0;2.0=0;2.5=0;5.0=0;10.0=1;15.0=4;20.0=6;30.0=11;40.0=16;50.0=21;60.0=25;120.0=59;240.0=60;480.0=60;960.0=60;1920.0=60;7680.0=60;+Inf=60
+localhost:8000,histogram,vllm:inter_token_latency_seconds,seconds,7623,42.3260,674.7938,3.7467,0.0885,0.0307,0.0314,0.0322,0.0345,0.0385,0.0424,0.0444,0.0761,1.4440,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of inter-token latency in seconds.,0.01=0;0.025=0;0.05=7201;0.075=7202;0.1=7298;0.15=7298;0.2=7298;0.3=7298;0.4=7298;0.5=7298;0.75=7298;1.0=7346;2.5=7623;5.0=7623;7.5=7623;10.0=7623;20.0=7623;40.0=7623;80.0=7623;+Inf=7623
+localhost:8000,histogram,vllm:iteration_tokens_total,tokens,1565,8.6895,732155.0000,4065.2226,467.8307,2.9978,3.1633,3.3702,3.9910,5.0257,6.0603,6.6811,6.8881,11689.3650,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of number of tokens per engine_step.,1.0=3;8.0=1503;16.0=1503;32.0=1503;64.0=1503;128.0=1503;256.0=1503;512.0=1503;1024.0=1503;2048.0=1503;4096.0=1503;8192.0=1503;16384.0=1565;+Inf=1565
+localhost:8000,histogram,vllm:request_decode_time_seconds,seconds,60,0.3331,667.2938,3.7051,11.1216,7.6167,10.0000,10.0000,10.3390,10.9577,12.0797,12.7635,12.9914,13.1738,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time spent in DECODE phase for request.,0.3=0;0.5=0;0.8=0;1.0=0;1.5=0;2.0=0;2.5=0;5.0=1;10.0=1;15.0=60;20.0=60;30.0=60;40.0=60;50.0=60;60.0=60;120.0=60;240.0=60;480.0=60;960.0=60;1920.0=60;7680.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_generation_tokens,tokens,60,0.3331,7680.0000,42.6425,128.0000,100.0000,100.0000,100.0000,101.0604,125.5806,150.1639,164.9139,169.8306,173.7639,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Number of generation tokens processed.,1.0=0;2.0=0;5.0=0;10.0=0;20.0=0;50.0=0;100.0=0;200.0=60;500.0=60;1000.0=60;2000.0=60;5000.0=60;10000.0=60;20000.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_inference_time_seconds,seconds,60,0.3331,861.5538,4.7837,14.3592,11.4068,14.2422,14.2664,14.3393,14.4607,14.5821,14.6550,14.6792,15.0183,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time spent in RUNNING phase for request.,0.3=0;0.5=0;0.8=0;1.0=0;1.5=0;2.0=0;2.5=0;5.0=0;10.0=1;15.0=59;20.0=60;30.0=60;40.0=60;50.0=60;60.0=60;120.0=60;240.0=60;480.0=60;960.0=60;1920.0=60;7680.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_max_num_generation_tokens,tokens,60,0.3331,7680.0000,42.6425,128.0000,100.0000,100.0000,100.0000,101.0604,125.5806,150.1639,164.9139,169.8306,173.7639,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of maximum number of requested generation tokens.,1.0=0;2.0=0;5.0=0;10.0=0;20.0=0;50.0=0;100.0=0;200.0=60;500.0=60;1000.0=60;2000.0=60;5000.0=60;10000.0=60;20000.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_params_max_tokens,tokens,60,0.3331,7680.0000,42.6425,128.0000,100.0000,100.0000,100.0000,101.0604,125.5806,150.1639,164.9139,169.8306,173.7639,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of the max_tokens request parameter.,1.0=0;2.0=0;5.0=0;10.0=0;20.0=0;50.0=0;100.0=0;200.0=60;500.0=60;1000.0=60;2000.0=60;5000.0=60;10000.0=60;20000.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_params_n,,60,0.3331,60.0000,0.3331,1.0000,0.4182,0.4575,0.5067,0.6542,0.9000,1.0000,1.0000,1.0000,1.0000,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of the n request parameter.,1.0=60;2.0=60;5.0=60;10.0=60;20.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_prefill_kv_computed_tokens,tokens,60,0.3331,701107.0000,3892.8315,11685.1167,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of new KV tokens computed during prefill (excluding cached tokens).,1.0=0;2.0=0;5.0=0;10.0=0;20.0=0;50.0=0;100.0=0;200.0=0;500.0=0;1000.0=0;2000.0=0;5000.0=0;10000.0=0;20000.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_prefill_time_seconds,seconds,60,0.3331,194.2600,1.0786,3.2377,2.0271,2.0760,2.1216,2.2928,3.1883,4.0654,4.5916,4.7670,4.9074,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time spent in PREFILL phase for request.,0.3=0;0.5=0;0.8=0;1.0=0;1.5=0;2.0=1;2.5=24;5.0=60;10.0=60;15.0=60;20.0=60;30.0=60;40.0=60;50.0=60;60.0=60;120.0=60;240.0=60;480.0=60;960.0=60;1920.0=60;7680.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_prompt_tokens,tokens,60,0.3331,701107.0000,3892.8315,11685.1167,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,11685.1196,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Number of prefill tokens processed.,1.0=0;2.0=0;5.0=0;10.0=0;20.0=0;50.0=0;100.0=0;200.0=0;500.0=0;1000.0=0;2000.0=0;5000.0=0;10000.0=0;20000.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_queue_time_seconds,seconds,60,0.3331,3233.2252,17.9522,53.8871,0.0087,0.0951,7.0831,21.5927,57.0544,80.3976,101.7674,109.0987,114.9638,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time spent in WAITING phase for request.,0.3=4;0.5=4;0.8=4;1.0=4;1.5=6;2.0=6;2.5=6;5.0=6;10.0=10;15.0=11;20.0=14;30.0=18;40.0=21;50.0=26;60.0=31;120.0=60;240.0=60;480.0=60;960.0=60;1920.0=60;7680.0=60;+Inf=60
+localhost:8000,histogram,vllm:request_time_per_output_token_seconds,seconds,60,0.3331,5.2543,0.0292,0.0876,0.0586,0.0766,0.0780,0.0820,0.0887,0.0945,0.0980,0.0991,0.0999,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time_per_output_token_seconds per request.,0.01=0;0.025=0;0.05=1;0.075=1;0.1=60;0.15=60;0.2=60;0.3=60;0.4=60;0.5=60;0.75=60;1.0=60;2.5=60;5.0=60;7.5=60;10.0=60;20.0=60;40.0=60;80.0=60;+Inf=60
+localhost:8000,histogram,vllm:time_to_first_token_seconds,seconds,62,0.3442,3795.0964,21.0719,61.2112,2.4669,5.0610,11.9694,29.9953,64.0561,89.3389,109.4225,117.8584,124.6071,0,Qwen/Qwen3-VL-32B-Instruct-FP8,,,Histogram of time to first token in seconds.,0.001=0;0.005=0;0.01=0;0.02=0;0.04=0;0.06=0;0.08=0;0.1=0;0.25=0;0.5=0;0.75=0;1.0=0;2.5=1;5.0=3;7.5=5;10.0=5;20.0=11;40.0=20;80.0=40;160.0=62;640.0=62;2560.0=62;+Inf=62
+
+Endpoint,Metric,Key,Value,Description
+localhost:8000,python_info,implementation,CPython,Python platform information
+localhost:8000,python_info,major,3,Python platform information
+localhost:8000,python_info,minor,10,Python platform information
+localhost:8000,python_info,patchlevel,12,Python platform information
+localhost:8000,python_info,version,3.10.12,Python platform information
+localhost:8000,vllm:cache_config_info,_block_size_resolved,True,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,block_size,16,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,cache_dtype,auto,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,calculate_kv_scales,False,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,enable_prefix_caching,False,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,engine,0,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,gpu_memory_utilization,0.56,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,hash_block_size,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,is_attention_free,False,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,kv_cache_dtype_skip_layers,[],Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,kv_cache_memory_bytes,17179869184,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,kv_offloading_backend,native,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,kv_offloading_size,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,kv_sharing_fast_prefill,False,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,mamba_block_size,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,mamba_cache_dtype,auto,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,mamba_cache_mode,none,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,mamba_page_size_padded,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,mamba_ssm_cache_dtype,auto,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,num_cpu_blocks,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,num_gpu_blocks,4096,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,num_gpu_blocks_override,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,prefix_caching_hash_algo,sha256,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,sliding_window,None,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,user_specified_block_size,False,Information of the LLMEngine CacheConfig
+localhost:8000,vllm:cache_config_info,user_specified_mamba_block_size,False,Information of the LLMEngine CacheConfig
