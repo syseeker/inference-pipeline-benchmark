@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-80 solo baseline(s), 95 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+80 solo baseline(s), 96 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -199,10 +199,13 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | secondary-backend-llm-a | 6     | llm      | qwen2.5-7b               | sglang  |         4.0 |          3.9 |          ≈1.00× |   ≈1.03× |   ≈1.02× |    ≈1.02× |
 | secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.73× |       n/a |
 | secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.25× |   ▲3.72× |       n/a |
+| secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.70× |       n/a |
 | secondary-backend-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.88× |   ▼0.34× |    ▲1.83× |
 | secondary-backend-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.91× |   ▲1.93× |    ▲1.87× |
+| secondary-backend-llm-b | 6     | llm      | qwen2.5-72b              | vllm    |         2.0 |          2.0 |          ≈0.99× |   ▲1.90× |   ▲1.94× |    ▲1.87× |
 | secondary-backend-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.73× |
 | secondary-backend-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.80× |    ▲1.73× |
+| secondary-backend-llm-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.71× |
 | secondary-input-size-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲1.78× |   ▲2.21× |       n/a |
 | secondary-input-size-cv-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈1.00× |   ▲1.79× |   ▲2.21× |       n/a |
 | secondary-input-size-cv-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.01× |
@@ -252,7 +255,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | qwen2.5-14b | qwen2.5-72b, yolov8-l | ▲1.80× |
 | qwen2.5-14b | yolov8-l | ▼0.32× |
 | qwen2.5-32b | yolov8-l | ▼0.32× |
-| qwen2.5-72b | qwen2.5-14b, yolov8-l | ▼0.79× |
+| qwen2.5-72b | qwen2.5-14b, yolov8-l | ▼0.85× |
 | qwen2.5-72b | qwen2.5-7b | ▼0.79× |
 | qwen2.5-72b | yolov8-l | ▼0.31× |
 | qwen2.5-7b | gemma2-9b | ▲17.44× |

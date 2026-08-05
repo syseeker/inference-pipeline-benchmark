@@ -367,6 +367,21 @@ def build_server_cmd(
         if kv_gb is not None and r.kv_bytes_per_token:
             tokens = int(kv_gb * 1024 ** 3 / r.kv_bytes_per_token)
             cmd = _override_flag(cmd, "--max-total-tokens", str(tokens))
+            # --max-total-tokens alone is NOT enough: --mem-fraction-static
+            # still gates the overall allocation, and a fraction derived from
+            # this tenant's own budget is blind to what neighbours already
+            # hold. The 72B arm of secondary-backend-llm-b got 0.49 while it
+            # needed >=0.94 to see past a co-resident 14B and CV tenant, and
+            # died with "Not enough memory. Please try to increase
+            # --mem-fraction-static" even though the token count was correct.
+            #
+            # So once the token count is doing the real work, the fraction
+            # becomes a permissive CEILING rather than the control: actual
+            # usage is weights + the token pool, both bounded. Leaving it
+            # derived would keep a number that silently encodes the
+            # neighbours' footprint and the load order — the exact fragility
+            # that made vLLM's cap unusable for colocation.
+            cmd = _override_flag(cmd, "--mem-fraction-static", SGLANG_PERMISSIVE_MEM_FRACTION)
         return cmd
     if r.backend == "trtllm":
         trt_backend = r.trtllm_backend or "pytorch"
@@ -1195,6 +1210,15 @@ def plan_runs(cfg: dict[str, Any], names: list[str], *, solo_only: bool = False)
 
 
 # ─────────────────────────── run directory layout ──────────────────────────
+
+# SGLang's --mem-fraction-static is a share of the WHOLE device, so it cannot
+# express "my slice" when tenants are colocated. When --max-total-tokens is set
+# the cache is already bounded absolutely, so this is deliberately permissive:
+# high enough that the check passes with neighbours resident, while real usage
+# stays weights + the token pool. Not 1.0 — the driver and CUDA context need
+# room outside the fraction.
+SGLANG_PERMISSIVE_MEM_FRACTION = "0.95"
+
 
 SOLO_DIR = "_baselines"
 

@@ -1531,6 +1531,7 @@ colocations:
   # model.py". The question this dimension asks is what the Triton backend
   # costs under contention, which tensorrt-vs-onnx answers; a Python-backend
   # YOLO would be slower for reasons that have nothing to do with a neighbour.
+
   secondary-backend-cv-a:
     phase: 6
     extends: mix-llm-cv
