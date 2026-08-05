@@ -1,5 +1,23 @@
 # Config changes for the next run
 
+## What these fixes are worth
+
+The 2026-08-04 run had **27 failures of 147**. The fixes below do not all
+recover data — two of them simply stop a run that was never going to produce
+any:
+
+| | Runs | |
+|---|---|---|
+| **Recovered as measurements** | **17** | memory-pressure (12), SGLang venv (4), `cross-vlm-prefill-vs-llm` (1) |
+| Removed from the matrix | 10 | gemma-4 pin-out (8), invalid `python` rung (2) |
+| Total failures addressed | 27 | |
+
+Pinning out gemma-4 makes `same-vlm` *skip* rather than fail; it produces no
+VLM-pair measurement either way, because `qwen2.5-vl-7b` is the only
+video-capable VLM in the roster that serves. That colocation stays unmeasured
+until a second one is added — it is a **gap in the study**, not a fixed bug.
+
+
 Derived from the 2026-08-04 run on 2× RTX PRO 6000. Nothing here has been
 applied — the run in flight is deliberately left untouched. Rationale for each
 item is in [contention-phases.md](../contention-phases.md#tuning-for-the-next-run).
@@ -49,7 +67,7 @@ qwen2.5-72b:
 Also rename `weights_gb` or note the unit — the values are GB, vLLM reports GiB,
 and comparing them directly makes every estimate look ~7% high.
 
-## 3. Add `kv_budget_gb` where KV should be constant (recovers 2+ runs)
+## 3. Add `kv_budget_gb` where KV should be constant (recovers 1 run, prevents more)
 
 Both are two-vLLM colocations; `cross-vlm-prefill-vs-llm` already failed with
 `No available memory for the cache blocks`.
@@ -59,7 +77,7 @@ cross-vlm-prefill-vs-llm:   # add kv_budget_gb to both tenants
 place-vlm-prefill-split:    # same; survived phase 5 only because tenants were on separate cards
 ```
 
-## 4. Pin out `gemma-4-31b-it-fp8` (recovers 8 runs)
+## 4. Pin out `gemma-4-31b-it-fp8` (removes 8 failures, recovers no data)
 
 `transformers` 4.57.6 has no `gemma4` architecture.
 
@@ -72,7 +90,7 @@ gemma-4-31b-it-fp8:
 Takes `same-vlm` with it — that colocation has no second VLM until either
 gemma-4 loads or another video-capable model is added.
 
-## 4b. `.venv-sglang` is broken — the whole SGLang arm produces no data (4 runs)
+## 4b. `.venv-sglang` is broken — the whole SGLang arm produces no data (recovers 4 runs)
 
 `secondary-backend-llm-a/b` sweep `backend: [vllm, sglang]`. Every SGLang rung
 fails before the server starts, because `import sglang` itself raises:
@@ -98,7 +116,7 @@ Fix in `.venv-sglang` (either, verify with `python -c "import sglang"`):
 Do this **before** the next run — the failure is at import, so every SGLang
 tenant in the matrix is affected, not just phase 6.
 
-## 4c. `triton_backend: python` is not valid for `yolov8-l` (2 runs)
+## 4c. `triton_backend: python` is not valid for `yolov8-l` (removes 2 failures, recovers no data)
 
 ```yaml
 secondary-backend-cv-a:   # extends mix-llm-cv
