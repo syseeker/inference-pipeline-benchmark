@@ -1319,6 +1319,90 @@ colocations:
       - {name: anchor,    kv_budget_gb: 19.1}
       - {name: neighbour, kv_budget_gb: 3.34}
 
+  # ── The deployment question: what does adding a second model cost? ──
+  #
+  # cross-memory-pressure above pins each tenant's cache to the SAME value in
+  # its solo and contention arms, so the neighbour never shrinks anyone's
+  # cache. That isolates compute contention at a chosen cache size — a
+  # mechanism curve — but it is not what an operator experiences.
+  #
+  # In a real deployment nobody picks the cache. You have a card running one
+  # model with everything to itself; you add a second; each now gets a share
+  # of what is left after both sets of weights. The cache shrinks BECAUSE of
+  # the neighbour, and the cost you feel is compute contention AND cache loss
+  # together.
+  #
+  # So the baseline here is the model ALONE WITH THE WHOLE CARD, and the
+  # contention arms divide the leftover. Measured on this card:
+  #   weights 38.77 (72B AWQ) + 14.25 (7B) + 4 overhead = 57.0 GiB
+  #   89.4 GiB usable - 57.0 = 32.4 leftover; we use 28.0 for headroom (95%).
+  #
+  # The swept variable is the SPLIT, because that is the operator's actual
+  # knob: given the leftover, how much goes to each tenant? s85 is the split
+  # that holds the same number of sequences for both (a 72B token costs 320
+  # KiB against the 7B's 56), which is the natural "fair" point and not at all
+  # where an equal-gigabyte split lands.
+  cross-deploy-alone-72b:
+    phase: 4
+    duration_s: 300
+    isolation: mps
+    solo_baselines: auto
+    tenants:
+      - name: llm
+        backend: vllm
+        model: qwen2.5-72b
+        workload: llm_long
+        kv_budget_gb: 46.0          # the whole card, less weights and overhead
+        load: {pattern: poisson, rps: 2}
+
+  cross-deploy-alone-7b:
+    phase: 4
+    duration_s: 300
+    isolation: mps
+    solo_baselines: auto
+    tenants:
+      - name: llm
+        backend: vllm
+        model: qwen2.5-7b
+        workload: llm_long
+        kv_budget_gb: 70.0
+        load: {pattern: poisson, rps: 4}
+
+  cross-deploy-split-s50:
+    phase: 4
+    duration_s: 300
+    isolation: mps
+    solo_baselines: auto
+    repetitions: 3
+    tenants:
+      - name: anchor
+        backend: vllm
+        model: qwen2.5-72b
+        workload: llm_long
+        kv_budget_gb: 14.0          # half the 28 GiB leftover
+        load: {pattern: poisson, rps: 2}
+      - name: neighbour
+        backend: vllm
+        model: qwen2.5-7b
+        workload: llm_long
+        kv_budget_gb: 14.0
+        load: {pattern: poisson, rps: 4}
+
+  cross-deploy-split-s75:
+    phase: 4
+    extends: cross-deploy-split-s50
+    tenants:
+      - {name: anchor,    kv_budget_gb: 21.0}
+      - {name: neighbour, kv_budget_gb: 7.0}
+
+  # Equal SEQUENCES held, not equal gigabytes — the natural fair point.
+  cross-deploy-split-s85:
+    phase: 4
+    extends: cross-deploy-split-s50
+    tenants:
+      - {name: anchor,    kv_budget_gb: 23.8}
+      - {name: neighbour, kv_budget_gb: 4.2}
+
   # ── Phase 5 — GPU scaling: does a second card remove contention? ───
   # The question is "does adding GPUs eliminate contention or
   # just redistribute it?", and the honest answer depends entirely on where

@@ -1,0 +1,17 @@
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299] 
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299]        █     █     █▄   ▄█
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.20.1
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299]   █▄█▀ █     █     █     █  model   Qwen/Qwen2.5-72B-Instruct-AWQ
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:299] 
+(APIServer pid=2612549) INFO 08-05 10:03:31 [utils.py:233] non-default args: {'model_tag': 'Qwen/Qwen2.5-72B-Instruct-AWQ', 'model': 'Qwen/Qwen2.5-72B-Instruct-AWQ', 'max_model_len': 8192, 'gpu_memory_utilization': 0.53, 'kv_cache_memory_bytes': 7838315315, 'max_num_seqs': 32}
+(APIServer pid=2612549) INFO 08-05 10:03:31 [model.py:555] Resolved architecture: Qwen2ForCausalLM
+(APIServer pid=2612549) INFO 08-05 10:03:31 [model.py:1680] Using max model len 8192
+(APIServer pid=2612549) INFO 08-05 10:03:32 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+(APIServer pid=2612549) WARNING 08-05 10:03:32 [nixl_utils.py:34] NIXL is not available
+(APIServer pid=2612549) WARNING 08-05 10:03:32 [nixl_utils.py:44] NIXL agent config is not available
+(APIServer pid=2612549) INFO 08-05 10:03:33 [awq_marlin.py:252] The model is convertible to awq_marlin during runtime. Using awq_marlin kernel.
+(APIServer pid=2612549) INFO 08-05 10:03:33 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(APIServer pid=2612549) Parse safetensors files:   0%|          | 0/11 [00:00<?, ?it/s]Parse safetensors files:   9%|▉         | 1/11 [00:00<00:08,  1.16it/s]Parse safetensors files: 100%|██████████| 11/11 [00:00<00:00, 12.48it/s]
+(APIServer pid=2612549) INFO 08-05 10:03:34 [vllm.py:840] Asynchronous scheduling is enabled.
+(APIServer pid=2612549) INFO 08-05 10:03:34 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
