@@ -726,7 +726,7 @@ def test_every_memory_pressure_rung_can_load_its_weights(cfg):
 
 SECONDARY_DIMENSIONS = [
     ("secondary-backend-llm", 2),
-    ("secondary-backend-cv", 3),
+    ("secondary-backend-cv", 2),   # `python` dropped: no yolov8-l model.py
     ("secondary-output-length", 2),
     ("secondary-input-size-cv", 2),
     ("secondary-input-size-llm", 2),

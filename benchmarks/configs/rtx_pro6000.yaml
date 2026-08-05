@@ -1097,18 +1097,23 @@ colocations:
     duration_s: 180
     isolation: mps
     solo_baselines: auto
+    # Two vLLM tenants on one card, so the caps cannot be load-bearing: a cap
+    # is a total-device target and the second tenant to start subtracts the
+    # first's resident memory from its own allowance. With explicit caps of
+    # 0.45/0.35 the llm tenant derived a negative cache and never became ready.
+    # KV is held constant here (it is not what this colocation varies), so state
+    # the budget once and let each cap absorb only its own weights.
+    kv_budget_gb: 20.0
     tenants:
       - name: vlm
         backend: vllm
         model: qwen2.5-vl-7b
         workload: vlm_video_long
-        gpu_memory_utilization: 0.45
         load: {pattern: poisson, rps: 1}
       - name: llm
         backend: vllm
         model: gemma2-9b
         workload: llm_short
-        gpu_memory_utilization: 0.35
         load: {pattern: poisson, rps: 4}
 
   # Same architecture, four sizes — is contention vulnerability a function
@@ -1447,15 +1452,20 @@ colocations:
   # neighbour is starving the card? TensorRT buys its speed partly by
   # holding more workspace — which is cheap on baseline A and may not be
   # on baseline B.
+  # `python` is NOT a rung here: only kosmos-2.5 has a hand-authored model.py,
+  # and yolov8-l fails at staging with "is a python-backend model but has no
+  # model.py". The question this dimension asks is what the Triton backend
+  # costs under contention, which tensorrt-vs-onnx answers; a Python-backend
+  # YOLO would be slower for reasons that have nothing to do with a neighbour.
   secondary-backend-cv-a:
     phase: 6
     extends: mix-llm-cv
-    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx]}
 
   secondary-backend-cv-b:
     phase: 6
     extends: mix-memory-bound
-    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+    vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx]}
 
   # Long outputs hold KV entries alive for longer. Under baseline A that is
   # free; under B it is the difference between batching and preempting.
