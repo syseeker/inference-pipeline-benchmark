@@ -294,7 +294,7 @@ models:
     quantization: "awq"
     role: "contention-memory-pressure-anchor"
     notes: "AWQ ~45 GB. BF16 (145 GB) needs >=2 GPUs. Anchors the VRAM-pressure curve."
-    weights_gb: 45.0            # from the note above (AWQ ≈ 0.3× BF16)
+    weights_gb: 41.6            # from the note above (AWQ ≈ 0.3× BF16)
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
@@ -1220,13 +1220,13 @@ colocations:
         backend: vllm
         model: qwen2.5-72b            # AWQ, 45.0 GB weights — fixed all curve
         workload: llm_short
-        gpu_memory_utilization: 0.51  # 49.0 GB → 45.0 weights + 2 overhead + 2.0 KV
+        kv_budget_gb: 2.0             # absolute; cap derived. Composes across tenants.
         load: {pattern: poisson, rps: 2}
       - name: neighbour
         backend: vllm
         model: qwen2.5-7b             # 15.2 GB weights — fixed all curve
         workload: llm_short
-        gpu_memory_utilization: 0.19  # 18.2 GB → 15.2 weights + 2 overhead + 1.0 KV
+        kv_budget_gb: 1.0             # absolute; cap derived. Composes across tenants.
         load: {pattern: poisson, rps: 4}
 
   cross-memory-pressure-kv13:
@@ -1234,18 +1234,18 @@ colocations:
     extends: cross-memory-pressure-kv03
     tenants:
       - name: anchor
-        gpu_memory_utilization: 0.58  # 55.7 GB → 45.0 + 2 overhead + 8.7 KV
+        kv_budget_gb: 8.7
       - name: neighbour
-        gpu_memory_utilization: 0.22  # 21.1 GB → 15.2 + 2 overhead + 3.9 KV
+        kv_budget_gb: 3.9
 
   cross-memory-pressure-kv22:
     phase: 4
     extends: cross-memory-pressure-kv03
     tenants:
       - name: anchor
-        gpu_memory_utilization: 0.64  # 61.4 GB → 45.0 + 2 overhead + 14.4 KV
+        kv_budget_gb: 14.4
       - name: neighbour
-        gpu_memory_utilization: 0.26  # 25.0 GB → 15.2 + 2 overhead + 7.8 KV
+        kv_budget_gb: 7.8
 
   # Top of the curve: 93 of 96 GB committed. KV is ample here — what is
   # under test at this rung is the allocator, not the cache.
@@ -1254,9 +1254,9 @@ colocations:
     extends: cross-memory-pressure-kv03
     tenants:
       - name: anchor
-        gpu_memory_utilization: 0.69  # 66.2 GB → 45.0 + 2 overhead + 19.2 KV
+        kv_budget_gb: 19.2
       - name: neighbour
-        gpu_memory_utilization: 0.28  # 26.9 GB → 15.2 + 2 overhead + 9.7 KV
+        kv_budget_gb: 9.7
 
   # ── Phase 5 — GPU scaling: does a second card remove contention? ───
   # The question is "does adding GPUs eliminate contention or

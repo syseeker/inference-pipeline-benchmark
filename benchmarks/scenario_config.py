@@ -289,6 +289,13 @@ ALL_TENANTS = "*"
 # model and the size ladder measures memory allocation instead of
 # contention. So the budget is fixed once per colocation and each tenant's
 # cap absorbs only its own weights; the cap varies, the KV cache does not.
+#
+# A tenant MAY override it with its own `kv_budget_gb`, for the one case the
+# rule above does not cover: a colocation whose swept variable is the KV
+# split itself. `cross-memory-pressure-*` moves total KV from 3 to 29 GB at a
+# fixed ~2:1 anchor:neighbour ratio, which a single shared value cannot
+# express. Overriding is the exception; inheriting is the default, and
+# anything comparing across models should keep inheriting.
 DEFAULT_KV_BUDGET_GB = 20.0
 
 # CUDA context, activation buffers and allocator fragmentation live inside
@@ -563,6 +570,16 @@ def _resolve_tenant(
     kv_used: float | None = None
     weights_gb = (models.get(r.model_id, {}) or {}).get("weights_gb")
     vram_gb = cfg.get("vram_gb")
+    # A tenant may override the colocation budget. The colocation-level
+    # setting stays the default precisely because it holds KV constant across
+    # a comparison set (see "VRAM cap sizing" above) — but a colocation whose
+    # variable IS the KV split needs to state each tenant's share, and
+    # cross-memory-pressure-* sweeps exactly that at a fixed ~2:1 ratio.
+    # Without this, both tenants silently take the inherited default and the
+    # rung measures nothing it claims to.
+    tenant_kv = tspec.get("kv_budget_gb")
+    if tenant_kv is not None:
+        kv_budget_gb = float(tenant_kv)
     if (
         cap is None and kv_budget_gb is not None and transport != "triton"
         and weights_gb is not None and vram_gb

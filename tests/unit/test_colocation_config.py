@@ -125,8 +125,8 @@ def test_extends_merges_tenants_by_name_not_by_position(cfg):
     positional merging would silently drop the parent's settings.
 
     cross-memory-pressure-kv13 is the sharpest case in the config: it extends
-    -kv03 and overrides nothing but the two caps, so every model, workload and
-    rate has to survive the merge untouched. That is also the invariant the
+    -kv03 and overrides nothing but the two KV budgets, so every model, workload
+    and rate has to survive the merge untouched. That is also the invariant the
     whole curve rests on — if a model changed between rungs, the curve would
     be measuring the model rather than the KV cache.
     """
@@ -135,10 +135,10 @@ def test_extends_merges_tenants_by_name_not_by_position(cfg):
     anchor = next(t for t in coloc.tenants if t.name == "anchor")
     neighbour = next(t for t in coloc.tenants if t.name == "neighbour")
 
-    assert anchor.gpu_memory_utilization == 0.58, "child override applied"
+    assert anchor.kv_budget_gb == 8.7, "child override applied"
     assert anchor.round.model_id == "qwen2.5-72b", "parent model inherited"
     assert anchor.load.rps == 2.0, "parent load inherited"
-    assert neighbour.gpu_memory_utilization == 0.22, "child override applied"
+    assert neighbour.kv_budget_gb == 3.9, "child override applied"
     assert neighbour.round.model_id == "qwen2.5-7b", "parent model inherited"
     assert neighbour.workload == "llm_short", "parent workload inherited"
 
@@ -379,8 +379,9 @@ def test_output_tokens_come_from_the_workload(cfg):
 
 
 def _llm(cfg, *, kv_budget_gb=None, **extra):
-    # kv_budget_gb is colocation-level, not a tenant field — it arrives as an
-    # argument, which is exactly how iter_colocation passes it down.
+    # kv_budget_gb is colocation-level by default — it arrives as an argument,
+    # which is exactly how iter_colocation passes it down. A tenant may also
+    # carry its own; see test_tenant_kv_budget_overrides_the_colocation_budget.
     return _resolve_tenant(
         cfg, {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b", **extra},
         cfg["workloads"], kv_budget_gb=kv_budget_gb,
@@ -652,7 +653,12 @@ def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
         assert len(c.tenants) == 2
         reserved.append(sum(t.gpu_memory_utilization for t in c.tenants))
     assert reserved == sorted(reserved), reserved
-    assert reserved[-1] > 0.95, "the top rung has to actually approach the ceiling"
+    # 0.93, not the 0.97 this once asserted. The rungs are named for their KV
+    # total (the swept variable) and that is held fixed; correcting
+    # qwen2.5-72b's weights_gb from 45.0 to the measured 41.6 freed 3.4 GB, so
+    # the same KV now reserves less of the card. Reaching 0.97 would need ~32.3
+    # GB of KV, i.e. renaming the top rung — see docs/next-run/config-changes.md.
+    assert reserved[-1] > 0.92, "the top rung has to actually approach the ceiling"
     assert reserved[-1] <= 1.0, "and must still be loadable"
 
 
@@ -671,10 +677,13 @@ def test_memory_pressure_moves_the_kv_cache_and_nothing_else(cfg):
     for name in MEMORY_PRESSURE_CURVE:
         c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
         t = next(t for t in c.tenants if t.name == "neighbour")
-        weights = cfg["models"][t.round.model_id]["weights_gb"]
-        kv.append(round(t.gpu_memory_utilization * cfg["vram_gb"] - weights, 1))
+        kv.append(t.kv_budget_gb)
         models.append(tuple(sorted(x.round.model_id for x in c.tenants)))
-        assert t.kv_budget_gb is None, "explicit cap, not derived"
+        assert t.kv_budget_gb is not None, (
+            "KV must be stated absolutely: a cap is a total-device target, so a "
+            "colocated tenant subtracts its neighbour's memory from its own "
+            "allowance and derives a negative cache"
+        )
     assert kv == sorted(kv), f"KV must move monotonically along the curve: {kv}"
     assert len(set(models)) == 1, (
         f"the models must be identical at every rung, else a throughput drop "
@@ -689,10 +698,7 @@ def test_memory_pressure_holds_the_kv_split_between_tenants(cfg):
     ratios = []
     for name in MEMORY_PRESSURE_CURVE:
         c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
-        kv = {}
-        for t in c.tenants:
-            weights = cfg["models"][t.round.model_id]["weights_gb"]
-            kv[t.name] = t.gpu_memory_utilization * cfg["vram_gb"] - weights - 2.0
+        kv = {t.name: t.kv_budget_gb for t in c.tenants}
         ratios.append(kv["anchor"] / kv["neighbour"])
     # 2 dp caps cannot hit an exact ratio; hold it to a band rather than a value.
     assert max(ratios) - min(ratios) < 0.5, f"KV split drifts across rungs: {ratios}"
@@ -987,3 +993,51 @@ def test_triton_tenants_are_left_alone():
     win = next(c for c in iter_colocation(cfg, "mix-full") if not c.is_solo)
     triton = [t.round.port for t in win.tenants if t.round.transport == "triton"]
     assert triton == [8100, 8100]
+
+
+# --------------------------------------------------------------------------- #
+# Per-tenant KV budget — cross-memory-pressure-*
+# --------------------------------------------------------------------------- #
+
+
+def test_tenant_level_kv_budget_wins(cfg):
+    """The colocation value holds KV constant across a comparison set, which is
+    right everywhere except a colocation whose swept variable IS the split."""
+    inherited = _llm(cfg, kv_budget_gb=20.0)
+    overridden = _resolve_tenant(
+        cfg,
+        {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b", "kv_budget_gb": 2.0},
+        cfg["workloads"], kv_budget_gb=20.0,
+    )
+    assert inherited.kv_budget_gb == 20.0
+    assert overridden.kv_budget_gb == 2.0, "tenant value must beat the colocation value"
+    assert overridden.gpu_memory_utilization < inherited.gpu_memory_utilization, (
+        "a smaller KV budget must derive a smaller cap"
+    )
+
+
+@pytest.mark.parametrize("name,total,anchor,neighbour", [
+    ("cross-memory-pressure-kv03", 3.0, 2.0, 1.0),
+    ("cross-memory-pressure-kv13", 12.6, 8.7, 3.9),
+    ("cross-memory-pressure-kv22", 22.2, 14.4, 7.8),
+    ("cross-memory-pressure-kv29", 28.9, 19.2, 9.7),
+])
+def test_memory_pressure_rungs_provision_the_kv_they_are_named_for(
+    cfg, name, total, anchor, neighbour,
+):
+    """The suffix is total KV in GB — the swept variable. A rung that provisions
+    something else is measuring a curve it does not describe.
+
+    These previously used gpu_memory_utilization, which is a TOTAL-DEVICE
+    target: the second tenant subtracted the first tenant's resident memory
+    from its own allowance and computed a negative KV cache, so all 12
+    contention runs died with "No available memory for the cache blocks".
+    """
+    coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+    by = {t.name: t for t in coloc.tenants}
+    assert by["anchor"].kv_budget_gb == pytest.approx(anchor)
+    assert by["neighbour"].kv_budget_gb == pytest.approx(neighbour)
+    assert sum(t.kv_budget_gb for t in coloc.tenants) == pytest.approx(total)
+    assert sum(t.gpu_memory_utilization for t in coloc.tenants) < 1.0, (
+        "both tenants must still fit on one card"
+    )
