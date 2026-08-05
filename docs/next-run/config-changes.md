@@ -187,6 +187,56 @@ Do not simply raise the budget and keep the `kv03` name: the suffix is the
 swept variable, and a rung named for 3 GB that provisions 3.9 is the same class
 of error as the caps that provisioned 6.69.
 
+## 1c. The memory-pressure curve is flat because the cache is never used
+
+With the rungs finally provisioning what they claim, the curve is flat to three
+decimal places:
+
+| Rung | Total KV | anchor achieved | neighbour achieved |
+|---|---|---|---|
+| `kv13` | 12.6 GB | 1.98 / 2.0 ±0.000 | 3.91 / 4.0 ±0.000 |
+| `kv22` | 22.2 GB | 1.98 / 2.0 ±0.001 | 3.91 / 4.0 ±0.000 |
+| `kv29` | 28.9 GB | 1.98 / 2.0 ±0.001 | 3.91 / 4.0 ±0.000 |
+
+vLLM says why, in its own log during the run:
+
+```
+GPU KV cache usage: 0.4%
+GPU KV cache usage: 0.7%
+```
+
+**The cache is 99.3% empty at every rung.** At 2 and 4 req/s with `llm_short`
+(~29-token prompts, 32-token outputs) only a couple of short sequences are ever
+live — roughly 140 tokens against the anchor's ~27,850-token cache. Tripling a
+cache that is 0.5% used cannot change anything, so the sweep varies a quantity
+that is never the binding constraint.
+
+This is not a consequence of the `kv_budget_gb` conversion. The old cap-based
+config would have produced the same flat curve; it simply never got far enough
+to show one.
+
+**To make KV the constraint, the live token count has to approach the cache.**
+Filling ~80% of the anchor's 12.6 GB rung needs ~22,000 live tokens against
+today's ~140 — about 160x. Rates alone will not get there; the workload has to
+hold tokens alive for longer:
+
+```yaml
+cross-memory-pressure-kv13:      # and each sibling rung
+  tenants:
+    - name: anchor
+      workload: llm_long         # 512 output tokens, not 32
+      load: {pattern: poisson, rps: 8}
+    - name: neighbour
+      workload: llm_long
+      load: {pattern: poisson, rps: 16}
+```
+
+Verify against `GPU KV cache usage` in the server log before trusting any
+resulting curve: if it is still in single-digit percentages, the rungs are
+still measuring nothing. The eviction cliff appears when usage approaches 100%
+and vLLM starts preempting — that is the event this family exists to find, and
+nothing in the current configuration can reach it.
+
 ## 5. Rates: the configured load is far below capacity
 
 | Colocation | Current sweep | Top rung reaches | Suggested |
