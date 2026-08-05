@@ -124,23 +124,23 @@ def test_extends_merges_tenants_by_name_not_by_position(cfg):
     """A child overriding one field of one tenant must inherit the rest —
     positional merging would silently drop the parent's settings.
 
-    cross-memory-pressure-kv13 is the sharpest case in the config: it extends
-    -kv03 and overrides nothing but the two KV budgets, so every model, workload
+    cross-memory-pressure-p130 is the sharpest case in the config: it extends
+    -p25 and overrides nothing but the two KV budgets, so every model, workload
     and rate has to survive the merge untouched. That is also the invariant the
     whole curve rests on — if a model changed between rungs, the curve would
     be measuring the model rather than the KV cache.
     """
-    coloc = next(r for r in _coloc_runs(cfg, "cross-memory-pressure-kv13")
+    coloc = next(r for r in _coloc_runs(cfg, "cross-memory-pressure-p130")
                  if not r.is_solo)
     anchor = next(t for t in coloc.tenants if t.name == "anchor")
     neighbour = next(t for t in coloc.tenants if t.name == "neighbour")
 
-    assert anchor.kv_budget_gb == 8.7, "child override applied"
+    assert anchor.kv_budget_gb == 19.1, "child override applied"
     assert anchor.round.model_id == "qwen2.5-72b", "parent model inherited"
     assert anchor.load.rps == 2.0, "parent load inherited"
-    assert neighbour.kv_budget_gb == 3.9, "child override applied"
+    assert neighbour.kv_budget_gb == 3.34, "child override applied"
     assert neighbour.round.model_id == "qwen2.5-7b", "parent model inherited"
-    assert neighbour.workload == "llm_short", "parent workload inherited"
+    assert neighbour.workload == "llm_long", "parent workload inherited"
 
 
 # ── tenant naming ────────────────────────────────────────────────────────────
@@ -233,10 +233,10 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
     """Near-OOM behaviour is bimodal — the model either fits or thrashes, and
     the mean of those two states describes neither. The spread across repeats
     is the finding, so the runs have to actually exist."""
-    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-kv29") if not r.is_solo]
+    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-p130") if not r.is_solo]
     assert len(colocs) == 3
     assert [c.repetition for c in colocs] == [1, 2, 3]
-    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-kv29"}, (
+    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-p130"}, (
         "repeats are samples of one experiment, not three experiments"
     )
 
@@ -244,7 +244,7 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
 def test_repetitions_do_not_multiply_the_baselines(cfg):
     """Baselines dedup by `_solo_key` here and are cached again per session by
     the orchestrator, so a repeated baseline would be dropped anyway."""
-    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-kv29") if r.is_solo]
+    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-p130") if r.is_solo]
     assert len(solos) == 2, "one per tenant, not one per tenant per repeat"
 
 
@@ -640,12 +640,20 @@ def test_cross_sweeps_move_one_tenant_and_hold_the_subject(cfg, name):
     }) == 4
 
 
+# pNN = percentage of the KV needed to hold --max-num-seqs=32 concurrent
+# llm_long requests. Renamed from the old kv<GB> scheme because a gigabyte
+# buys 5.7x more tokens on the 7B than on the 72B, so a shared byte figure
+# pressured the two tenants completely differently.
 MEMORY_PRESSURE_CURVE = [
-    "cross-memory-pressure-kv03",
-    "cross-memory-pressure-kv13",
-    "cross-memory-pressure-kv22",
-    "cross-memory-pressure-kv29",
+    "cross-memory-pressure-p25",
+    "cross-memory-pressure-p50",
+    "cross-memory-pressure-p75",
+    "cross-memory-pressure-p100",
+    "cross-memory-pressure-p130",
 ]
+# GiB to hold 32 concurrent llm_long requests (1,501 tokens each), measured:
+# 72B at 320 KiB/token, 7B at 56 KiB/token.
+SATURATION_GIB = {"anchor": 14.66, "neighbour": 2.57}
 
 
 def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
@@ -657,12 +665,11 @@ def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
         assert len(c.tenants) == 2
         reserved.append(sum(t.gpu_memory_utilization for t in c.tenants))
     assert reserved == sorted(reserved), reserved
-    # 0.93, not the 0.97 this once asserted. The rungs are named for their KV
-    # total (the swept variable) and that is held fixed; correcting
-    # qwen2.5-72b's weights_gb from 45.0 to the measured 41.6 freed 3.4 GB, so
-    # the same KV now reserves less of the card. Reaching 0.97 would need ~32.3
-    # GB of KV, i.e. renaming the top rung — see docs/next-run/config-changes.md.
-    assert reserved[-1] > 0.92, "the top rung has to actually approach the ceiling"
+    # The curve is now sized to the TENANTS' saturation point (the KV needed to
+    # hold --max-num-seqs=32 llm_long requests), not to the card's ceiling, so
+    # the top rung reserves 0.86 rather than approaching 1.0. Filling the card
+    # was never the question — where the cache stops holding the working set is.
+    assert reserved[-1] > 0.80, "the top rung still has to commit most of the card"
     assert reserved[-1] <= 1.0, "and must still be loadable"
 
 
@@ -672,10 +679,10 @@ def test_memory_pressure_moves_the_kv_cache_and_nothing_else(cfg):
 
     Note the direction. The customer's ladder swapped in a bigger neighbour at
     each rung, so KV *shrank* as reservation grew. Here the models are fixed
-    and only the caps move, so KV *grows* along the curve: kv03 is the starved
-    end (where the eviction cliff should be) and kv29 is the committed end
-    (where the allocator should misbehave). Asserting the old direction would
-    be asserting the old confound.
+    and only the budgets move, so KV *grows* along the curve: p25 is the
+    starved end (where the eviction cliff should be) and p130 is the control
+    with 30% headroom. Asserting the old direction would be asserting the old
+    confound.
     """
     kv, models = [], []
     for name in MEMORY_PRESSURE_CURVE:
@@ -1020,28 +1027,378 @@ def test_tenant_level_kv_budget_wins(cfg):
     )
 
 
-@pytest.mark.parametrize("name,total,anchor,neighbour", [
-    ("cross-memory-pressure-kv03", 3.0, 2.0, 1.0),
-    ("cross-memory-pressure-kv13", 12.6, 8.7, 3.9),
-    ("cross-memory-pressure-kv22", 22.2, 14.4, 7.8),
-    ("cross-memory-pressure-kv29", 28.9, 19.2, 9.7),
+@pytest.mark.parametrize("name,frac", [
+    ("cross-memory-pressure-p25", 0.25),
+    ("cross-memory-pressure-p50", 0.50),
+    ("cross-memory-pressure-p75", 0.75),
+    ("cross-memory-pressure-p100", 1.00),
+    ("cross-memory-pressure-p130", 1.30),
 ])
-def test_memory_pressure_rungs_provision_the_kv_they_are_named_for(
-    cfg, name, total, anchor, neighbour,
-):
-    """The suffix is total KV in GB — the swept variable. A rung that provisions
-    something else is measuring a curve it does not describe.
+def test_memory_pressure_rungs_provision_the_fraction_they_are_named_for(cfg, name, frac):
+    """The suffix is the percentage of the KV needed to hold 32 concurrent
+    llm_long requests. A rung that provisions something else is measuring a
+    curve it does not describe.
 
-    These previously used gpu_memory_utilization, which is a TOTAL-DEVICE
-    target: the second tenant subtracted the first tenant's resident memory
-    from its own allowance and computed a negative KV cache, so all 12
-    contention runs died with "No available memory for the cache blocks".
+    The old kv<GB> scheme is what this replaces: it used gpu_memory_utilization,
+    a TOTAL-DEVICE target, so a colocated tenant subtracted its neighbour's
+    resident memory from its own allowance and derived a negative cache — all
+    12 contention runs died with "No available memory for the cache blocks".
+    Then, once converted to kv_budget_gb, it turned out a shared byte figure
+    put the 72B at 19 of 32 sequences while the 7B sat at 49, i.e. one tenant
+    evicting hard and the other not at all.
     """
     coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
-    by = {t.name: t for t in coloc.tenants}
-    assert by["anchor"].kv_budget_gb == pytest.approx(anchor)
-    assert by["neighbour"].kv_budget_gb == pytest.approx(neighbour)
-    assert sum(t.kv_budget_gb for t in coloc.tenants) == pytest.approx(total)
-    assert sum(t.gpu_memory_utilization for t in coloc.tenants) < 1.0, (
-        "both tenants must still fit on one card"
+    for t in coloc.tenants:
+        want = SATURATION_GIB[t.name] * frac
+        assert t.kv_budget_gb == pytest.approx(want, abs=0.06), (
+            f"{name}/{t.name}: {t.kv_budget_gb} GiB is not {frac:.0%} of "
+            f"{SATURATION_GIB[t.name]}"
+        )
+    assert sum(t.gpu_memory_utilization for t in coloc.tenants) < 1.0
+
+
+def test_memory_pressure_rungs_clear_vllms_minimum_viable_kv(cfg):
+    """vLLM refuses to start unless the cache holds one max-length sequence.
+    At 8192 context that is 2.50 GiB for the 72B and 0.44 GiB for the 7B — the
+    old kv03 rung asked for 2.0 and could not load even alone on an empty card.
+    """
+    floors = {"anchor": 2.50, "neighbour": 0.44}
+    for name in MEMORY_PRESSURE_CURVE:
+        coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+        for t in coloc.tenants:
+            assert t.kv_budget_gb >= floors[t.name], (
+                f"{name}/{t.name}: {t.kv_budget_gb} GiB is below the "
+                f"{floors[t.name]} GiB floor and will not start"
+            )
+
+
+def test_memory_pressure_uses_a_workload_that_can_fill_the_cache(cfg):
+    """--max-num-seqs=32 caps residency, so llm_short (61 tokens) can occupy at
+    most 1,952 tokens at ANY arrival rate — 6.8% of even the smallest rung. The
+    original config measured a 0.4%-full cache and produced a curve flat to
+    three decimals."""
+    for name in MEMORY_PRESSURE_CURVE:
+        coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+        for t in coloc.tenants:
+            assert t.workload == "llm_long", (
+                f"{name}/{t.name} runs {t.workload}; the cache cannot become "
+                "the constraint without a workload that holds tokens"
+            )
+        assert coloc.duration_s >= 300, (
+            "one llm_long request takes ~48.6 s on the anchor; a shorter "
+            "window never reaches steady state"
+        )
+
+
+def test_memory_pressure_holds_the_offered_load_constant(cfg):
+    """The customer's config halves the rate at the extreme point. Ours loads,
+    so halving would confound the cliff with a load change."""
+    loads = []
+    for name in MEMORY_PRESSURE_CURVE:
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        loads.append({t.name: t.load.rps for t in c.tenants})
+    assert all(d == loads[0] for d in loads), loads
+
+
+def test_every_memory_pressure_rung_can_load_its_weights(cfg):
+    for name in MEMORY_PRESSURE_CURVE:
+        for run in _coloc_runs(cfg, name):
+            for t in run.tenants:
+                weights = cfg["models"][t.round.model_id]["weights_gb"]
+                assert t.gpu_memory_utilization * cfg["vram_gb"] > weights, (
+                    f"{name}/{t.round.model_id}"
+                )
+
+
+SECONDARY_DIMENSIONS = [
+    ("secondary-backend-llm", 2),
+    ("secondary-backend-cv", 2),   # `python` dropped: no yolov8-l model.py
+    ("secondary-output-length", 2),
+    ("secondary-input-size-cv", 2),
+    ("secondary-input-size-llm", 2),
+    ("secondary-asymmetry", 3),
+    ("secondary-arrival", 2),
+]
+
+
+@pytest.mark.parametrize("stem,n_points", SECONDARY_DIMENSIONS)
+def test_every_secondary_dimension_runs_against_both_baselines(cfg, stem, n_points):
+    """The interaction is the finding — "backend choice matters 3x more under
+    memory pressure" is invisible with one baseline. A dimension that exists
+    only in `-a` answers half its question."""
+    for suffix, base in (("-a", "mix-llm-cv"), ("-b", "mix-memory-bound")):
+        colocs = [r for r in _coloc_runs(cfg, stem + suffix) if not r.is_solo]
+        assert len(colocs) == n_points, stem + suffix
+        assert cfg["colocations"][stem + suffix]["extends"] == base
+
+
+def test_the_two_baselines_actually_contrast_in_memory_pressure(cfg):
+    """A pair of baselines that reserve the same VRAM is one baseline run
+    twice."""
+    def reserved(name):
+        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+        return sum(t.gpu_memory_utilization or 0 for t in c.tenants)
+
+    assert reserved("mix-llm-cv") < 0.6
+    assert reserved("mix-memory-bound") > 0.9
+
+
+def test_baseline_b_still_leaves_room_for_its_triton_tenant(cfg):
+    """The CV tenant has no `gpu_memory_utilization` to reserve with — it takes
+    whatever the vLLM tenants did not, so `sum < 1.0` is not a formality."""
+    c = next(r for r in _coloc_runs(cfg, "mix-memory-bound") if not r.is_solo)
+    vllm_caps = sum(t.gpu_memory_utilization for t in c.tenants
+                    if t.gpu_memory_utilization is not None)
+    assert vllm_caps <= 0.95
+    assert (1.0 - vllm_caps) * cfg["vram_gb"] > 4.0, "Triton needs a few GB"
+
+
+def test_input_size_llm_moves_prefill_without_moving_decode(cfg):
+    """A different question from output-length: llm_short → llm_long changes
+    both the prompt AND the output, so it can never separate the two."""
+    colocs = [r for r in _coloc_runs(cfg, "secondary-input-size-llm-a") if not r.is_solo]
+    outs = {next(t.load.output_tokens for t in c.tenants if t.name == "llm")
+            for c in colocs}
+    assert outs == {32}, "output length must be the constant here"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 5 — placement (docs/contention.md §5)
+# --------------------------------------------------------------------------- #
+
+
+PLACEMENT_PAIRINGS = {
+    # colocation -> {tenant: device}
+    "place-p1": {"llm": 0, "vlm": 0, "ilm": 1, "cv": 1},
+    "place-p2": {"llm": 0, "ilm": 0, "vlm": 1, "cv": 1},
+    "place-p3": {"llm": 0, "cv": 0, "vlm": 1, "ilm": 1},
+}
+
+
+def _window(cfg, name) -> Colocation:
+    return next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
+
+
+@pytest.mark.parametrize("name,expected", sorted(PLACEMENT_PAIRINGS.items()))
+def test_each_pairing_splits_four_tenants_two_per_card(cfg, name, expected):
+    """With four tenants over two cards there are exactly three pairings, and
+    each one has to actually be a 2/2 split — a pairing that quietly left
+    three tenants on GPU 0 would be `mix-full` wearing a Phase 5 name."""
+    c = _window(cfg, name)
+    assert len(c.tenants) == 4
+    placement = {t.name: t.devices for t in c.tenants}
+    assert placement == {n: [d] for n, d in expected.items()}
+
+    per_gpu: dict[int, list[str]] = {0: [], 1: []}
+    for t in c.tenants:
+        per_gpu[t.devices[0]].append(t.name)
+    assert len(per_gpu[0]) == 2 and len(per_gpu[1]) == 2
+
+
+def test_the_three_pairings_rearrange_mix_full_and_change_nothing_else(cfg):
+    """Placement is the only variable. If a model or an offered rate drifted
+    between the pairings, the ranking would not be a placement finding."""
+    ref = {
+        t.name: (t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+        for t in _window(cfg, "mix-full").tenants
+    }
+    for name in PLACEMENT_PAIRINGS:
+        got = {
+            t.name: (t.round.model_id, t.workload, t.load.pattern, t.load.rps)
+            for t in _window(cfg, name).tenants
+        }
+        assert got == ref, name
+
+
+def test_the_three_pairings_hold_the_kv_cache_constant(cfg):
+    """THE constraint of Phase 5, and the one most likely to be "fixed" away.
+
+    P1 puts both vLLM tenants on GPU 0; P2 and P3 give each of them a card.
+    Derive the caps per-GPU and P1's tenants get roughly half the KV cache of
+    P2's and P3's — P1 then comes out slowest for a reason that has nothing to
+    do with its neighbours (docs/contention.md §2b). So the budget is sized
+    for P1, the tightest case, and every vLLM tenant gets the SAME absolute
+    cap in all three."""
+    caps: dict[str, set] = {}
+    budgets = set()
+    for name in PLACEMENT_PAIRINGS:
+        for t in _window(cfg, name).tenants:
+            if t.gpu_memory_utilization is None:
+                continue           # Triton tenants reserve no GPU fraction
+            caps.setdefault(t.name, set()).add(t.gpu_memory_utilization)
+            budgets.add(t.kv_budget_gb)
+
+    assert set(caps) == {"llm", "vlm"}, "both vLLM tenants must be covered"
+    for tenant, values in caps.items():
+        assert len(values) == 1, f"{tenant} cap varies across the pairings: {values}"
+    assert budgets == {20.0}, "one KV budget for the whole comparison set"
+
+
+def test_the_pairings_keep_mix_fulls_kv_budget(cfg):
+    """The 1-GPU `mix-full` is the before/after these are ranked against, so
+    its tenants have to be running the same caches too."""
+    ref = {
+        t.name: (t.gpu_memory_utilization, t.kv_budget_gb)
+        for t in _window(cfg, "mix-full").tenants
+    }
+    for name in PLACEMENT_PAIRINGS:
+        got = {
+            t.name: (t.gpu_memory_utilization, t.kv_budget_gb)
+            for t in _window(cfg, name).tenants
+        }
+        assert got == ref, name
+
+
+@pytest.mark.parametrize(
+    "name", [*PLACEMENT_PAIRINGS, "place-isolated", "place-vlm-prefill-split"]
+)
+def test_every_placement_window_fits_on_each_card_it_uses(cfg, name):
+    """The `sum <= 1.0` rule is per DEVICE on multi-GPU (§5), and the Triton
+    tenants take their footprint out of whatever the vLLM caps left on their
+    own card."""
+    per_gpu: dict[int, float] = {}
+    triton_gpus: set[int] = set()
+    for t in _window(cfg, name).tenants:
+        if t.round.transport == "triton":
+            triton_gpus.update(t.devices)
+            continue
+        for d in t.devices:
+            per_gpu[d] = per_gpu.get(d, 0.0) + t.gpu_memory_utilization
+    for dev, total in per_gpu.items():
+        assert total <= 1.0, f"{name} GPU {dev}: {total}"
+        if dev in triton_gpus:
+            assert (1.0 - total) * cfg["vram_gb"] > 4.0, (
+                f"{name} GPU {dev} leaves no room for its Triton tenant"
+            )
+
+
+@pytest.mark.parametrize("name", ["place-isolated", "place-vlm-prefill-split"])
+def test_the_two_gpu_repeats_put_their_tenants_on_different_cards(cfg, name):
+    """No shared SMs, bandwidth or VRAM — so these are the runs whose
+    degradation ratios must come back ~1.0. Both tenants on one card would
+    make that a re-run of the 1-GPU window under a new name."""
+    c = _window(cfg, name)
+    assert len(c.tenants) == 2
+    devices = [t.devices for t in c.tenants]
+    assert devices == [[0], [1]] or devices == [[1], [0]]
+    assert len({d[0] for d in devices}) == 2
+
+
+@pytest.mark.parametrize(
+    "name,parent",
+    [("place-isolated", "mix-llm-cv"),
+     ("place-vlm-prefill-split", "cross-vlm-prefill-vs-llm")],
+)
+def test_the_two_gpu_repeats_are_a_before_after_of_a_one_gpu_run(cfg, name, parent):
+    """The extra card is the only difference — same models, same rates, same
+    caps. A different cap would fold a KV-cache change into the answer to
+    "what does a second GPU buy me?"."""
+    assert cfg["colocations"][name]["extends"] == parent
+    ref = {
+        t.name: (t.round.model_id, t.workload, t.load.rps, t.gpu_memory_utilization)
+        for t in _window(cfg, parent).tenants
+    }
+    got = {
+        t.name: (t.round.model_id, t.workload, t.load.rps, t.gpu_memory_utilization)
+        for t in _window(cfg, name).tenants
+    }
+    assert got == ref
+
+
+def test_placement_baselines_are_taken_on_the_placed_card(cfg):
+    """§5: the baseline must match the topology, not just the cap. A tenant
+    pinned to GPU 1 compared against a GPU 0 baseline is comparing cards."""
+    for name in [*PLACEMENT_PAIRINGS, "place-isolated", "place-vlm-prefill-split"]:
+        runs = _coloc_runs(cfg, name)
+        placed = {t.name: t.devices for t in _window(cfg, name).tenants}
+        solos = [r.tenants[0] for r in runs if r.is_solo]
+        assert len(solos) == len(placed)
+        for s in solos:
+            assert s.devices == placed[s.name], name
+
+
+def test_no_tensor_parallel_entries_while_the_interconnect_is_unconfirmed(cfg):
+    """`nvlink: false` on this card means TP traffic crosses PCIe every
+    forward pass, which would dominate the result. Deferred until
+    `nvidia-smi topo -m` says otherwise — not silently added."""
+    assert cfg.get("nvlink") is False
+    for name in cfg["colocations"]:
+        for run in _coloc_runs(cfg, name):
+            for t in run.tenants:
+                assert len(t.devices) == 1, f"{name}/{t.name} is tensor-parallel"
+
+
+def test_every_defined_colocation_resolves(cfg):
+    """Catches typos in model/backend/workload names across the whole block."""
+    for name in cfg["colocations"]:
+        runs = _coloc_runs(cfg, name)
+        assert runs, f"{name} produced no runs"
+        assert any(not r.is_solo for r in runs), f"{name} produced no contention window"
+
+
+# ── one port per HTTP tenant ────────────────────────────────────────────────
+#
+# Regression: `backends.<b>.port` is a BACKEND-wide default, so two tenants on
+# the same backend inherited the same port. The second server took the endpoint
+# and each driver was answered by the other tenant's model — mix-full logged
+# 332/700 and 83/178 requests failing with HTTP 404 "The model ... does not
+# exist", and the survivors were whichever server owned the port at the time.
+
+def test_two_vllm_tenants_get_different_ports():
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-full") if not c.is_solo)
+    http = [t for t in win.tenants if t.round.transport != "triton"]
+    ports = [t.round.port for t in http]
+    assert len(ports) == len(set(ports)), f"HTTP tenants share a port: {ports}"
+    for t in http:
+        assert f":{t.round.port}" in t.round.base_url, "base_url must follow the port"
+
+
+def test_first_tenant_keeps_the_configured_port():
+    """Bumped only on collision, so a single-HTTP-tenant colocation is
+    unchanged and its baseline stays the same deployment."""
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-llm-cv") if not c.is_solo)
+    llm = next(t for t in win.tenants if t.name == "llm")
+    assert llm.round.port == 8000
+
+
+def test_solo_baselines_are_not_re_ported():
+    """A baseline is the reference for the window; shifting its port would make
+    it a different deployment."""
+    cfg = load_gpu_config("rtx_pro6000")
+    for c in iter_colocation(cfg, "mix-full"):
+        if c.is_solo and c.tenants[0].round.transport != "triton":
+            assert c.tenants[0].round.port == 8000
+
+
+def test_triton_tenants_are_left_alone():
+    """Triton is addressed per device, not per tenant — two CV tenants on one
+    card share a container by design."""
+    cfg = load_gpu_config("rtx_pro6000")
+    win = next(c for c in iter_colocation(cfg, "mix-full") if not c.is_solo)
+    triton = [t.round.port for t in win.tenants if t.round.transport == "triton"]
+    assert triton == [8100, 8100]
+
+
+# --------------------------------------------------------------------------- #
+# Per-tenant KV budget — cross-memory-pressure-*
+# --------------------------------------------------------------------------- #
+
+
+def test_tenant_level_kv_budget_wins(cfg):
+    """The colocation value holds KV constant across a comparison set, which is
+    right everywhere except a colocation whose swept variable IS the split."""
+    inherited = _llm(cfg, kv_budget_gb=20.0)
+    overridden = _resolve_tenant(
+        cfg,
+        {"name": "llm", "backend": "vllm", "model": "qwen2.5-7b", "kv_budget_gb": 2.0},
+        cfg["workloads"], kv_budget_gb=20.0,
     )
+    assert inherited.kv_budget_gb == 20.0
+    assert overridden.kv_budget_gb == 2.0, "tenant value must beat the colocation value"
+    assert overridden.gpu_memory_utilization < inherited.gpu_memory_utilization, (
+        "a smaller KV budget must derive a smaller cap"
+    )
+
+

@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-75 solo baseline(s), 88 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+77 solo baseline(s), 89 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -181,7 +181,9 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | secondary-backend-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.76× |   ▲1.77× |    ▲1.69× |
 | secondary-backend-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.78× |   ▲1.79× |    ▲1.72× |
 | secondary-backend-cv-b | 6     | llm2     | qwen2.5-14b              | vllm    |         2.0 |          2.0 |          ≈1.00× |   ▲1.76× |   ▲1.77× |    ▲1.68× |
+| secondary-backend-llm-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.91× |   ▲2.54× |       n/a |
 | secondary-backend-llm-a | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.79× |   ▲2.18× |       n/a |
+| secondary-backend-llm-a | 6     | llm      | qwen2.5-7b               | sglang  |         4.0 |          3.9 |          ≈1.00× |   ≈1.03× |   ≈1.02× |    ≈1.03× |
 | secondary-backend-llm-a | 6     | llm      | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ≈1.01× |   ≈1.02× |    ≈1.02× |
 | secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.26× |   ▲3.73× |       n/a |
 | secondary-backend-llm-b | 6     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲3.25× |   ▲3.72× |       n/a |
@@ -260,7 +262,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | yolov8-l | qwen2.5-14b, qwen2.5-72b | ▲3.68× |
 | yolov8-l | qwen2.5-32b | ▲2.82× |
 | yolov8-l | qwen2.5-72b | ▲2.55× |
-| yolov8-l | qwen2.5-7b | ▲2.01× |
+| yolov8-l | qwen2.5-7b | ▲2.03× |
 
 ### 1c. Safe-operating envelope
 

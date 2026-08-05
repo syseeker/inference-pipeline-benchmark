@@ -1,0 +1,190 @@
+2026-08-05 08:52:14.219 - aiperf.cli_runner._single_run - INFO - Starting AIPerf System
+2026-08-05 08:52:14.225 - aiperf.config.resolution.resolvers - INFO - [OK] Tokenizer Qwen/Qwen2.5-72B-Instruct-AWQ detected
+2026-08-05 08:52:14.225 - aiperf.config.resolution.resolvers - INFO - 1 tokenizer validated | 0.0s
+2026-08-05 08:52:14.225 - aiperf.config.resolution.resolvers - INFO - HF cache hit (skipping prefetch): ['Qwen/Qwen2.5-72B-Instruct-AWQ']
+2026-08-05 08:52:14.422 - system_controller - INFO - Registered Worker Manager (id: 'worker_manager')
+2026-08-05 08:52:14.423 - system_controller - INFO - Registered Dataset Manager (id: 'dataset_manager')
+2026-08-05 08:52:14.434 - server_metrics_manager - INFO - Server Metrics: Discovered 1 endpoints: ['http://localhost:30000/metrics']
+2026-08-05 08:52:14.441 - GPUTelemetryJSONLWriter_f43bbc1d - INFO - GPU telemetry export enabled: /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-sglang-qwen2.5-72b@2-521691cc/llm.aiperf/gpu_telemetry_export.jsonl
+2026-08-05 08:52:14.450 - OTelMetricsResultsProcessor_d55dc121 - INFO - Telemetry streaming is disabled (set --otel-url and/or --mlflow-tracking-uri to enable)
+2026-08-05 08:52:14.450 - records_manager - INFO - OTel metrics streamer is disabled and will not be used: Telemetry streaming is disabled (set --otel-url and/or --mlflow-tracking-uri to enable)
+2026-08-05 08:52:14.450 - RecordExportResultsProcessor_448be018 - INFO - Record metrics export enabled: /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-sglang-qwen2.5-72b@2-521691cc/llm.aiperf/profile_export.jsonl
+2026-08-05 08:52:14.565 - system_controller - INFO - Registered Gpu Telemetry Manager (id: 'gpu_telemetry_manager')
+2026-08-05 08:52:14.566 - system_controller - INFO - Registered Server Metrics Manager (id: 'server_metrics_manager')
+2026-08-05 08:52:14.569 - system_controller - INFO - Registered Worker (id: 'worker_4496c9ac')
+2026-08-05 08:52:14.571 - system_controller - INFO - Registered Worker (id: 'worker_20fcf6cf')
+2026-08-05 08:52:14.591 - system_controller - INFO - Registered Record Processor (id: 'record_processor_33768a91')
+2026-08-05 08:52:14.592 - system_controller - INFO - Registered Record Processor (id: 'record_processor_2badbd05')
+2026-08-05 08:52:14.592 - system_controller - INFO - Registered Worker (id: 'worker_bbd887b5')
+2026-08-05 08:52:14.596 - system_controller - INFO - Registered Worker (id: 'worker_70089d19')
+2026-08-05 08:52:14.596 - system_controller - INFO - Registered Record Processor (id: 'record_processor_0428cb42')
+2026-08-05 08:52:14.602 - system_controller - INFO - Registered Worker (id: 'worker_08a9bdb4')
+2026-08-05 08:52:14.605 - system_controller - INFO - Registered Worker (id: 'worker_6b3fc77a')
+2026-08-05 08:52:14.606 - system_controller - INFO - Registered Record Processor (id: 'record_processor_02f5e59a')
+2026-08-05 08:52:14.611 - system_controller - INFO - Registered Record Processor (id: 'record_processor_6f49994f')
+2026-08-05 08:52:14.613 - system_controller - INFO - Registered Worker (id: 'worker_210a229d')
+2026-08-05 08:52:14.614 - system_controller - INFO - Registered Record Processor (id: 'record_processor_bd2e387e')
+2026-08-05 08:52:14.616 - system_controller - INFO - Registered Record Processor (id: 'record_processor_901914d1')
+2026-08-05 08:52:14.616 - system_controller - INFO - Registered Record Processor (id: 'record_processor_f71212ba')
+2026-08-05 08:52:14.617 - system_controller - INFO - Registered Timing Manager (id: 'timing_manager')
+2026-08-05 08:52:14.618 - system_controller - INFO - Registered Worker (id: 'worker_b9c604ce')
+2026-08-05 08:52:14.623 - system_controller - INFO - Registered Records Manager (id: 'records_manager')
+2026-08-05 08:52:14.625 - system_controller - INFO - Registered Worker (id: 'worker_713e1114')
+2026-08-05 08:52:14.627 - system_controller - INFO - Registered Worker (id: 'worker_d2c91da1')
+2026-08-05 08:52:14.632 - system_controller - INFO - Registered Worker (id: 'worker_e4e48be2')
+2026-08-05 08:52:14.633 - system_controller - INFO - Registered Worker (id: 'worker_765da717')
+2026-08-05 08:52:14.634 - system_controller - INFO - Registered Worker (id: 'worker_953a52e9')
+2026-08-05 08:52:14.638 - system_controller - INFO - Registered Worker (id: 'worker_5191c988')
+2026-08-05 08:52:14.646 - system_controller - INFO - Registered Worker (id: 'worker_4018f98a')
+2026-08-05 08:52:14.651 - system_controller - INFO - Registered Worker (id: 'worker_db25aea9')
+2026-08-05 08:52:14.652 - system_controller - INFO - Registered Worker (id: 'worker_da0f0844')
+2026-08-05 08:52:14.652 - system_controller - INFO - Registered Worker (id: 'worker_153ab969')
+2026-08-05 08:52:14.654 - system_controller - INFO - Registered Worker (id: 'worker_224dd1bb')
+2026-08-05 08:52:14.655 - system_controller - INFO - Registered Worker (id: 'worker_93de28a7')
+2026-08-05 08:52:14.677 - system_controller - INFO - Registered Worker (id: 'worker_c0ee3f65')
+2026-08-05 08:52:14.687 - system_controller - INFO - Registered Worker (id: 'worker_f49596d1')
+2026-08-05 08:52:14.692 - system_controller - INFO - Registered Worker (id: 'worker_b5d06a08')
+2026-08-05 08:52:14.696 - system_controller - INFO - Registered Worker (id: 'worker_ea0875f7')
+2026-08-05 08:52:14.705 - system_controller - INFO - Registered Worker (id: 'worker_8b4fa0df')
+2026-08-05 08:52:14.713 - system_controller - INFO - Registered Worker (id: 'worker_91cbf399')
+2026-08-05 08:52:14.768 - system_controller - INFO - Registered Worker (id: 'worker_38ce1930')
+2026-08-05 08:52:14.778 - system_controller - INFO - Registered Worker (id: 'worker_125b19e3')
+2026-08-05 08:52:14.778 - system_controller - INFO - Registered Worker (id: 'worker_c3f9fd67')
+2026-08-05 08:52:14.781 - system_controller - INFO - Registered Worker (id: 'worker_e28e419d')
+2026-08-05 08:52:14.795 - system_controller - INFO - Registered Worker (id: 'worker_db01ceab')
+2026-08-05 08:52:14.798 - system_controller - INFO - Registered Worker (id: 'worker_970494b4')
+2026-08-05 08:52:14.918 - system_controller - INFO - AIPerf System is CONFIGURING
+2026-08-05 08:52:14.918 - system_controller - INFO - Configuring all services to start profiling
+2026-08-05 08:52:14.919 - timing_manager - INFO - Waiting for dataset to be configured before configuring timing
+2026-08-05 08:52:14.919 - InferenceResultParser_fe644672 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_88cba68d - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - dataset_manager - INFO - Configuring tokenizer(s) for dataset manager
+2026-08-05 08:52:14.919 - InferenceResultParser_721fe169 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_0af39c60 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_4478f1a1 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_9b273171 - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_9ffb2e6f - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.919 - InferenceResultParser_dd634d1a - INFO - Configuring tokenizers for inference result parser (resolve_alias: True)
+2026-08-05 08:52:14.924 - system_controller - INFO - Server metrics disabled - no Prometheus endpoints reachable
+2026-08-05 08:52:14.933 - gpu_telemetry_manager - WARNING - GPU Telemetry: http://localhost:9400/metrics is not reachable
+2026-08-05 08:52:14.933 - gpu_telemetry_manager - WARNING - GPU Telemetry: http://localhost:9401/metrics is not reachable
+2026-08-05 08:52:14.934 - system_controller - INFO - DCGM telemetry skipped: no DCGM endpoints reachable
+2026-08-05 08:52:18.166 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.171 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.172 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.177 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.177 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.182 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.196 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.201 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.207 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.212 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.214 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.222 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.226 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.231 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.233 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.238 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.249 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.249 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.254 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.255 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.255 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.256 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.262 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.265 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.268 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.270 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.270 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.273 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.274 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.275 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.279 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.285 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.286 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.287 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.295 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.300 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.301 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.306 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.306 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.311 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.313 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.315 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.320 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.324 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/Qwen/Qwen2.5-72B-Instruct-AWQ/resolve/main/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+2026-08-05 08:52:18.328 - httpx - INFO - HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/Qwen/Qwen2.5-72B-Instruct-AWQ/698703eae6604af048a3d2f509995dc302088217/tokenizer_config.json "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.340 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.340 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.345 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.345 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.354 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.365 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main/additional_chat_templates?recursive=false&expand=false "HTTP/1.1 404 Not Found"
+2026-08-05 08:52:18.382 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.388 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.399 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ/tree/main?recursive=true&expand=false "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.629 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.631 - InferenceResultParser_9ffb2e6f - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.71 seconds
+2026-08-05 08:52:18.658 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.659 - dataset_manager - INFO - Tokenizer(s) configured in 3.74 seconds
+2026-08-05 08:52:18.659 - dataset_manager - INFO - Configuring dataset for dataset_manager
+2026-08-05 08:52:18.660 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.662 - InferenceResultParser_dd634d1a - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.74 seconds
+2026-08-05 08:52:18.684 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.686 - InferenceResultParser_fe644672 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.77 seconds
+2026-08-05 08:52:18.687 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.689 - InferenceResultParser_721fe169 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.77 seconds
+2026-08-05 08:52:18.695 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.697 - InferenceResultParser_4478f1a1 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.78 seconds
+2026-08-05 08:52:18.724 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.725 - InferenceResultParser_9b273171 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.81 seconds
+2026-08-05 08:52:18.726 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.728 - InferenceResultParser_0af39c60 - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.81 seconds
+2026-08-05 08:52:18.738 - httpx - INFO - HTTP Request: GET https://huggingface.co/api/models/Qwen/Qwen2.5-72B-Instruct-AWQ "HTTP/1.1 200 OK"
+2026-08-05 08:52:18.740 - InferenceResultParser_88cba68d - INFO - Initialized tokenizers: {'Qwen/Qwen2.5-72B-Instruct-AWQ': {'class': 'Qwen2Tokenizer', 'name_or_path': 'Qwen/Qwen2.5-72B-Instruct-AWQ'}} in 3.82 seconds
+2026-08-05 08:52:18.997 - CustomDatasetComposer - INFO - Using explicit dataset format: single_turn
+2026-08-05 08:52:19.004 - MemoryMapDatasetBackingStore_b42371b5 - INFO - Memory-mapped backing store initialized (streaming to /tmp/aiperf_mmap_f2afb5ed66ce/dataset.dat)
+2026-08-05 08:52:19.004 - MemoryMapDatasetBackingStore_b42371b5 - INFO - Data file finalized: 3 conversations, 0.00 MB
+2026-08-05 08:52:19.005 - MemoryMapDatasetBackingStore_b42371b5 - INFO - Index file created: /tmp/aiperf_mmap_f2afb5ed66ce/index.dat
+2026-08-05 08:52:19.005 - dataset_manager - INFO - Backing store finalized: client_type=DatasetClientStoreType.MEMORY_MAP data_file_path=PosixPath('/tmp/aiperf_mmap_f2afb5ed66ce/dataset.dat') index_file_path=PosixPath('/tmp/aiperf_mmap_f2afb5ed66ce/index.dat') conversation_count=3 total_size_bytes=1737 compressed_data_file_path=None compressed_index_file_path=None compressed_size_bytes=0
+2026-08-05 08:52:19.005 - dataset_manager - INFO - sampling strategy: sequential, unique conversations: 3, unique turn count: 3
+2026-08-05 08:52:19.005 - dataset_manager - INFO - Generating inputs.json file at /home/ubuntu/inference-pipeline-benchmark/benchmarks/results/rtx_pro6000/coloc/_baselines/solo-sglang-qwen2.5-72b@2-521691cc/llm.aiperf/inputs.json
+2026-08-05 08:52:19.007 - PhaseOrchestrator_5a061f2e - INFO - Initialized 2 phase(s): ['Warmup', 'Profiling']
+2026-08-05 08:52:19.007 - dataset_manager - INFO - inputs.json file generated in 0.00 seconds
+2026-08-05 08:52:19.196 - dataset_manager - INFO - Dataset client initialized and freed 3 conversations from memory
+2026-08-05 08:52:19.196 - dataset_manager - INFO - Dataset configured in 0.54 seconds
+2026-08-05 08:52:19.197 - system_controller - INFO - All services configured in 4.28 seconds
+2026-08-05 08:52:19.197 - system_controller - INFO - AIPerf System is CONFIGURED
+2026-08-05 08:52:19.199 - system_controller - INFO - All services started profiling successfully
+2026-08-05 08:52:19.199 - system_controller - INFO - AIPerf System is PROFILING
+2026-08-05 08:52:19.200 - RateTiming - INFO - Creating interval generator: pattern=poisson, rate=2.0, smoothness=None
+2026-08-05 08:52:19.200 - PhaseRunner - NOTICE - Phase warmup started | target: 3 requests
+2026-08-05 08:52:19.200 - records_manager - INFO - Credit phase start: warmup
+2026-08-05 08:52:21.133 - PhaseRunner - NOTICE - Phase warmup sending complete | sent=3, completed=0, in_flight=3 | sessions: sent=3, completed=0
+2026-08-05 08:52:22.138 - PhaseRunner - NOTICE - Phase warmup complete | completed=3, cancelled=0, errors=0 | sessions: completed=3, cancelled=0 | elapsed=2.94s
+2026-08-05 08:52:22.139 - RateTiming - INFO - Creating interval generator: pattern=poisson, rate=2.0, smoothness=None
+2026-08-05 08:52:22.139 - PhaseRunner - NOTICE - Phase profiling started | target: 120.0s duration
+2026-08-05 08:52:22.139 - PhaseRunner - INFO - Waiting for event 'profiling phase sending' with timeout of 119.99985489s
+2026-08-05 08:52:22.139 - records_manager - INFO - Credit phase start: profiling
+2026-08-05 08:54:22.139 - PhaseRunner - INFO - Timeout of 119.99985489s elapsed for event 'profiling phase sending'
+2026-08-05 08:54:22.140 - PhaseRunner - NOTICE - Phase profiling sending complete | sent=236, completed=234, in_flight=2 | sessions: sent=236, completed=234 | timeout_triggered=True
+2026-08-05 08:54:22.140 - PhaseRunner - INFO - Timeout of 0.0s elapsed for event 'profiling phase credits returned'
+2026-08-05 08:54:22.140 - PhaseRunner - WARNING - Phase profiling timed out, cancelling all credits. Stats: sent=236, completed=234, cancelled=0, in_flight=2
+2026-08-05 08:54:22.140 - StickyCreditRouter_095f9aa1 - INFO - Sent cancellation requests for 2 in-flight credits across 2 workers
+2026-08-05 08:54:22.140 - PhaseRunner - INFO - Waiting for all cancelled credits to be returned for phase profiling. Need 2 more credits.
+2026-08-05 08:54:22.140 - records_manager - INFO - Sent 236 requests. Waiting for all to complete...
+2026-08-05 08:54:22.140 - PhaseRunner - INFO - All cancelled credits returned for phase profiling
+2026-08-05 08:54:22.140 - PhaseRunner - NOTICE - Phase profiling complete | completed=234, cancelled=2, errors=0 | sessions: completed=234, cancelled=2 | elapsed=120.00s | grace_period_timeout=True
+2026-08-05 08:54:22.140 - PhaseOrchestrator_5a061f2e - NOTICE - All credits completed
+2026-08-05 08:54:22.141 - records_manager - INFO - Received CREDIT_PHASE_COMPLETE message, Phase complete: PhaseRecordsStats(phase=CreditPhase.PROFILING, start_ns=1785919942139619159, sent_end_ns=1785920062139957433, requests_end_ns=1785920062140751124, total_expected_requests=None, expected_duration_sec=None, expected_num_sessions=None, expected_grace_period_sec=None, final_requests_sent=None, final_requests_completed=234, final_requests_cancelled=2, final_request_errors=0, final_sent_sessions=None, final_completed_sessions=None, final_cancelled_sessions=None, timeout_triggered=True, grace_period_timeout_triggered=True, was_cancelled=False, records_end_ns=None, success_records=234, error_records=0)
+2026-08-05 08:54:22.141 - records_manager - NOTICE - All requests have completed, please wait for the results to be processed (currently 234 of 234 records processed)...
+2026-08-05 08:54:22.141 - records_manager - INFO - Processed 234 valid requests and 0 errors (234 total).
+2026-08-05 08:54:22.141 - records_manager - INFO - Received all records, processing now...
+2026-08-05 08:54:22.141 - system_controller - INFO - Received credits complete from 'timing_manager'
+2026-08-05 08:54:22.141 - records_manager - INFO - All credits complete, please wait for the results to be processed...
+2026-08-05 08:54:22.142 - records_manager - INFO - Waiting 2.0s for server metrics flush period...
+2026-08-05 08:54:24.142 - records_manager - INFO - Processing records results...
+2026-08-05 08:54:24.148 - records_manager - INFO - _finalize_and_process_results completed
+2026-08-05 08:54:24.148 - system_controller - INFO - All results received, initiating shutdown
+2026-08-05 08:54:24.754 - ExporterManager - INFO - Exporting all records
+2026-08-05 08:54:24.807 - ExporterManager - INFO - Exporting console data
