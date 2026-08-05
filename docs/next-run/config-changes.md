@@ -231,6 +231,28 @@ cross-memory-pressure-kv13:      # and each sibling rung
       load: {pattern: poisson, rps: 16}
 ```
 
+**Raising the rate alone cannot work — `--max-num-seqs=32` caps it.** vLLM holds
+only *admitted* requests in the cache; queued ones sit outside it. With at most
+32 sequences in flight the cache occupancy has a hard ceiling that no arrival
+rate can exceed:
+
+| Workload | Max live tokens (32 seqs) | % of anchor's 28,508-token cache |
+|---|---|---|
+| `llm_short` (29 + 32 tok) | 1,952 | **6.8%** |
+| `llm_long` (~150 + 512 tok) | 21,184 | **74.3%** |
+
+Driving `llm_short` at 200 req/s would build an enormous admission queue while
+the cache stayed under 7% full — that is the `same-llm` queueing cliff measured
+a second time, not the KV cliff. The workload has to change; the rate is
+secondary.
+
+**The 2:1 split equalises bytes, not pressure.** A 7B's KV costs ~56 KiB/token
+against the 72B's 320 KiB, so the neighbour's 3.9 GB buys **73,026 tokens** to
+the anchor's 28,508. At `llm_long` the anchor reaches 74% while the neighbour
+reaches 29% — the two tenants are nowhere near equally stressed at the same
+rung. If the point is to find where *each* starts evicting, the split should be
+sized in tokens or in fraction-of-capacity, not in gigabytes.
+
 Verify against `GPU KV cache usage` in the server log before trusting any
 resulting curve: if it is still in single-digit percentages, the rungs are
 still measuring nothing. The eviction cliff appears when usage approaches 100%
