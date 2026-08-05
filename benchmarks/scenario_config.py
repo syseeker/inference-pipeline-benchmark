@@ -675,7 +675,8 @@ def _solo_key(t: Tenant) -> tuple:
     against a reference recorded at HALF its cache, reading a 2x KV difference
     as contention. That is the exact confound this family exists to avoid."""
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
-            tuple(t.devices), t.gpu_memory_utilization, t.kv_budget_gb)
+            tuple(t.devices), t.gpu_memory_utilization,
+            tuple(t.round.launch_args or ()), t.kv_budget_gb)
 
 
 def iter_colocation(cfg: dict[str, Any], name: str) -> Iterator[Colocation]:

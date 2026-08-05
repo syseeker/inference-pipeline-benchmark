@@ -1783,3 +1783,58 @@ def test_server_env_puts_the_tenants_venv_bin_on_path():
                     # Triton runs in a container; its PATH is the image's.
                     assert "PATH" not in env, f"{name}/{t.name} should inherit PATH"
     assert {"vllm", "sglang", "triton"} <= seen, f"coverage gap: {seen}"
+
+
+def test_solo_key_matches_scenario_configs():
+    """coloc and scenario_config each carry a _solo_key, and they must agree
+    field for field.
+
+    They drifted: kv_budget_gb was added to scenario_config's copy only, which
+    left both as tuples of the same LENGTH whose last field was a different
+    quantity — so nothing raised, and cross-memory-pressure's p50 neighbour
+    (1.28 GiB) went on matching the p25 baseline (0.64 GiB). Every p50 ratio
+    would have divided by a reference recorded at half its own cache.
+    """
+    import inspect
+    from benchmarks import coloc as c
+    from benchmarks import scenario_config as sc
+
+    def fields(fn):
+        src = inspect.getsource(fn)
+        body = src[src.index("return ("):]
+        return [x.strip() for x in body.strip("return (").rstrip(")\n ").split(",") if x.strip()]
+
+    a, b = fields(c._solo_key), fields(sc._solo_key)
+    # scenario_config uses `t.` after rebinding; coloc does too. Compare the
+    # trailing attribute names, which is what actually identifies the field.
+    norm = lambda xs: [x.split(".")[-1].rstrip(")") for x in xs]
+    assert norm(a) == norm(b), (
+        f"_solo_key copies disagree:\n  coloc:           {norm(a)}\n"
+        f"  scenario_config: {norm(b)}"
+    )
+
+
+def test_solo_key_and_manifest_key_have_the_same_shape():
+    """find_existing_baseline compares _solo_key(tenant) with
+    solo_key_from_manifest(manifest). Different lengths would silently never
+    match (every baseline re-runs); the same length with different fields is
+    worse — it matches the WRONG baseline, which is what p50 did."""
+    import sys
+    from pathlib import Path as _P
+    sys.path.insert(0, str(_P(__file__).resolve().parents[2]))
+    from benchmarks.coloc import _solo_key, solo_key_from_manifest
+    from benchmarks.scenario_config import load_gpu_config, iter_colocation
+
+    cfg = load_gpu_config("rtx_pro6000")
+    coloc = next(c for c in iter_colocation(cfg, "cross-memory-pressure-p50") if c.is_solo)
+    t = coloc.tenants[0]
+    want = _solo_key(t)
+    fake = {"tenants": [{
+        "name": t.name, "workload": t.workload,
+        "devices": list(t.devices), "gpu_memory_utilization": t.gpu_memory_utilization,
+        "kv_budget_gb": t.kv_budget_gb,
+        "load": {"pattern": t.load.pattern, "rps": t.load.rps},
+        "round": {"backend": t.round.backend, "model_id": t.round.model_id,
+                  "launch_args": list(t.round.launch_args or ())},
+    }]}
+    assert solo_key_from_manifest(fake) == want

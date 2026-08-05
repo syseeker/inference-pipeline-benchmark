@@ -1084,11 +1084,22 @@ def _solo_key(tenant: Tenant) -> tuple:
     change that took its baseline from 178/178 rejected requests to a working
     one — produced an identical key, so `--resume` would have skipped the
     re-run and left every ratio dividing by a baseline that measured nothing.
+
+    `kv_budget_gb` belongs here for the strongest version of that reason: it
+    sets the cache DIRECTLY, and the cap it derives is rounded to 2 dp, so two
+    genuinely different caches can share a cap. cross-memory-pressure's p25 and
+    p50 neighbours (0.64 and 1.28 GiB) both derive 0.19 — without this field
+    p50 reuses p25's baseline and every p50 ratio divides by a reference
+    recorded at half its cache.
+
+    This function is duplicated from scenario_config for import reasons, and
+    the two copies must not drift: fixing only one is exactly how the p50 bug
+    survived its first fix. `test_solo_key_matches_scenario_configs` pins them.
     """
     t = tenant
     return (t.round.backend, t.round.model_id, t.workload, t.load.pattern, t.load.rps,
             tuple(t.devices), t.gpu_memory_utilization,
-            tuple(t.round.launch_args or ()))
+            tuple(t.round.launch_args or ()), t.kv_budget_gb)
 
 
 def solo_key_from_manifest(manifest: dict[str, Any]) -> tuple | None:
@@ -1097,6 +1108,11 @@ def solo_key_from_manifest(manifest: dict[str, Any]) -> tuple | None:
     The manifest records every field the key is built from, so a baseline can
     be recognised by what it IS rather than by what its directory is called.
     Returns None if the manifest is not a single-tenant solo run.
+
+    MUST stay field-for-field identical to `_solo_key`. It drifted once: adding
+    kv_budget_gb to `_solo_key` alone left both as 8-tuples whose eighth field
+    was a different quantity, so cross-memory-pressure's p50 neighbour matched
+    the p25 baseline and would have been scored against half its own cache.
     """
     tenants = manifest.get("tenants") or []
     if len(tenants) != 1:
@@ -1108,7 +1124,7 @@ def solo_key_from_manifest(manifest: dict[str, Any]) -> tuple | None:
         return (rnd.get("backend"), rnd.get("model_id"), t.get("workload"),
                 load.get("pattern"), float(load.get("rps")),
                 tuple(t.get("devices") or []), t.get("gpu_memory_utilization"),
-                tuple(rnd.get("launch_args") or ()))
+                tuple(rnd.get("launch_args") or ()), t.get("kv_budget_gb"))
     except (TypeError, ValueError):
         return None
 

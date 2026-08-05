@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-79 solo baseline(s), 89 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+80 solo baseline(s), 90 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -43,10 +43,12 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | same-llm               | 2     | llm_b    | gemma2-9b                | vllm    |        64.0 |         34.2 |          ▼0.55× |  ▲37.24× |  ▲36.71× |   ▲54.38× |
 | same-vlm               | 2     | vlm_a    | qwen2.5-vl-7b            | vllm    |         0.5 |          0.5 |          ≈0.98× |   ▲5.70× |   ▲9.77× |    ▲3.64× |
 | same-vlm               | 2     | vlm_a    | qwen2.5-vl-7b            | vllm    |         1.0 |          1.0 |          ≈0.98× |   ▲4.34× |   ▲9.95× |    ▲4.49× |
+| same-vlm               | 2     | vlm_a    | qwen2.5-vl-7b            | vllm    |         2.0 |          1.9 |          ≈0.97× |   ▲3.14× |   ▲6.20× |    ▲3.19× |
 | same-vlm               | 2     | vlm_a    | qwen2.5-vl-7b            | vllm    |         2.0 |          1.9 |          ≈0.98× |   ▲6.31× |  ▲10.38× |    ▲5.11× |
 | same-vlm               | 2     | vlm_a    | qwen2.5-vl-7b            | vllm    |         4.0 |          3.5 |          ▼0.91× |  ▲11.05× |  ▲12.09× |   ▲38.01× |
 | same-vlm               | 2     | vlm_b    | qwen3-vl-32b-fp8         | vllm    |         0.5 |          0.3 |          ▼0.92× |   ▲1.11× |   ▲1.20× |    ▲1.22× |
 | same-vlm               | 2     | vlm_b    | qwen3-vl-32b-fp8         | vllm    |         1.0 |          0.3 |          ▼0.88× |   ▲1.10× |   ≈1.04× |    ≈1.04× |
+| same-vlm               | 2     | vlm_b    | qwen3-vl-32b-fp8         | vllm    |         0.1 |          0.2 |          ≈1.00× |   ▲1.28× |   ▲1.31× |    ▲1.49× |
 | same-vlm               | 2     | vlm_b    | qwen3-vl-32b-fp8         | vllm    |         2.0 |          0.3 |          ▼0.83× |   ≈1.02× |   ≈1.04× |    ≈1.03× |
 | same-vlm               | 2     | vlm_b    | qwen3-vl-32b-fp8         | vllm    |         4.0 |          0.2 |          ▼0.73× |   ▲1.08× |   ≈1.04× |    ≈1.02× |
 | mix-full               | 3     | cv       | yolov8-l                 | triton  |        50.0 |         50.5 |          ≈1.00× |   ▲2.46× |   ▲2.88× |       n/a |
@@ -251,8 +253,8 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | qwen2.5-vl-7b | gemma2-9b | ▲1.32× |
 | qwen2.5-vl-7b | kosmos-2.5 | ▲1.11× |
 | qwen2.5-vl-7b | kosmos-2.5, qwen2.5-7b, yolov8-l | ▲1.56× |
-| qwen2.5-vl-7b | qwen3-vl-32b-fp8 | ▲10.55× |
-| qwen3-vl-32b-fp8 | qwen2.5-vl-7b | ▲1.08× |
+| qwen2.5-vl-7b | qwen3-vl-32b-fp8 | ▲9.68× |
+| qwen3-vl-32b-fp8 | qwen2.5-vl-7b | ▲1.13× |
 | yolov8-l | dinov2-base | ▲1.12× |
 | yolov8-l | kosmos-2.5 | ≈1.01× |
 | yolov8-l | kosmos-2.5, qwen2.5-7b, qwen2.5-vl-7b | ▲1.90× |
@@ -295,4 +297,5 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | same-ilm | ilm_a | kosmos-2.5 | 0.2 | 0.2 | 0.83× |
 | same-vlm | vlm_a | qwen2.5-vl-7b | 4.0 | 3.5 | 0.89× |
 | secondary-output-length-a | llm | qwen2.5-7b | 4.0 | 3.7 | 0.93× |
+| same-vlm | vlm_a | qwen2.5-vl-7b | 2.0 | 1.9 | 0.95× |
 | cross-ilm-vs-cv | cv | yolov8-l | 1.0 | 0.9 | 0.95× |
