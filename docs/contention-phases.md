@@ -665,6 +665,43 @@ capacity (measure that first, per rung) rather than at a fixed absolute rate.
 Keep one absolute-rate arm if the customer-facing question is "what happens at
 4 req/s", but do not read the current arm as isolating size.
 
+### Do not read the cap sum as memory pressure
+
+Once a tenant has a `kv_budget_gb`, its cache is pinned by an absolute
+`--kv-cache-memory-bytes` and the derived cap is only a **ceiling**. What
+actually occupies the card is `weights + pinned KV + overhead`, and that is
+unaffected by the cap.
+
+`mix-memory-bound` is the case to remember:
+
+| | Before the weights fix | After |
+|---|---|---|
+| Cap sum ("reserved") | 0.94 — 90 GB | 0.91 — 87 GB |
+| Weights + pinned KV ("occupied") | **~82 GiB** | **~82 GiB** |
+
+Nothing about the run changed. `qwen2.5-72b` always took 38.77 GiB and its
+cache was always pinned at 6.0 GiB; only the *estimate* of the weights moved,
+and it moved toward the truth. The old 0.94 was reserving 3.4 GB that nothing
+ever filled.
+
+The trap: "the memory-bound baseline dropped from 0.94 to 0.91, restore it"
+sounds conservative, but the only way to raise the cap is to raise
+`kv_budget_gb` — which adds **real** cache. That would be the first run at that
+cache size, breaking comparability with every prior result, and more KV means
+more batching room and fewer evictions, so it would be *less* constrained while
+looking more committed.
+
+Two consequences worth carrying:
+
+- **This baseline is less memory-bound than its name suggests** — 82 of 96 GiB,
+  not 90. A genuinely near-ceiling baseline needs bigger models or deliberately
+  more KV, and that is a new design decision, not a restoration.
+- **Correcting a `weights_gb` re-derives every cap that depends on it.** The
+  72B fix changed 27 resolved windows across 16 colocations, 11 of which were
+  not the target, so `--resume` will re-run them. The KV budgets — the quantity
+  these experiments hold constant — did not move, so the results stay
+  comparable in substance.
+
 ### The `weights_gb` estimates are verified — from the server logs
 
 An earlier version of this section claimed the ground truth was unrecorded.
