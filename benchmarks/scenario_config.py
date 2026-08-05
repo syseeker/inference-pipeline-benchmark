@@ -114,6 +114,12 @@ class Round:
     # Video sweep knob: how many frames to extract per video. None = use the
     # VideoTextConfig default (8). Set per sweep round via `num_frames:` in the yaml.
     num_frames: int | None = None
+    # Bytes of KV cache one token occupies:
+    # layers x kv_heads x head_dim x 2 (K+V) x 2 (bf16). Needed to express an
+    # absolute cache size to SGLang, whose --max-total-tokens is in TOKENS
+    # where vLLM's --kv-cache-memory-bytes is in bytes. None = unknown, and
+    # the tenant falls back to a fraction.
+    kv_bytes_per_token: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -211,6 +217,10 @@ def resolve_round(
         ready_timeout_s=ready_timeout_s,
         transport=transport,
         ckpt=str(ckpt) if ckpt is not None else None,
+        kv_bytes_per_token=(
+            int(model["kv_bytes_per_token"])
+            if model.get("kv_bytes_per_token") is not None else None
+        ),
     )
 
 

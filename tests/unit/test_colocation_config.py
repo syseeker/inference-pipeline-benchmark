@@ -580,8 +580,10 @@ def test_to_dict_is_json_serialisable_and_carries_identity(cfg):
     [
         ("same-llm", 2, 4),
         ("same-cv", 2, 4),
-        ("same-vlm", 2, 4),
         ("same-ilm", 2, 4),
+        # same-vlm is deliberately NOT here: a shared sweep needs tenants with
+        # comparable ceilings, and its two are 12x apart. See
+        # test_same_vlm_loads_each_tenant_relative_to_its_own_ceiling.
     ],
 )
 def test_same_category_family_is_a_saturation_curve(cfg, name, n_tenants, n_points):
@@ -592,6 +594,25 @@ def test_same_category_family_is_a_saturation_curve(cfg, name, n_tenants, n_poin
     assert all(len(c.tenants) == n_tenants for c in colocs)
     rates = [sorted(t.load.rps for t in c.tenants) for c in colocs]
     assert rates == sorted(rates), "load must climb monotonically along the curve"
+
+
+def test_same_vlm_loads_each_tenant_relative_to_its_own_ceiling(cfg):
+    """A "*" sweep asks where the PAIR saturates, which needs comparable
+    ceilings. Measured: qwen2.5-vl-7b tracks its offered rate to 4 req/s while
+    qwen3-vl-32b-fp8 pins at ~0.33 from 0.5 upward — 12x apart. The old
+    [0.5, 1, 2, 4] sweep ran three rungs above the 32B's ceiling and collapsed
+    into one load point measured four times (0.30 / 0.29 / 0.28 / 0.24) while
+    the 7B stayed nearly idle.
+    """
+    colocs = [r for r in _coloc_runs(cfg, "same-vlm") if not r.is_solo]
+    assert len(colocs) == 1, "no shared sweep; one point at matched relative load"
+    rates = {t.name: t.load.rps for t in colocs[0].tenants}
+    assert rates["vlm_a"] > rates["vlm_b"], (
+        "the faster tenant must be driven harder, not equally"
+    )
+    # each at roughly half its own measured ceiling (4+ and 0.33 req/s)
+    assert 0.4 <= rates["vlm_a"] / 4.0 <= 0.7
+    assert 0.4 <= rates["vlm_b"] / 0.33 <= 0.7
 
 
 def test_same_vlm_pairs_two_models_that_can_actually_serve_video(cfg):

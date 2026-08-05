@@ -353,6 +353,20 @@ def build_server_cmd(
         ]
         if cap is not None:
             cmd = _override_flag(cmd, "--mem-fraction-static", str(cap))
+        # Same reasoning as vLLM's --kv-cache-memory-bytes above, in SGLang's
+        # units: --mem-fraction-static is a share of the WHOLE device, so a
+        # colocated tenant sizes its cache against memory its neighbours
+        # already hold and dies with "Not enough memory. Please try to increase
+        # --mem-fraction-static" — which is what killed the 72B arm of
+        # secondary-backend-llm-b while the 7B arm (no budget, explicit cap)
+        # served fine. --max-total-tokens states the pool absolutely.
+        #
+        # It is in TOKENS, not bytes, so the budget has to be divided by what a
+        # token costs for this model. Without `kv_bytes_per_token` in the yaml
+        # there is nothing to divide by, and the tenant keeps the fraction.
+        if kv_gb is not None and r.kv_bytes_per_token:
+            tokens = int(kv_gb * 1024 ** 3 / r.kv_bytes_per_token)
+            cmd = _override_flag(cmd, "--max-total-tokens", str(tokens))
         return cmd
     if r.backend == "trtllm":
         trt_backend = r.trtllm_backend or "pytorch"

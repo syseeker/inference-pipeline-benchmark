@@ -275,6 +275,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
+    kv_bytes_per_token: 57344    # 56 KiB: layers x kv_heads x head_dim x 2 (K+V) x 2 B
   qwen2.5-14b:
     hf_id: "Qwen/Qwen2.5-14B-Instruct"
     family: "qwen2.5"
@@ -284,6 +285,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
+    kv_bytes_per_token: 196608    # 192 KiB: layers x kv_heads x head_dim x 2 (K+V) x 2 B
   # NOTE: the original design lists `qwen2.5-27b`. That checkpoint does not
   # exist — the Qwen2.5 ladder is 0.5/1.5/3/7/14/32/72B. Corrected to 32B.
   qwen2.5-32b:
@@ -295,6 +297,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
+    kv_bytes_per_token: 262144    # 256 KiB: layers x kv_heads x head_dim x 2 (K+V) x 2 B
   qwen2.5-72b:
     hf_id: "Qwen/Qwen2.5-72B-Instruct-AWQ"
     family: "qwen2.5"
@@ -305,6 +308,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
+    kv_bytes_per_token: 327680    # 320 KiB: layers x kv_heads x head_dim x 2 (K+V) x 2 B
   gemma2-9b:
     hf_id: "google/gemma-2-9b-it"
     family: "gemma2"
@@ -315,6 +319,7 @@ models:
     backend_args:
       vllm: ["--max-model-len=8192"]
       sglang: ["--context-length=8192"]
+    kv_bytes_per_token: 344064    # 336 KiB: layers x kv_heads x head_dim x 2 (K+V) x 2 B
   llama3.1-8b:
     hf_id: "meta-llama/Llama-3.1-8B-Instruct"
     family: "llama3"
@@ -885,7 +890,9 @@ colocations:
         backend: vllm
         model: qwen2.5-vl-7b
         workload: vlm_video_long
-        load: {pattern: poisson, rps: 1}   # cap derived → 0.26
+        # 2 rps ~= half of this tenant's measured 4+ rps ceiling. NOT swept
+        # with vlm_b: see the rps_sweep note below.
+        load: {pattern: poisson, rps: 2}   # cap derived → 0.26
 
       - name: vlm_b
         backend: vllm
@@ -898,13 +905,22 @@ colocations:
         # is not a confound.
         model: qwen3-vl-32b-fp8
         workload: vlm_video_long
+        # 0.15 rps ~= half of this tenant's measured 0.33 rps ceiling.
         # No explicit cap now: qwen3-vl-32b-fp8 carries weights_gb, so the cap
         # derives from the colocation's KV budget and BOTH tenants get an
         # absolute --kv-cache-memory-bytes. A cap here would be a total-device
         # target next to a co-resident neighbour, which is what broke
         # cross-vlm-prefill-vs-llm and the whole memory-pressure family.
-        load: {pattern: poisson, rps: 1}
-    rps_sweep: {tenant: "*", values: [0.5, 1, 2, 4]}
+        load: {pattern: poisson, rps: 0.15}
+    # NO rps_sweep. A "*" sweep moves both tenants to the same absolute rate,
+    # which asks where the PAIR saturates the card — meaningful only when the
+    # tenants have comparable ceilings, as same-llm's do. Measured here they are
+    # 12x apart: qwen2.5-vl-7b tracks its offered rate to 4 req/s while
+    # qwen3-vl-32b-fp8 pins at ~0.33 from 0.5 upward. The old [0.5, 1, 2, 4]
+    # sweep therefore ran three rungs above the 32B's ceiling and collapsed into
+    # one load point measured four times (achieved 0.30 / 0.29 / 0.28 / 0.24),
+    # while the 7B was still nearly idle. Each tenant now sits at ~half its own
+    # ceiling, which is the same relative load for both.
 
   # Two document/image models: high-resolution stills through a vision
   # encoder, heavy but far steadier than video. If §3 is right, this pair

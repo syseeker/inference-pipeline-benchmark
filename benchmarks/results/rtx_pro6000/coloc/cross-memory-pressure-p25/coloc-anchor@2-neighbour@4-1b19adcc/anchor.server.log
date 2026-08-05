@@ -17,3 +17,47 @@
 (APIServer pid=2531477) INFO 08-05 09:24:14 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
 WARNING 08-05 09:24:20 [nixl_utils.py:34] NIXL is not available
 WARNING 08-05 09:24:20 [nixl_utils.py:44] NIXL agent config is not available
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136] EngineCore failed to start.
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136] Traceback (most recent call last):
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1110, in run_engine_core
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     return func(*args, **kwargs)
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 842, in __init__
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     with self._perform_handshakes(
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/usr/lib/python3.10/contextlib.py", line 135, in __enter__
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     return next(self.gen)
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 966, in _perform_handshakes
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     with handshake as addresses:
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/usr/lib/python3.10/contextlib.py", line 135, in __enter__
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     return next(self.gen)
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1006, in _perform_handshake
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     addresses = self.startup_handshake(
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1046, in startup_handshake
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136]     raise RuntimeError(
+(EngineCore pid=2532004) ERROR 08-05 09:29:20 [core.py:1136] RuntimeError: Did not receive response from front-end process within 5 minutes
+(EngineCore pid=2532004) Process EngineCore:
+(EngineCore pid=2532004) Traceback (most recent call last):
+(EngineCore pid=2532004)   File "/usr/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore pid=2532004)     self.run()
+(EngineCore pid=2532004)   File "/usr/lib/python3.10/multiprocessing/process.py", line 108, in run
+(EngineCore pid=2532004)     self._target(*self._args, **self._kwargs)
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1140, in run_engine_core
+(EngineCore pid=2532004)     raise e
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1110, in run_engine_core
+(EngineCore pid=2532004)     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=2532004)     return func(*args, **kwargs)
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 842, in __init__
+(EngineCore pid=2532004)     with self._perform_handshakes(
+(EngineCore pid=2532004)   File "/usr/lib/python3.10/contextlib.py", line 135, in __enter__
+(EngineCore pid=2532004)     return next(self.gen)
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 966, in _perform_handshakes
+(EngineCore pid=2532004)     with handshake as addresses:
+(EngineCore pid=2532004)   File "/usr/lib/python3.10/contextlib.py", line 135, in __enter__
+(EngineCore pid=2532004)     return next(self.gen)
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1006, in _perform_handshake
+(EngineCore pid=2532004)     addresses = self.startup_handshake(
+(EngineCore pid=2532004)   File "/home/ubuntu/inference-pipeline-benchmark/.venv-vllm/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1046, in startup_handshake
+(EngineCore pid=2532004)     raise RuntimeError(
+(EngineCore pid=2532004) RuntimeError: Did not receive response from front-end process within 5 minutes
