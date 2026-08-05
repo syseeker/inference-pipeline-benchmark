@@ -1,0 +1,193 @@
+{
+  "colocation_id": "secondary-backend-cv-b",
+  "phase": 6,
+  "run_label": "coloc:secondary-backend-cv-b",
+  "is_solo": false,
+  "gpu": "rtx_pro6000",
+  "isolation_mode": "mps",
+  "duration_s": 120,
+  "n_tenants": 3,
+  "t0_epoch_ms": 1785918705470.2524,
+  "devices": [
+    0
+  ],
+  "tenants": [
+    {
+      "name": "llm",
+      "round": {
+        "backend": "vllm",
+        "model_id": "qwen2.5-72b",
+        "hf_id": "Qwen/Qwen2.5-72B-Instruct-AWQ",
+        "family": "qwen2.5",
+        "quantization": "awq",
+        "base_url": "http://localhost:8000/v1",
+        "port": 8000,
+        "launch_args": [
+          "--gpu-memory-utilization=0.90",
+          "--max-num-seqs=32",
+          "--max-model-len=8192"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "http",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "aiperf",
+      "load": {
+        "pattern": "poisson",
+        "rps": 2.0,
+        "output_tokens": 32
+      },
+      "workload": "llm_short",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/llm_short.jsonl"
+        ],
+        "output_tokens": 32
+      },
+      "gpu_memory_utilization": 0.52,
+      "kv_budget_gb": 6.0,
+      "triton_backend": null,
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "qwen2.5-14b",
+        "yolov8-l"
+      ],
+      "offered_rps": 2.0,
+      "achieved_rps": 1.968636372256415
+    },
+    {
+      "name": "llm2",
+      "round": {
+        "backend": "vllm",
+        "model_id": "qwen2.5-14b",
+        "hf_id": "Qwen/Qwen2.5-14B-Instruct",
+        "family": "qwen2.5",
+        "quantization": "bf16",
+        "base_url": "http://localhost:8001/v1",
+        "port": 8001,
+        "launch_args": [
+          "--gpu-memory-utilization=0.90",
+          "--max-num-seqs=32",
+          "--max-model-len=8192"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "http",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "aiperf",
+      "load": {
+        "pattern": "poisson",
+        "rps": 2.0,
+        "output_tokens": 32
+      },
+      "workload": "llm_short",
+      "workload_spec": {
+        "prompts": [
+          "workspace/contention/prompts/llm_short.jsonl"
+        ],
+        "output_tokens": 32
+      },
+      "gpu_memory_utilization": 0.39,
+      "kv_budget_gb": 6.0,
+      "triton_backend": null,
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "qwen2.5-72b",
+        "yolov8-l"
+      ],
+      "offered_rps": 2.0,
+      "achieved_rps": 1.97642393800222
+    },
+    {
+      "name": "cv",
+      "round": {
+        "backend": "triton",
+        "model_id": "yolov8-l",
+        "hf_id": "ultralytics/yolov8l",
+        "family": "cv-detect",
+        "quantization": "fp16",
+        "base_url": "http://localhost:8100",
+        "port": 8100,
+        "launch_args": [
+          "--allow-client-shm=true"
+        ],
+        "variant": null,
+        "trtllm_backend": null,
+        "transport": "triton",
+        "ckpt": null,
+        "ready_timeout_s": null,
+        "num_frames": null
+      },
+      "driver": "perf_analyzer",
+      "load": {
+        "pattern": "poisson",
+        "rps": 50.0,
+        "output_tokens": null
+      },
+      "workload": "cv_detect_default",
+      "workload_spec": {
+        "data": [
+          "workspace/contention/test_data/cv/sample_640x640.jpg"
+        ]
+      },
+      "gpu_memory_utilization": null,
+      "kv_budget_gb": null,
+      "triton_backend": "onnx",
+      "device": null,
+      "devices": [
+        0
+      ],
+      "co_tenants": [
+        "qwen2.5-14b",
+        "qwen2.5-72b"
+      ],
+      "offered_rps": 50.0,
+      "achieved_rps": null
+    }
+  ],
+  "gpu_sampler": {
+    "0": {
+      "sampler_backend": "dcgm",
+      "n_samples": 7122,
+      "mem_bw_util_pct_p50": 0.3,
+      "mem_bw_util_pct_peak": 100.0,
+      "gpu_util_pct_p50": 3.0,
+      "gpu_util_pct_peak": 100.0,
+      "fb_used_peak_gb": 82.2705078125,
+      "power_avg_w": 187.78573602920585,
+      "power_peak_w": 414.091
+    }
+  },
+  "environment": {
+    "interconnect": {
+      "available": true,
+      "error": null,
+      "topo_matrix": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tPIX\t0-47\t0\t\tN/A\nGPU1\tPIX\t X \t0-47\t0\t\tN/A\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n",
+      "nvlink_detected": false
+    },
+    "mps": {
+      "control_daemon_running": true,
+      "pipe_directory": "/tmp/nvidia-mps",
+      "container_pipe_directory": "/tmp/nvidia-mps",
+      "probe_error": null,
+      "detected": true
+    }
+  },
+  "warnings": [
+    "tenant 'cv': NO trace records \u2014 the driver produced no output, so this tenant served nothing. Check <run_dir>/cv.aiperf/ and <run_dir>/cv.server.log.",
+    "tenant 'cv': achieved_rps is None against an offered 50.0 \u2014 it served nothing. This run must not be used as a baseline or a window."
+  ],
+  "throttle_reasons": []
+}
