@@ -72,6 +72,55 @@ gemma-4-31b-it-fp8:
 Takes `same-vlm` with it — that colocation has no second VLM until either
 gemma-4 loads or another video-capable model is added.
 
+## 4b. `.venv-sglang` is broken — the whole SGLang arm produces no data (4 runs)
+
+`secondary-backend-llm-a/b` sweep `backend: [vllm, sglang]`. Every SGLang rung
+fails before the server starts, because `import sglang` itself raises:
+
+```
+transformers/integrations/hub_kernels.py:89  LayerRepository(
+kernels/layer/layer.py:77  ValueError: Either a revision or a version must be specified.
+```
+
+The venv has **transformers 5.6.0 + kernels 0.16.0**, which are mutually
+incompatible — transformers constructs a `LayerRepository` with neither a
+revision nor a version, which `kernels` 0.16 rejects. `.venv-vllm` is unaffected
+because it runs transformers 4.57.6 and has no `kernels` installed at all.
+
+Fix in `.venv-sglang` (either, verify with `python -c "import sglang"`):
+
+```bash
+.venv-sglang/bin/pip uninstall -y kernels        # transformers treats it as optional
+# or pin transformers to the version the vllm venv uses
+.venv-sglang/bin/pip install "transformers==4.57.6"
+```
+
+Do this **before** the next run — the failure is at import, so every SGLang
+tenant in the matrix is affected, not just phase 6.
+
+## 4c. `triton_backend: python` is not valid for `yolov8-l` (2 runs)
+
+```yaml
+secondary-backend-cv-a:   # extends mix-llm-cv
+  vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+secondary-backend-cv-b:   # extends mix-memory-bound
+  vary: {tenant: cv, field: triton_backend, values: [tensorrt, onnx, python]}
+```
+
+The `python` rung fails with
+
+```
+yolov8-l is a python-backend model but has no model.py at
+benchmarks/triton_python_models/yolov8-l/model.py
+```
+
+Only `kosmos-2.5` has a hand-authored `model.py`; `yolov8-l` runs TensorRT and
+ONNX. Either drop `python` from `values` (the backend comparison is still
+meaningful with two rungs), or author a `yolov8-l/model.py`. Dropping it is the
+smaller change and loses nothing the study asks about — the question is
+TensorRT-vs-ONNX cost, and a Python-backend YOLO would be slow for reasons that
+have nothing to do with contention.
+
 ## 5. Rates: the configured load is far below capacity
 
 | Colocation | Current sweep | Top rung reaches | Suggested |
