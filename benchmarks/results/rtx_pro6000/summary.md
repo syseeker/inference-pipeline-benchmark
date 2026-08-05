@@ -6,7 +6,7 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 
 ## 1. Contention analysis
 
-80 solo baseline(s), 92 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
+80 solo baseline(s), 93 contention window(s). Ratios are `contention / solo`; ▲ = degraded, ▼ = improved, ≈ = within 5%.
 
 - **Offered rps** — the rate the load generator was told to send.
 - **Achieved rps** — the rate it actually managed. Below offered means the tenant could not keep up; that is the safe-operating-envelope boundary, not a measurement error.
@@ -113,8 +113,10 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | cross-memory-pressure-kv29 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          3.9 |          ≈1.00× |   ▲1.83× |   ▲1.83× |    ▲1.73× |
 | cross-memory-pressure-p25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.8 |          ▼0.62× |   ▲1.69× |   ▲1.90× |    ▲1.99× |
 | cross-memory-pressure-p25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.4 |          ▼0.31× |   ▲2.19× |   ▲2.40× |    ▲2.66× |
+| cross-memory-pressure-p25 | 4     | anchor   | qwen2.5-72b              | vllm    |         2.0 |          0.4 |          ▼0.31× |   ▲2.16× |   ▲2.39× |    ▲2.65× |
 | cross-memory-pressure-p25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          2.2 |          ▼0.58× |  ▲10.63× |  ▲11.98× |   ▲32.66× |
 | cross-memory-pressure-p25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          1.1 |          ▼0.29× |  ▲17.52× |  ▲19.27× |   ▲54.77× |
+| cross-memory-pressure-p25 | 4     | neighbour | qwen2.5-7b               | vllm    |         4.0 |          1.1 |          ▼0.29× |  ▲17.44× |  ▲19.26× |   ▲54.98× |
 | cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲2.34× |   ▲2.82× |       n/a |
 | cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲1.82× |   ▲2.19× |       n/a |
 | cross-size-scaling     | 4     | cv       | yolov8-l                 | triton  |        50.0 |         49.2 |          ≈0.97× |   ▲2.28× |   ▲2.55× |       n/a |
@@ -247,11 +249,11 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | qwen2.5-14b | yolov8-l | ▼0.32× |
 | qwen2.5-32b | yolov8-l | ▼0.32× |
 | qwen2.5-72b | qwen2.5-14b, yolov8-l | ▼0.79× |
-| qwen2.5-72b | qwen2.5-7b | ▼0.64× |
+| qwen2.5-72b | qwen2.5-7b | ▼0.79× |
 | qwen2.5-72b | yolov8-l | ▼0.31× |
 | qwen2.5-7b | gemma2-9b | ▲17.44× |
 | qwen2.5-7b | kosmos-2.5, qwen2.5-vl-7b, yolov8-l | ▲1.31× |
-| qwen2.5-7b | qwen2.5-72b | ▲5.39× |
+| qwen2.5-7b | qwen2.5-72b | ▲6.55× |
 | qwen2.5-7b | yolov8-l | ≈1.02× |
 | qwen2.5-vl-7b | dinov2-base | ≈1.02× |
 | qwen2.5-vl-7b | gemma2-9b | ▲1.32× |
@@ -279,6 +281,8 @@ Decision metrics drive go/no-go (see docs/metrics.md). Diagnostics explain *why*
 | same-vlm | vlm_b | qwen3-vl-32b-fp8 | 4.0 | 0.2 | 0.06× |
 | same-vlm | vlm_b | qwen3-vl-32b-fp8 | 2.0 | 0.3 | 0.14× |
 | cross-memory-pressure-p25 | anchor | qwen2.5-72b | 2.0 | 0.4 | 0.20× |
+| cross-memory-pressure-p25 | anchor | qwen2.5-72b | 2.0 | 0.4 | 0.20× |
+| cross-memory-pressure-p25 | neighbour | qwen2.5-7b | 4.0 | 1.1 | 0.27× |
 | cross-memory-pressure-p25 | neighbour | qwen2.5-7b | 4.0 | 1.1 | 0.27× |
 | same-vlm | vlm_b | qwen3-vl-32b-fp8 | 1.0 | 0.3 | 0.29× |
 | cross-memory-pressure-p25 | anchor | qwen2.5-72b | 2.0 | 0.8 | 0.39× |

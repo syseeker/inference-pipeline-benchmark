@@ -124,21 +124,21 @@ def test_extends_merges_tenants_by_name_not_by_position(cfg):
     """A child overriding one field of one tenant must inherit the rest —
     positional merging would silently drop the parent's settings.
 
-    cross-memory-pressure-p130 is the sharpest case in the config: it extends
-    -p25 and overrides nothing but the two KV budgets, so every model, workload
+    cross-deploy-split-s75 is the sharpest case in the config: it extends
+    -s50 and overrides nothing but the two KV budgets, so every model, workload
     and rate has to survive the merge untouched. That is also the invariant the
     whole curve rests on — if a model changed between rungs, the curve would
     be measuring the model rather than the KV cache.
     """
-    coloc = next(r for r in _coloc_runs(cfg, "cross-memory-pressure-p130")
+    coloc = next(r for r in _coloc_runs(cfg, "cross-deploy-split-s75")
                  if not r.is_solo)
     anchor = next(t for t in coloc.tenants if t.name == "anchor")
     neighbour = next(t for t in coloc.tenants if t.name == "neighbour")
 
-    assert anchor.kv_budget_gb == 19.1, "child override applied"
+    assert anchor.kv_budget_gb == 21.0, "child override applied"
     assert anchor.round.model_id == "qwen2.5-72b", "parent model inherited"
     assert anchor.load.rps == 2.0, "parent load inherited"
-    assert neighbour.kv_budget_gb == 3.34, "child override applied"
+    assert neighbour.kv_budget_gb == 7.0, "child override applied"
     assert neighbour.round.model_id == "qwen2.5-7b", "parent model inherited"
     assert neighbour.workload == "llm_long", "parent workload inherited"
 
@@ -233,10 +233,10 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
     """Near-OOM behaviour is bimodal — the model either fits or thrashes, and
     the mean of those two states describes neither. The spread across repeats
     is the finding, so the runs have to actually exist."""
-    colocs = [r for r in _coloc_runs(cfg, "cross-memory-pressure-p130") if not r.is_solo]
+    colocs = [r for r in _coloc_runs(cfg, "cross-deploy-split-s75") if not r.is_solo]
     assert len(colocs) == 3
     assert [c.repetition for c in colocs] == [1, 2, 3]
-    assert {c.run_label for c in colocs} == {"coloc:cross-memory-pressure-p130"}, (
+    assert {c.run_label for c in colocs} == {"coloc:cross-deploy-split-s75"}, (
         "repeats are samples of one experiment, not three experiments"
     )
 
@@ -244,7 +244,7 @@ def test_repetitions_emit_one_window_per_repeat(cfg):
 def test_repetitions_do_not_multiply_the_baselines(cfg):
     """Baselines dedup by `_solo_key` here and are cached again per session by
     the orchestrator, so a repeated baseline would be dropped anyway."""
-    solos = [r for r in _coloc_runs(cfg, "cross-memory-pressure-p130") if r.is_solo]
+    solos = [r for r in _coloc_runs(cfg, "cross-deploy-split-s75") if r.is_solo]
     assert len(solos) == 2, "one per tenant, not one per tenant per repeat"
 
 
@@ -666,74 +666,14 @@ def test_cross_sweeps_move_one_tenant_and_hold_the_subject(cfg, name):
 # buys 5.7x more tokens on the 7B than on the 72B, so a shared byte figure
 # pressured the two tenants completely differently.
 MEMORY_PRESSURE_CURVE = [
-    "cross-memory-pressure-p25",
-    "cross-memory-pressure-p50",
-    "cross-memory-pressure-p75",
-    "cross-memory-pressure-p100",
-    "cross-memory-pressure-p130",
+    "cross-deploy-split-s50",
+    "cross-deploy-split-s75",
+    "cross-deploy-split-s85",
 ]
 # GiB to hold 32 concurrent llm_long requests (1,501 tokens each), measured:
 # 72B at 320 KiB/token, 7B at 56 KiB/token.
-SATURATION_GIB = {"anchor": 14.66, "neighbour": 2.57}
-
-
-def test_memory_pressure_curve_climbs_towards_the_ceiling(cfg):
-    """Four points from comfortable to near-OOM. Non-monotone reservation
-    would mean the curve doubles back and the knee is unlocatable."""
-    reserved = []
-    for name in MEMORY_PRESSURE_CURVE:
-        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
-        assert len(c.tenants) == 2
-        reserved.append(sum(t.gpu_memory_utilization for t in c.tenants))
-    assert reserved == sorted(reserved), reserved
-    # The curve is now sized to the TENANTS' saturation point (the KV needed to
-    # hold --max-num-seqs=32 llm_long requests), not to the card's ceiling, so
-    # the top rung reserves 0.86 rather than approaching 1.0. Filling the card
-    # was never the question — where the cache stops holding the working set is.
-    assert reserved[-1] > 0.80, "the top rung still has to commit most of the card"
-    assert reserved[-1] <= 1.0, "and must still be loadable"
-
-
-def test_memory_pressure_moves_the_kv_cache_and_nothing_else(cfg):
-    """KV is the single independent variable, so it must move monotonically —
-    and the models must NOT move with it.
-
-    Note the direction. The customer's ladder swapped in a bigger neighbour at
-    each rung, so KV *shrank* as reservation grew. Here the models are fixed
-    and only the budgets move, so KV *grows* along the curve: p25 is the
-    starved end (where the eviction cliff should be) and p130 is the control
-    with 30% headroom. Asserting the old direction would be asserting the old
-    confound.
-    """
-    kv, models = [], []
-    for name in MEMORY_PRESSURE_CURVE:
-        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
-        t = next(t for t in c.tenants if t.name == "neighbour")
-        kv.append(t.kv_budget_gb)
-        models.append(tuple(sorted(x.round.model_id for x in c.tenants)))
-        assert t.kv_budget_gb is not None, (
-            "KV must be stated absolutely: a cap is a total-device target, so a "
-            "colocated tenant subtracts its neighbour's memory from its own "
-            "allowance and derives a negative cache"
-        )
-    assert kv == sorted(kv), f"KV must move monotonically along the curve: {kv}"
-    assert len(set(models)) == 1, (
-        f"the models must be identical at every rung, else a throughput drop "
-        f"could be the model rather than the cache: {set(models)}"
-    )
-
-
-def test_memory_pressure_holds_the_kv_split_between_tenants(cfg):
-    """Only the TOTAL KV may move. If the anchor:neighbour split drifted too,
-    the curve would have two variables and neither tenant's cliff would be
-    attributable."""
-    ratios = []
-    for name in MEMORY_PRESSURE_CURVE:
-        c = next(r for r in _coloc_runs(cfg, name) if not r.is_solo)
-        kv = {t.name: t.kv_budget_gb for t in c.tenants}
-        ratios.append(kv["anchor"] / kv["neighbour"])
-    # 2 dp caps cannot hit an exact ratio; hold it to a band rather than a value.
-    assert max(ratios) - min(ratios) < 0.5, f"KV split drifts across rungs: {ratios}"
+DEPLOY_ALONE = {"qwen2.5-72b": 46.0, "qwen2.5-7b": 70.0}
+LEFTOVER_GIB = 28.0
 
 
 def test_memory_pressure_holds_the_offered_load_constant(cfg):
@@ -1046,36 +986,6 @@ def test_tenant_level_kv_budget_wins(cfg):
     assert overridden.gpu_memory_utilization < inherited.gpu_memory_utilization, (
         "a smaller KV budget must derive a smaller cap"
     )
-
-
-@pytest.mark.parametrize("name,frac", [
-    ("cross-memory-pressure-p25", 0.25),
-    ("cross-memory-pressure-p50", 0.50),
-    ("cross-memory-pressure-p75", 0.75),
-    ("cross-memory-pressure-p100", 1.00),
-    ("cross-memory-pressure-p130", 1.30),
-])
-def test_memory_pressure_rungs_provision_the_fraction_they_are_named_for(cfg, name, frac):
-    """The suffix is the percentage of the KV needed to hold 32 concurrent
-    llm_long requests. A rung that provisions something else is measuring a
-    curve it does not describe.
-
-    The old kv<GB> scheme is what this replaces: it used gpu_memory_utilization,
-    a TOTAL-DEVICE target, so a colocated tenant subtracted its neighbour's
-    resident memory from its own allowance and derived a negative cache — all
-    12 contention runs died with "No available memory for the cache blocks".
-    Then, once converted to kv_budget_gb, it turned out a shared byte figure
-    put the 72B at 19 of 32 sequences while the 7B sat at 49, i.e. one tenant
-    evicting hard and the other not at all.
-    """
-    coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
-    for t in coloc.tenants:
-        want = SATURATION_GIB[t.name] * frac
-        assert t.kv_budget_gb == pytest.approx(want, abs=0.06), (
-            f"{name}/{t.name}: {t.kv_budget_gb} GiB is not {frac:.0%} of "
-            f"{SATURATION_GIB[t.name]}"
-        )
-    assert sum(t.gpu_memory_utilization for t in coloc.tenants) < 1.0
 
 
 def test_memory_pressure_rungs_clear_vllms_minimum_viable_kv(cfg):
@@ -1447,3 +1357,53 @@ def test_solo_baselines_are_not_shared_across_different_kv_budgets(cfg):
                     f"{name}/{t.name} (kv={t.kv_budget_gb}) shares a baseline with "
                     f"{prev[0]}/{prev[1]} (kv={prev[2]})"
                 )
+
+
+# ── the deployment family ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name", MEMORY_PRESSURE_CURVE)
+def test_deploy_splits_divide_the_same_leftover(cfg, name):
+    """Every split allocates the SAME total, or the sweep changes how much
+    memory exists rather than how it is divided — two variables, not one."""
+    coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+    total = sum(t.kv_budget_gb for t in coloc.tenants)
+    assert total == pytest.approx(LEFTOVER_GIB, abs=0.05), f"{name} splits {total}"
+    assert sum(t.gpu_memory_utilization for t in coloc.tenants) < 1.0
+
+
+@pytest.mark.parametrize("name", MEMORY_PRESSURE_CURVE)
+def test_colocation_actually_shrinks_each_cache(cfg, name):
+    """The point of this family: the neighbour must COST cache. Its predecessor
+    pinned the same cache in both arms, so it measured compute contention only
+    and could not answer 'what does adding a second model cost'."""
+    coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+    for t in coloc.tenants:
+        alone = DEPLOY_ALONE[t.round.model_id]
+        assert t.kv_budget_gb < alone, (
+            f"{name}/{t.name} keeps {t.kv_budget_gb} GiB of its {alone} solo cache"
+        )
+
+
+def test_the_alone_references_get_the_whole_card(cfg):
+    """The baseline is 'this model with the card to itself'. Size it like a
+    colocated tenant and the ratio understates the neighbour's cost."""
+    for name, model in (("cross-deploy-alone-72b", "qwen2.5-72b"),
+                        ("cross-deploy-alone-7b", "qwen2.5-7b")):
+        coloc = next(c for c in _coloc_runs(cfg, name) if not c.is_solo)
+        assert len(coloc.tenants) == 1
+        t = coloc.tenants[0]
+        assert t.round.model_id == model
+        assert t.kv_budget_gb == pytest.approx(DEPLOY_ALONE[model])
+        assert t.kv_budget_gb > LEFTOVER_GIB
+
+
+def test_s85_is_where_both_tenants_hold_the_same_sequences(cfg):
+    """A 72B token costs 320 KiB against the 7B's 56, so equal GIGABYTES is not
+    equal capacity. s85 equalises requests held — the fair point, nowhere near
+    50/50."""
+    per_kib = {"qwen2.5-72b": 320, "qwen2.5-7b": 56}
+    coloc = next(c for c in _coloc_runs(cfg, "cross-deploy-split-s85") if not c.is_solo)
+    seqs = {t.name: t.kv_budget_gb * 1024 * 1024 / per_kib[t.round.model_id] / 1501
+            for t in coloc.tenants}
+    a, b = seqs["anchor"], seqs["neighbour"]
+    assert abs(a - b) / max(a, b) < 0.05, f"s85 should equalise sequences: {seqs}"

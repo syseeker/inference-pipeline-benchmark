@@ -1826,7 +1826,7 @@ def test_solo_key_and_manifest_key_have_the_same_shape():
     from benchmarks.scenario_config import load_gpu_config, iter_colocation
 
     cfg = load_gpu_config("rtx_pro6000")
-    coloc = next(c for c in iter_colocation(cfg, "cross-memory-pressure-p50") if c.is_solo)
+    coloc = next(c for c in iter_colocation(cfg, "cross-deploy-split-s50") if c.is_solo)
     t = coloc.tenants[0]
     want = _solo_key(t)
     fake = {"tenants": [{
