@@ -52,6 +52,46 @@ A screening result with no curve behind it tells you a pairing costs *something*
 at *one* load. A curve with no screening behind it tells you a great deal about
 a pairing you had no reason to care about.
 
+## Contents
+
+- [Reading the tables](#reading-the-tables)
+- [What the phases build toward](#what-the-phases-build-toward)
+- [Phase 2 — Same-category pairs](#phase-2--same-category-pairs)
+  - [Implemented](#implemented)
+  - [Not implemented, and why](#not-implemented-and-why)
+  - [What to observe](#what-to-observe)
+- [Phase 3 — Mixed pairings at one fixed load](#phase-3--mixed-pairings-at-one-fixed-load)
+  - [Implemented](#implemented-1)
+  - [Not implemented, and why](#not-implemented-and-why-1)
+  - [What to observe](#what-to-observe-1)
+- [Phase 4 — Cross-type characterisation](#phase-4--cross-type-characterisation)
+  - [Implemented](#implemented-2)
+  - [Not implemented, and why](#not-implemented-and-why-2)
+  - [What to observe](#what-to-observe-2)
+- [Phase 5 — Two GPUs (placement)](#phase-5--two-gpus-placement)
+  - [Implemented](#implemented-3)
+  - [Not implemented, and why](#not-implemented-and-why-3)
+  - [What to observe](#what-to-observe-3)
+- [Phase 6 — Secondary dimensions](#phase-6--secondary-dimensions)
+  - [Implemented](#implemented-4)
+  - [Not implemented, and why](#not-implemented-and-why-4)
+  - [What to observe](#what-to-observe-4)
+- [What the study establishes, across all phases](#what-the-study-establishes-across-all-phases)
+- [Tuning for the next run](#tuning-for-the-next-run)
+  - [The inference backends were never tuned, and one default set a headline number](#the-inference-backends-were-never-tuned-and-one-default-set-a-headline-number)
+  - [The configured rates are far below capacity](#the-configured-rates-are-far-below-capacity)
+  - [gemma-4-31b-it-fp8 cannot be served — half fixed, and the other half is silently inert](#gemma-4-31b-it-fp8-cannot-be-served--half-fixed-and-the-other-half-is-silently-inert)
+  - [Sweeps that never reach a knee](#sweeps-that-never-reach-a-knee)
+  - [The cache was never the constraint, so the splits measured nothing they claimed](#the-cache-was-never-the-constraint-so-the-splits-measured-nothing-they-claimed)
+  - [cross-size-scaling varies size and load fraction together](#cross-size-scaling-varies-size-and-load-fraction-together)
+  - [Do not read the cap sum as memory pressure](#do-not-read-the-cap-sum-as-memory-pressure)
+  - [The weights_gb estimates are verified — from the server logs](#the-weights_gb-estimates-are-verified--from-the-server-logs)
+  - [RESOLVED — gpu_memory_utilization cannot apportion memory, and every colocation that needed a budget now has one](#resolved--gpu_memory_utilization-cannot-apportion-memory-and-every-colocation-that-needed-a-budget-now-has-one)
+  - [duration_s propagates through extends:, and sweeps multiply it](#duration_s-propagates-through-extends-and-sweeps-multiply-it)
+  - [The driver timeout shares one deadline across tenants](#the-driver-timeout-shares-one-deadline-across-tenants)
+  - [One repetition is not enough at low utilisation](#one-repetition-is-not-enough-at-low-utilisation)
+  - [A measurement artifact to know about](#a-measurement-artifact-to-know-about)
+
 ---
 
 ## Phase 2 — Same-category pairs

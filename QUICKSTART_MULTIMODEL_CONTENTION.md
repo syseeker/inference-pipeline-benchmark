@@ -272,7 +272,7 @@ bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv
 
 **What runs:** three windows, baselines first.
 
-| | Tenants |
+| Window | Tenants |
 |---|---|
 | solo | qwen2.5-7b @4 rps, alone |
 | solo | yolov8-l @50 rps, alone |
@@ -287,7 +287,7 @@ scripts/check_mps_clients.sh
 
 It prints one of four verdicts:
 
-| | Meaning |
+| Verdict | Meaning |
 |---|---|
 | `IDLE` | Nothing on the GPU. Between windows — re-run in a moment |
 | `PASS` … `Only one tenant` | A solo baseline. Correct, but not the check you want |
@@ -491,25 +491,28 @@ bench summary --gpu rtx_pro6000
 python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_dir>/
 ```
 
-The **Contention analysis** section of `summary.md` gives three things (numbered §10 alongside a single-model sweep, §1 in a contention-only results dir):
+The **Contention analysis** section of `summary.md` gives three things (numbered
+§10 alongside a single-model sweep, §1 in a contention-only results dir):
 
 - **Degradation table** — throughput retention and p50/p95/TTFT ratios per
   tenant against its matched solo baseline. The primary result.
 - **Contention matrix** — p95 ratio by victim × aggressor. **Read it both
   ways**; contention is not symmetric, and the asymmetry is usually the most
   actionable finding.
-
-  This is why the `cross-*` pairs are not duplicates. `cross-llm-vs-cv-rps` and
-  `cross-cv-vs-llm-rps` share the same two tenants and differ only in which
-  one's rate is swept — the names read `victim-vs-aggressor`, so the aggressor
-  is the one that moves:
-
-  | Colocation | Sweeps | Held fixed | Answers |
-  |---|---|---|---|
-  | `cross-llm-vs-cv-rps` | cv `1 → 200` rps | llm @4 | how much CV load costs the LLM |
-  | `cross-cv-vs-llm-rps` | llm `1 → 64` rps | cv @50 | how much LLM load costs the CV |
 - **Safe-operating envelope** — where `achieved_rps` fell below `offered_rps`.
   That is the deployment limit, and it comes free from open-loop load.
+
+### Why the `cross-*` pairs are not duplicates
+
+Because contention is not symmetric. `cross-llm-vs-cv-rps` and
+`cross-cv-vs-llm-rps` share the same two tenants and differ only in which one's
+rate is swept — the names read `victim-vs-aggressor`, so the aggressor is the
+one that moves:
+
+| Colocation | Sweeps | Held fixed | Answers |
+|---|---|---|---|
+| `cross-llm-vs-cv-rps` | cv `1 → 200` rps | llm @4 | how much CV load costs the LLM |
+| `cross-cv-vs-llm-rps` | llm `1 → 64` rps | cv @50 | how much LLM load costs the CV |
 
 `align_traces.py` is the diagnostic view of a single run: every tenant's
 requests on one wall clock, so you can show that the LLM's p99 spike lands

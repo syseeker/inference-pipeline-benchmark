@@ -9,6 +9,28 @@ the model list lives in
 [reference/model-catalogue.md](../skills/gpu-contention-benchmark/reference/model-catalogue.md).
 Read this one first.
 
+## Contents
+
+- [1. The question](#1-the-question)
+- [2. The baseline is the hard part](#2-the-baseline-is-the-hard-part)
+  - [2a. Same request rate](#2a-same-request-rate)
+  - [2b. Same KV cache — the memory allocation trap](#2b-same-kv-cache--the-memory-allocation-trap)
+  - [2c. Same clocks](#2c-same-clocks)
+- [3. Why the four model types contend differently](#3-why-the-four-model-types-contend-differently)
+  - [The consequence: contention is not symmetric](#the-consequence-contention-is-not-symmetric)
+  - [Measured, 2026-08-04 — the rule the data supports](#measured-2026-08-04--the-rule-the-data-supports)
+- [4. Architecture — one GPU](#4-architecture--one-gpu)
+  - [The memory budget](#the-memory-budget)
+- [5. Architecture — more than one GPU](#5-architecture--more-than-one-gpu)
+  - [Mode A — separate GPUs (isolation)](#mode-a--separate-gpus-isolation)
+  - [Mode B — tensor parallel](#mode-b--tensor-parallel)
+  - [Mode C — packing](#mode-c--packing)
+  - [What changes in the measurement](#what-changes-in-the-measurement)
+- [6. How to read the output](#6-how-to-read-the-output)
+  - [Sanity checks before believing any of it](#sanity-checks-before-believing-any-of-it)
+- [7. Where this sits](#7-where-this-sits)
+  - [The mix-up, with numbers](#the-mix-up-with-numbers)
+
 ---
 
 ## 1. The question
@@ -267,7 +289,7 @@ So "model A and model B contend" is not one number — it's two, and they're
 often very different. That's why `summary.py` reports a **victim × aggressor
 matrix** rather than a single score per pair.
 
-### Measured, 2026-08-04 — and the prediction was wrong
+### Measured, 2026-08-04 — the rule the data supports
 
 The reasoning above says to pair tenants that stress *different* resources.
 Phase 5 tested that on 2× RTX PRO 6000 by splitting `mix-full`'s four tenants
@@ -281,11 +303,11 @@ own solo baseline on the same card:
 | P1 | llm + vlm | ilm + cv | 1.95× | 1.38× |
 | **P2** | **llm + ilm** | **vlm + cv** | **1.46×** | **1.23×** |
 
-The prediction on record was **P1 best, P3 middle, P2 worst**. The measurement
-is close to the reverse: **P2 is best on both worst-tenant and mean**, and P1 —
-the predicted winner — is second worst by tail.
+**P2 wins on both worst-tenant and mean**, and every split beats one card. The
+gap between best and worst placement is 1.5×, so which pair you separate matters
+about as much as adding the second card at all.
 
-Two rules the data does support, each with a clean contrast behind it:
+Two rules, each with a clean contrast behind it:
 
 **1. Never co-locate the two vLLM tenants.** In P1 the LLM and VLM share GPU 0
 and the VLM pays **1.95×**. In P2 and P3, where they are split, the VLM sits at
