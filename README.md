@@ -79,11 +79,19 @@ scenarios — a colocation names its tenants, their models, their VRAM budget an
 the request rate each is driven at.
 
 ```bash
-python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000   # gate: do tenants really overlap?
-bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv       # one colocation
-bench coloc --gpu rtx_pro6000 --all --resume      # the whole study, one command
-bench summary --gpu rtx_pro6000                             # contention section
+# The gate — if tenants do not genuinely overlap, nothing below means anything.
+python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
+
+bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv          # one colocation
+
+# The single-GPU study: every phase except placement. 36 colocations, 145 runs.
+bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --phase 4 --phase 6 --resume
+
+# Everything, placement included — needs both cards. 41 colocations, 154 runs.
+bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 ```
+
+`summary.md` is regenerated when a run finishes; `--no-summary` skips it.
 
 > **Measured on hardware.** 33 hours on 2× RTX PRO 6000, 201 runs, 41
 > colocations across all seven phases. Adding a `qwen2.5-7b` to a card already
@@ -262,8 +270,12 @@ see [docs/gpu-strategy.md](docs/gpu-strategy.md).
 | File | What's in it |
 |---|---|
 | [docs/contention.md](docs/contention.md) | **Start here.** What a degradation ratio means, why the baseline is the hard part, how the four model types contend, single- and multi-GPU topologies |
-| [docs/contention-phases.md](docs/contention-phases.md) | Per phase: the customer's intent, the colocations built against it with every configured value, what was not implemented and why, and what to observe |
-| [skills/gpu-contention-benchmark/](skills/gpu-contention-benchmark/) | The skill, its design record, and the GPU validation checklist to work through on first hardware contact |
+| [docs/contention-phases.md](docs/contention-phases.md) | Per phase: the intent, the colocations built against it with every configured value, what each measured, what was not implemented and why, and the tuning list for the next run |
+| [hardware-run-2026-08-05.md](skills/gpu-contention-benchmark/reference/hardware-run-2026-08-05.md) | **The run record.** 33 h on 2× PRO 6000: results worth quoting, the fourteen root causes found on first hardware contact, and what to change next. Read before redesigning any experiment |
+| [docs/findings/kv-cache-knee-and-prefix-caching.md](docs/findings/kv-cache-knee-and-prefix-caching.md) | The KV knee is 5–7 GiB, a 7B needs under 1, and why three successive designs of the memory-pressure experiment measured nothing |
+| [docs/findings/same-llm-colocation-envelope.md](docs/findings/same-llm-colocation-envelope.md) | Two LLMs: flat 1.6–1.9× to 16 req/s, then a 33–37× queue collapse that utilisation monitoring cannot see |
+| [docs/next-run/config-changes.md](docs/next-run/config-changes.md) | Ready-to-apply config changes for the next run, with the measurement behind each |
+| [skills/gpu-contention-benchmark/](skills/gpu-contention-benchmark/) | The skill itself, its design record, the model catalogue and the serving-topology rationale |
 
 **Agent integration**
 
@@ -286,8 +298,9 @@ and Nsight profiling.
 
 **Measured.** The multi-model contention benchmark ran for 33 hours on 2× RTX
 PRO 6000 (2026-08-04/05): 201 runs across 41 colocations and all seven phases,
-under 428 unit tests. `summary.md` §1 carries the degradation table, the
-victim × aggressor matrix and the safe-operating envelope.
+under 428 unit tests. `summary.md`'s **Contention analysis** section carries the
+degradation table, the victim × aggressor matrix and the safe-operating
+envelope.
 
 First hardware contact found fourteen bugs the unit tests could not reach —
 nearly all in the seam between a correct function and its caller, and most

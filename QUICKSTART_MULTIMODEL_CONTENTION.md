@@ -452,6 +452,12 @@ bench coloc --gpu rtx_pro6000 --colocation place-isolated
 bench coloc --gpu rtx_pro6000 --colocation place-p1    # [LLM+VLM] | [ILM+CV]
 bench coloc --gpu rtx_pro6000 --colocation place-p2    # [LLM+ILM] | [VLM+CV]
 bench coloc --gpu rtx_pro6000 --colocation place-p3    # [LLM+CV]  | [VLM+ILM]
+
+# The prefill burst on its own card — does the LLM's ITL spike survive the split?
+bench coloc --gpu rtx_pro6000 --colocation place-vlm-prefill-split
+
+# Or all five at once
+bench coloc --gpu rtx_pro6000 --phase 5 --continue-on-error --resume
 ```
 
 **`place-isolated` must return a ratio ≈ 1.0.** Its two tenants are on
@@ -477,7 +483,11 @@ up to 7; this study is scoped to 2 GPUs.
 
 **CLI:**
 ```bash
+# summary.md was already regenerated when the run finished — this only rebuilds
+# it on demand (after editing analysis code, or if you ran with --no-summary).
 bench summary --gpu rtx_pro6000
+
+# The single-run diagnostic view: every tenant's requests on one wall clock.
 python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<run_dir>/
 ```
 
