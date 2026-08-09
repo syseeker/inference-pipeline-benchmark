@@ -1242,7 +1242,7 @@ def run_dir_for(root: Path, coloc: Colocation) -> Path:
         <root>/_baselines/solo-<tenant><rps>-<model>-<h8>/
         <root>/<colocation-id>/coloc-<tenant><rps>…[-r<N>]-<h8>/
 
-    Three properties this has to hold, now that one plan spans 39 colocations
+    Three properties this has to hold, now that one plan spans 41 colocations
     and the run index is global:
 
     1. Findable. Contention windows sit under their colocation id, so

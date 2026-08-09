@@ -77,8 +77,8 @@ describe the lightly loaded regime.
 First hardware contact found **fourteen** bugs the unit tests could not reach,
 nearly all in the seam between a correct function and its caller, and most
 invisible until an earlier one was fixed. Every one has a regression test.
-Details and the remaining open items:
-[reference/gpu-validation.md](reference/gpu-validation.md).
+Details, root causes and the remaining open items:
+[reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md).
 
 **This table is the handoff record** — read it first, update it as you complete
 a step, and commit the change.
@@ -156,12 +156,12 @@ Step-by-step walkthrough with agent prompts: [QUICKSTART_MULTIMODEL_CONTENTION.m
 
 Phases follow the structure in `workspace/contention/experiment_design.md`.
 
-> **First session on real hardware?** The harness was built and unit-tested
-> without a GPU. Work through
-> [reference/gpu-validation.md](reference/gpu-validation.md)
-> before trusting any number it produces — it lists every assumption made
-> without hardware, ordered by how much work each one invalidates if wrong.
-> The weight estimates that set every VRAM cap are top of that list.
+> **Read the run record before redesigning anything.**
+> [reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md)
+> covers 33 hours on 2× RTX PRO 6000 — what the numbers were, the fourteen
+> root causes found on first hardware contact, and the tuning list. Three
+> successive designs of the memory-pressure family produced meaningless flat
+> curves for a reason that has nothing to do with how the rungs were sized.
 
 ### Prerequisites — once per machine, before any run
 
@@ -363,7 +363,7 @@ python3 scripts/align_traces.py benchmarks/results/rtx_pro6000/coloc/<colocation
 
 ## Pinned references
 
-- [reference/gpu-validation.md](reference/gpu-validation.md) — **every assumption made without a GPU**, ordered by what each invalidates. Work through it on first hardware contact; delete it once its answers are absorbed
+- [reference/hardware-run-2026-08-05.md](reference/hardware-run-2026-08-05.md) — **the 2026-08-04/05 run**: results worth quoting, the fourteen root causes, and what to change next. Read before redesigning any experiment
 - [docs/contention.md](../../docs/contention.md) — **start here**: what a degradation ratio means, why the solo baseline must be handicapped, how the four model types contend, and the single- and multi-GPU topologies. Written for customers too
 - [reference/design-decisions.md](reference/design-decisions.md) — the methodology and *why*: open-loop, clock policy, sampler ownership, timestamps, repetition policy
 - [reference/model-catalogue.md](reference/model-catalogue.md) — verified model sources, per-GPU scoping, and which picks are broken

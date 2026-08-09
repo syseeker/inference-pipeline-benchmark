@@ -85,11 +85,12 @@ bench coloc --gpu rtx_pro6000 --all --resume      # the whole study, one command
 bench summary --gpu rtx_pro6000                             # contention section
 ```
 
-> **Hardware validation in progress.** 41 colocations covering all seven
-> phases, under 428 unit tests. The Phase 0 gate, the solo baselines and a
-> Triton CV tenant now run on a PRO 6000 — but **no two-tenant contention
-> window has completed**, so no degradation ratio exists yet. Open items:
-> [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md).
+> **Measured on hardware.** 33 hours on 2× RTX PRO 6000, 201 runs, 41
+> colocations across all seven phases. Adding a `qwen2.5-7b` to a card already
+> running a `qwen2.5-72b` keeps 58% and 65% of solo throughput while aggregate
+> *rises* — the co-location trade in one line. Two LLMs cost a flat 1.6–1.9×
+> to 16 req/s, then 33–37× at 64. Full record:
+> [hardware-run-2026-08-05.md](skills/gpu-contention-benchmark/reference/hardware-run-2026-08-05.md).
 
 ### 3. NitroGen policy
 
@@ -283,15 +284,18 @@ quantization chain (modelopt calibration → ONNX export → TRT plan compile);
 GPU sampling via DCGM with an nvidia-smi fallback; AIPerf concurrency sweeps;
 and Nsight profiling.
 
-**Hardware validation in progress.** The multi-model contention benchmark —
-orchestrator, per-GPU Triton containers, VRAM cap derivation, contention
-analysis, and 41 colocations covering all seven phases of the study. 428 unit
-tests pass. As of 2026-08-04 the Phase 0 gate gives 2.07x overlap on a PRO
-6000, the solo baselines run, and a Triton CV container loads inside MPS —
-but no contention window has completed, so **no degradation ratio has been
-produced yet**. First hardware contact found eight bugs the unit tests could
-not reach; details and what is still open are in
-[the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md).
+**Measured.** The multi-model contention benchmark ran for 33 hours on 2× RTX
+PRO 6000 (2026-08-04/05): 201 runs across 41 colocations and all seven phases,
+under 428 unit tests. `summary.md` §1 carries the degradation table, the
+victim × aggressor matrix and the safe-operating envelope.
+
+First hardware contact found fourteen bugs the unit tests could not reach —
+nearly all in the seam between a correct function and its caller, and most
+invisible until an earlier one was fixed. Every one has a regression test.
+The run record, root causes and what to do next:
+[hardware-run-2026-08-05.md](skills/gpu-contention-benchmark/reference/hardware-run-2026-08-05.md).
+Findings: [the KV knee and prefix caching](docs/findings/kv-cache-knee-and-prefix-caching.md),
+[the same-llm envelope](docs/findings/same-llm-colocation-envelope.md).
 
 **Placeholders.** The vision encoder is a passthrough and the executor is
 dry-run, so `command_success_rate` currently tracks `grammar_validity_rate`.

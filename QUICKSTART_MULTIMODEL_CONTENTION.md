@@ -12,12 +12,11 @@ First useful number in about 20 minutes. The full study is hours.
 > that doc explains the one rule everything rests on: between the baseline and
 > the contention run, the neighbour must be the only thing that changed.
 
-> **Hardware validation is partway through.** Setup, the Phase 0 gate and the
-> solo baselines are proven on a PRO 6000; no contention window has completed,
-> so no degradation ratio exists yet. Several hardware assumptions are still
-> unverified — work through
-> [the validation record](skills/gpu-contention-benchmark/reference/gpu-validation.md)
-> as you go; it is ordered by how much work each one invalidates.
+> **This has been run.** 33 hours on 2× RTX PRO 6000, 201 runs, all seven
+> phases. If something here fails, it is likely a setup difference rather than
+> an untested path — the run record, its fourteen root causes and the tuning
+> list are in
+> [hardware-run-2026-08-05.md](skills/gpu-contention-benchmark/reference/hardware-run-2026-08-05.md).
 
 ---
 
