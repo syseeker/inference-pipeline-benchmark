@@ -8,7 +8,13 @@ the way `bench coloc` resolves it, including caps the yaml does not spell out.
 
 Phase 0 is the concurrency gate (`scripts/gpu_concurrency_probe.py`) and Phase 1
 is the solo baselines, which every plan generates for itself. Neither is a
-colocation you invoke. Phase 5 is excluded from `--all` and run separately.
+colocation you invoke.
+
+There are **41 colocations**. `--all` selects every one of them — 41
+colocations, 154 runs (66 deduped solo baselines + 88 contention windows). Phase
+5 needs two cards, so on a single-GPU box run the study as
+`--phase 2 --phase 3 --phase 4 --phase 6` (36 colocations, 145 runs) and Phase 5
+separately (`--phase 5`: 5 colocations, 14 runs).
 
 ## Reading the tables
 
@@ -17,7 +23,7 @@ colocation you invoke. Phase 5 is excluded from `--all` and run separately.
 | Offered rate | Requests per second the load generator is told to send. Open-loop: it does not wait for a response before sending the next request. |
 | Arrival | How those requests are spaced. `poisson` is random arrivals at that mean rate; `constant` is evenly spaced. |
 | GPU memory fraction | The tenant's `gpu_memory_utilization`. A target for **total device** utilisation, not a private reservation: vLLM sizes its cache from `total x fraction` minus memory already in use by any process on the card. Triton tenants do not take one. |
-| KV cache budget | The colocation's `kv_budget_gb`, passed to vLLM as an absolute size in bytes. This, not the fraction, is what fixes the cache. |
+| KV cache budget | `kv_budget_gb` — stated per tenant, usually inherited from one colocation-wide value. Passed to vLLM as an absolute `--kv-cache-memory-bytes`, and to SGLang as `--max-total-tokens` plus a permissive `--mem-fraction-static`. This, not the fraction, is what fixes the cache. Where a tenant overrides it, the table says so per row. |
 | Weights | Checkpoint size, used by the memory pre-flight. `not set` means that tenant is invisible to the check. |
 | Output tokens | Generated tokens per request, taken from the workload. |
 
@@ -61,7 +67,7 @@ a pairing you had no reason to care about.
 > | `same-cv` (yolov8-l + dinov2-base) | 1.0-1.9x | not swept that high |
 > | `same-llm` (qwen2.5-7b + gemma2-9b) | **1.5-1.9x, flat** | **33-37x** |
 > | `same-ilm` | ~1.0x | rates too low to resolve |
-> | `same-vlm` | 3-11x, but `vlm_b` saturated in its own baseline — see the caveat below |
+> | `same-vlm` | 3-11x, but superseded — see below | not swept |
 >
 > **The answer is yes, and the shape matters more than the size.** Two LLMs cost
 > a stable, predictable tax across a 16x range of load, then fall off a cliff.
@@ -76,6 +82,21 @@ a pairing you had no reason to care about.
 > Achieved rate fell below offered at the same point (47.9 of 64, and 34.2 of
 > 64), which is the safe-operating-envelope boundary rather than a measurement
 > error.
+>
+> **`same-vlm`'s numbers are superseded, and the colocation has been rebuilt
+> twice.** Its original second tenant was `gemma-4-31b-it-fp8`, which never
+> loaded — transformers 4.57.6 has no `gemma4` architecture — and took all eight
+> of its runs with it. Rebuilt on `qwen3-vl-32b-fp8`, it then ran, but the
+> `[0.5, 1, 2, 4]` shared sweep was not measuring load: the two tenants' ceilings
+> are **12x apart** (4 req/s against ~0.33 req/s), so three of the four rungs sat
+> above the 32B's limit and collapsed into one load point measured four times
+> (achieved 0.30 / 0.29 / 0.28 / 0.24) while the 7B was still nearly idle. The
+> sweep is gone; each tenant now sits at about half its own measured ceiling, and
+> the pair has not been re-measured at those rates.
+>
+> **A shared `"*"` sweep is only meaningful when the tenants have comparable
+> ceilings.** That is a rule rather than a `same-vlm` quirk, and it is why
+> `same-llm`'s shared sweep is sound and this one was not.
 
 ### Implemented
 
@@ -94,10 +115,16 @@ KV cache budget **20 GB**
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| ilm_a | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
-| ilm_b | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 0.1 req/s | poisson | `ilm_document` | 256 | 0.3 |
+| ilm_a | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.03 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm_b | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 0.03 req/s | poisson | `ilm_document` | 256 | 0.3 |
 
-**Swept:** offered rate on every tenant simultaneously, across [0.1, 0.2, 0.4, 0.8] requests per second.
+**Swept:** offered rate on every tenant simultaneously, across [0.03, 0.06, 0.1, 0.2] requests per second.
+
+Scaled to the ILM tenant's *measured* ceiling: `kosmos-2.5` spends ~2.2 s of
+compute on a 256-token document request and sustains **0.133 req/s**, so earlier
+versions of this sweep sat entirely above saturation and every rung would have
+measured a queue rather than contention. This one walks from headroom through
+the knee.
 
 #### `same-llm`
 
@@ -116,10 +143,13 @@ KV cache budget **16 GB**
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| vlm_a | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 0.5 req/s | poisson | `vlm_video_long` | 128 | 0.26 |
-| vlm_b | `gemma-4-31b-it-fp8` | vLLM | fp8 | not set | 0.5 req/s | poisson | `vlm_video_long` | 128 | 0.51 |
+| vlm_a | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 2 req/s | poisson | `vlm_video_long` | 128 | 0.26 |
+| vlm_b | `qwen3-vl-32b-fp8` | vLLM | fp8 | 35.5 GB | 0.15 req/s | poisson | `vlm_video_long` | 128 | 0.56 |
 
-**Swept:** offered rate on every tenant simultaneously, across [0.5, 1, 2, 4] requests per second.
+**Not swept.** Each tenant sits at about half its own measured ceiling — 4 req/s
+for the 7B, ~0.33 req/s for the 32B — which is the same *relative* load for
+both. A shared `"*"` sweep would move them to the same *absolute* rate, and with
+ceilings 12x apart that asks a question neither tenant can answer.
 
 ### Not implemented, and why
 
@@ -187,14 +217,14 @@ KV cache budget **20 GB**
 |---|---|---|---|---|---|---|---|---|---|
 | llm | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.39 |
 | vlm | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
-| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 #### `mix-ilm-cv`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 #### `mix-llm-cv`
@@ -218,7 +248,7 @@ KV cache budget **20 GB**
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
 | vlm | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
-| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 
 ### Not implemented, and why
 
@@ -288,13 +318,73 @@ inherits tenants from `mix-llm-cv`
 
 **Swept:** offered rate on the `llm` tenant only, across [1, 4, 16, 64] requests per second.
 
+#### `cross-deploy-*` — the deployment-cost family
+
+Six colocations meant to be read as one experiment: two whole-card references
+(`-alone-72b`, `-alone-7b`) and four ways of dividing the leftover between the
+same two models (`-split-s25/s50/s75/s85`). All six run `llm_long` (989-token
+prompt, 512 output tokens) in **300 s** windows, both tenants on vLLM under MPS;
+each split runs **`repetitions: 3`**.
+
+**What it answers.** Every other family holds the KV cache constant so that the
+neighbour is the only variable. That isolates compute contention at a chosen
+cache size — a mechanism curve — but it is not what an operator experiences. In
+a deployment nobody picks the cache: you have a card running one model with
+everything to itself, you add a second, and each now gets a share of what is left
+after both sets of weights. The cache shrinks *because of* the neighbour. So here
+the baseline is the model **alone with the whole card**, and the contention arms
+divide the leftover — the measured cost is compute contention **and** cache loss
+together. The swept variable is the **split**, because that is the operator's
+actual knob.
+
+The arithmetic the splits rest on, measured on this card: weights 38.77 GiB
+(72B AWQ) + 14.25 GiB (7B) + ~4 GiB overhead = 57.0 GiB; of 89.4 GiB usable that
+leaves 32.4 GiB, of which **28.0 GiB** is divided (95%, for headroom). `s85` is
+the split that holds the same number of *sequences* for both tenants — a 72B
+token costs 320 KiB against the 7B's 56 KiB — which is the natural "fair" point
+and nowhere near an equal-gigabyte split.
+
+Every tenant here states its **own** `kv_budget_gb`; nothing is inherited.
+
+| Colocation | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | KV cache budget | GPU memory fraction |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `cross-deploy-alone-72b` | llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_long` | 512 | **46 GB** | 0.93 |
+| `cross-deploy-alone-7b` | llm | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_long` | 512 | **70 GB** | 0.91 |
+| `cross-deploy-split-s25` | anchor | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_long` | 512 | **7 GB** | 0.53 |
+| | neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_long` | 512 | **21 GB** | 0.4 |
+| `cross-deploy-split-s50` | anchor | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_long` | 512 | **14 GB** | 0.6 |
+| | neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_long` | 512 | **14 GB** | 0.33 |
+| `cross-deploy-split-s75` | anchor | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_long` | 512 | **21 GB** | 0.67 |
+| | neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_long` | 512 | **7 GB** | 0.25 |
+| `cross-deploy-split-s85` | anchor | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_long` | 512 | **23.8 GB** | 0.7 |
+| | neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_long` | 512 | **4.2 GB** | 0.22 |
+
+`s25`, `s75` and `s85` are written as `extends: cross-deploy-split-s50` and
+override nothing but the two budgets, so the split is provably the only variable
+between them. Offered rates never move across the whole family, so a change in
+throughput is never a change in what was asked for.
+
+**What to observe.**
+
+- Throughput kept against the *whole-card* reference, per tenant, and the
+  **aggregate** across both. Those two move in opposite directions and both are
+  the result.
+- Whether the four splits differ at all. Measured, they do not: 0.88 and 2.48
+  req/s at every split, across a 3.4x range of 72B cache and 5x of 7B cache.
+- `GPU KV cache usage` in each tenant's `server.log`. Single-digit percentages
+  mean the split moved nothing real, which is exactly what prefix caching did
+  here — see [findings/kv-cache-knee-and-prefix-caching.md](findings/kv-cache-knee-and-prefix-caching.md).
+- The spread across the three repetitions. Away from a cliff it was nil (12
+  contention runs identical to two decimals); near the eviction limit two
+  identical reps gave 0.79 and 0.40, and there the spread *is* the finding.
+
 #### `cross-ilm-vs-cv`
 
 inherits tenants from `mix-ilm-cv`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 1 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 **Swept:** offered rate on the `cv` tenant only, across [1, 10, 50, 200] requests per second.
@@ -310,42 +400,6 @@ inherits tenants from `mix-llm-cv`
 
 **Swept:** offered rate on the `cv` tenant only, across [1, 10, 50, 200] requests per second.
 
-#### `cross-memory-pressure-kv03`
-
-repetitions **3**
-
-| Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
-|---|---|---|---|---|---|---|---|---|---|
-| anchor | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.51 |
-| neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.19 |
-
-#### `cross-memory-pressure-kv13`
-
-inherits tenants from `cross-memory-pressure-kv03`
-
-| Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
-|---|---|---|---|---|---|---|---|---|---|
-| anchor | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.58 |
-| neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.22 |
-
-#### `cross-memory-pressure-kv22`
-
-inherits tenants from `cross-memory-pressure-kv03`
-
-| Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
-|---|---|---|---|---|---|---|---|---|---|
-| anchor | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.64 |
-| neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.26 |
-
-#### `cross-memory-pressure-kv29`
-
-inherits tenants from `cross-memory-pressure-kv03`
-
-| Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
-|---|---|---|---|---|---|---|---|---|---|
-| anchor | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.69 |
-| neighbour | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.28 |
-
 #### `cross-size-scaling`
 
 KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
@@ -359,21 +413,29 @@ KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
 
 #### `cross-vlm-prefill-vs-llm`
 
+KV cache budget **20 GB**
+
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| vlm | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.45 |
-| llm | `gemma2-9b` | vLLM | bf16 | 18.4 GB | 4 req/s | poisson | `llm_short` | 32 | 0.35 |
+| vlm | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
+| llm | `gemma2-9b` | vLLM | bf16 | 18.4 GB | 4 req/s | poisson | `llm_short` | 32 | 0.42 |
+
+Both fractions are derived from that budget. They used to be hand-written as
+0.45 / 0.35, and with two vLLM tenants on one card that killed the run: the `llm`
+tenant derived a negative cache and never became ready. KV is not what this
+colocation varies, so it is stated once and each fraction absorbs only its own
+weights.
 
 ### Not implemented, and why
 
-- Two of the four memory-pressure rungs are gone. `(72b, 32b)` is 110.5 GB of weights and will not load on a 96 GB card; `(vl-72b, 72b)` needs a checkpoint the roster does not carry. Rebuilt as a KV-budget sweep on one pair that fits, which isolates cache pressure instead of confounding it with model size.
+- The customer's memory-pressure ladder swapped in a bigger neighbour at each rung — (72b, 7b), (72b, 14b), (72b, 32b), (vl-72b, 72b) — so every rung changed both how full the card was and which model was being measured. Two rungs are also unbuildable here: `(72b, 32b)` is 110.5 GB of weights and will not load on a 96 GB card, and `(vl-72b, 72b)` needs a checkpoint the roster does not carry. Rebuilt as `cross-deploy-*`, which fixes the models and moves only the memory split — so a throughput change has one possible cause, and the answer transfers to model pairs nobody benchmarked.
 - `qwen2.5-27b` does not exist as a HuggingFace repository. The size ladder runs 7B, 14B, 32B, 72B.
 
 ### What to observe
 
 - The knee: the first swept rate at which the fixed tenant's p95 ratio leaves 1.0.
 - For the size ladder, whether damage scales with parameter count or with KV cache footprint.
-- For the KV sweep, whether behaviour turns bimodal near the memory ceiling. `cross-memory-pressure-kv29` runs 3 repetitions for exactly that reason.
+- For `cross-deploy-*`, the four observations listed under that family — in particular `GPU KV cache usage` in the server log, without which a flat curve cannot be told apart from a cache that was never the constraint.
 
 ---
 
@@ -437,7 +499,7 @@ KV cache budget **20 GB** · inherits tenants from `mix-full`
 |---|---|---|---|---|---|---|---|---|---|
 | llm (GPU 0) | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.39 |
 | vlm (GPU 0) | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
-| ilm (GPU 1) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm (GPU 1) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv (GPU 1) | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 #### `place-p2`
@@ -448,7 +510,7 @@ KV cache budget **20 GB** · inherits tenants from `mix-full`
 |---|---|---|---|---|---|---|---|---|---|
 | llm (GPU 0) | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.39 |
 | vlm (GPU 1) | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
-| ilm (GPU 0) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm (GPU 0) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv (GPU 1) | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 #### `place-p3`
@@ -459,17 +521,17 @@ KV cache budget **20 GB** · inherits tenants from `mix-full`
 |---|---|---|---|---|---|---|---|---|---|
 | llm (GPU 0) | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.39 |
 | vlm (GPU 1) | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
-| ilm (GPU 1) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.2 req/s | poisson | `ilm_document` | 256 | n/a |
+| ilm (GPU 1) | `kosmos-2.5` | Triton, python backend | bf16 | 5.5 GB | 0.1 req/s | poisson | `ilm_document` | 256 | n/a |
 | cv (GPU 0) | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
 #### `place-vlm-prefill-split`
 
-inherits tenants from `cross-vlm-prefill-vs-llm`
+KV cache budget **20 GB** · inherits tenants from `cross-vlm-prefill-vs-llm`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| vlm (GPU 0) | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.45 |
-| llm (GPU 1) | `gemma2-9b` | vLLM | bf16 | 18.4 GB | 4 req/s | poisson | `llm_short` | 32 | 0.35 |
+| vlm (GPU 0) | `qwen2.5-vl-7b` | vLLM | awq | 7 GB | 1 req/s | poisson | `vlm_video_long` | 128 | 0.3 |
+| llm (GPU 1) | `gemma2-9b` | vLLM | bf16 | 18.4 GB | 4 req/s | poisson | `llm_short` | 32 | 0.42 |
 
 ### Not implemented, and why
 
@@ -508,7 +570,7 @@ KV cache budget **6 GB**
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -529,7 +591,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -552,7 +614,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 4 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -567,7 +629,7 @@ inherits tenants from `mix-llm-cv`
 | llm | `qwen2.5-7b` | vLLM | bf16 | 15.2 GB | 4 req/s | poisson | `llm_short` | 32 | 0.45 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
-**Varied:** `triton_backend` on the `cv` tenant, across ['tensorrt', 'onnx', 'python'].
+**Varied:** `triton_backend` on the `cv` tenant, across ['tensorrt', 'onnx'].
 
 #### `secondary-backend-cv-b`
 
@@ -575,11 +637,11 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
-**Varied:** `triton_backend` on the `cv` tenant, across ['tensorrt', 'onnx', 'python'].
+**Varied:** `triton_backend` on the `cv` tenant, across ['tensorrt', 'onnx'].
 
 #### `secondary-backend-llm-a`
 
@@ -598,7 +660,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -621,7 +683,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_small` | not set | n/a |
 
@@ -644,7 +706,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -667,7 +729,7 @@ inherits tenants from `mix-memory-bound`
 
 | Tenant | Model | Served by | Precision | Weights | Offered rate | Arrival | Workload | Output tokens | GPU memory fraction |
 |---|---|---|---|---|---|---|---|---|---|
-| llm | `qwen2.5-72b` | vLLM | awq | 45 GB | 2 req/s | poisson | `llm_short` | 32 | 0.55 |
+| llm | `qwen2.5-72b` | vLLM | awq | 41.6 GB | 2 req/s | poisson | `llm_short` | 32 | 0.52 |
 | llm2 | `qwen2.5-14b` | vLLM | bf16 | 29.5 GB | 2 req/s | poisson | `llm_short` | 32 | 0.39 |
 | cv | `yolov8-l` | Triton, tensorrt backend | fp16 | not set | 50 req/s | poisson | `cv_detect_default` | not set | n/a |
 
@@ -675,6 +737,7 @@ inherits tenants from `mix-memory-bound`
 
 ### Not implemented, and why
 
+- `python` is not a rung of the CV backend dimension. Only `kosmos-2.5` has a hand-authored `model.py`; `yolov8-l` fails at staging with "is a python-backend model but has no model.py". The question the dimension asks is what the Triton backend costs under contention, which tensorrt-vs-onnx answers — a Python-backend YOLO would be slower for reasons that have nothing to do with a neighbour.
 - The `q4` quantization dimension is dropped. Q4_0 is a llama.cpp GGUF format and vLLM cannot load it; each model runs at the best format it has.
 - The `llamacpp` backend is omitted. No Triton backend exists for it, and it adds no contention axis the other three do not already cover.
 
@@ -774,7 +837,7 @@ Ordered by how much each would move the findings above.
 |---|---|---|
 | **`--max-num-seqs`** | vLLM | The admission limit. Sets the cliff location and caps cache occupancy — the single highest-value sweep |
 | **`--max-num-batched-tokens`** | vLLM | Chunked-prefill budget per step. Directly governs how much a VLM prefill burst can starve a co-tenant — the mechanism `cross-vlm-prefill-vs-llm` exists to measure |
-| **`--kv-cache-dtype=fp8`** | vLLM / SGLang | Halves KV footprint. Changes every memory-pressure conclusion, and is free capacity if accuracy holds |
+| **`--kv-cache-dtype=fp8`** | vLLM / SGLang | Halves KV footprint. Changes every cache-pressure conclusion, and is free capacity if accuracy holds |
 | **prefix caching on/off** | vLLM `--no-enable-prefix-caching`, SGLang `--disable-radix-cache` | With 2–3 prompts it made prefill free and the cache unreachable. Required for any experiment where the cache must be the constraint |
 | **`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`** | MPS, not a backend | **Apportions SM share between tenants.** The study established `gpu_memory_utilization` cannot divide memory; this is the knob that can divide *compute*, and it was left at default for every run |
 | **`--enforce-eager` vs CUDA graphs** | vLLM | Launch overhead vs capture memory. A `variant` already exists and is unused in contention |
@@ -816,7 +879,7 @@ absorbs 16× more load at the same memory bandwidth, because continuous batching
 reads the weights once per decode step rather than once per request. Memory
 bandwidth and achieved-vs-offered are the honest signals.
 
-### `gemma-4-31b-it-fp8` cannot be served, and should be pinned out
+### `gemma-4-31b-it-fp8` cannot be served — half fixed, and the other half is silently inert
 
 Its first-ever launch attempt failed:
 
@@ -825,24 +888,32 @@ The checkpoint you are trying to load has model type `gemma4` but Transformers
 does not recognize this architecture.
 ```
 
-`transformers` 4.57.6 in `.venv-vllm` has no `gemma4`. The yaml already records
-the same gap for TRT-LLM ("expected `gemma4` arch missing pre-bump") — it holds
-for vLLM too, and was simply never hit because this model had never run.
+`transformers` 4.57.6 in `.venv-vllm` has no `gemma4`. Do not upgrade it under a
+running study — vLLM pins the version, and every other tenant in the roster
+currently works against it.
 
-It takes `same-vlm` with it, since a two-tenant window cannot run one short. Add
+**Done:** no colocation reaches this model any more. `same-vlm` now pairs
+`qwen2.5-vl-7b` with `qwen3-vl-32b-fp8`, which is this roster's other
+video-capable 32B and serves today, so the same-category VLM pair has a
+measurement again rather than 8 failed runs.
+
+**Not done, and it looks done.** The intended pin
 
 ```yaml
 unsupported_backends:
-  vllm: "transformers 4.57 has no gemma4 architecture; needs a version bump"
+  vllm: "transformers 4.57.6 has no gemma4 architecture; needs a version bump"
 ```
 
-so the colocation skips with a reason rather than failing, then revisit after a
-`transformers` bump. Do not upgrade it under a running study — vLLM pins the
-version, and every other tenant in the roster currently works against it.
+*is* written into the model's block — but the block declares
+`unsupported_backends:` **twice**, and the second (trtllm-only) mapping silently
+replaces the first when the YAML is parsed. The effective value names `trtllm`
+alone, so **vLLM is not pinned out**. Nothing in the contention study hits it,
+but the single-model sweeps still do: `models`, `video`, `video-4f`, `video-8f`,
+`video-16f` and `full` all carry a `gemma-4-31b-it-fp8` round on vLLM, and each
+will fail the same way. Merging the two mappings into one is the fix.
 
-This also leaves `same-vlm` with no second VLM. `qwen2.5-vl-7b` is the only
-video-capable model in the roster that serves, so the same-category VLM pair has
-no measurement until either gemma-4 loads or another VLM is added.
+**The transferable part:** a duplicate mapping key in YAML does not raise — it
+overwrites. A pin you can read in the file is not a pin the loader applied.
 
 ### Sweeps that never reach a knee
 
@@ -864,16 +935,63 @@ runs in a container and may become the bottleneck itself, which would measure
 the client rather than the GPU. Run the tenant solo at the intended top rate and
 confirm `achieved_rps` still tracks `offered_rps`.
 
+### The cache was never the constraint, so the splits measured nothing they claimed
+
+`cross-deploy-split-*` returned 0.88 and 2.48 req/s at **every** split, across a
+3.4x range of 72B cache. Read alone that says "how you divide memory does not
+matter", and within the range tested it is true — but the reason is not that the
+tenants had enough cache. It is that the workload cannot *use* cache:
+
+```
+Prefix cache hit rate: median 97.4%
+Running: 32 reqs                  <- at the --max-num-seqs cap
+GPU KV cache usage: 8.7%          <- of a 150,720-token cache
+```
+
+`llm_long` contains **two distinct prompts** and `llm_short` three, so with
+prefix caching on, 32 concurrent requests that *should* occupy 48,032 tokens
+occupy ~13,100. Only generated tokens cost unique cache, and the working set is
+~4.8 GiB whatever you allocate. Three successive generations of this experiment
+produced flat curves for that one reason, not because their rungs were sized
+badly.
+
+Two changes, in order of cost:
+
+1. **Scope a `prefix_off` variant** (`--no-enable-prefix-caching` for vLLM,
+   `--disable-radix-cache` for SGLang) onto this family and re-run it, ~1.3 h at
+   `repetitions: 1`. Ready to apply — see
+   [next-run/config-changes.md](next-run/config-changes.md) §1e.
+2. **Add prompt diversity, 20–50 per workload.** A 97% prefix hit rate is
+   nothing like production traffic, so *every* prefill-sensitive number in this
+   study — TTFT above all — is measured against an unrealistically cheap prompt.
+   This reaches far beyond one family.
+
+Two consequences to carry:
+
+- **Treat the 58% / 65% deployment cost as an optimistic bound.** It was
+  measured with prefill essentially free.
+- **Verify `GPU KV cache usage` in the server log before trusting any
+  cache-pressure result.** Single-digit percentages mean the rungs measured
+  nothing, however clean the numbers look.
+
+**Also missing: a fullness sweep.** All four splits divide the same 28 GiB and
+sit at ~95% of the card, so the family varies *how* memory is divided and never
+*how much* is left. The cost of a second tenant on a card that is 60% full is
+not measured.
+
 ### `cross-size-scaling` varies size and load fraction together
 
 All four rungs are driven at 4 req/s, and all four serve it:
 
 | Tenant | Cap | Quantization | Achieved of 4 req/s |
 |---|---|---|---|
-| `qwen2.5-7b` | 0.39 | bf16 | 3.91 |
+| `qwen2.5-7b` | 0.35 | bf16 | 3.91 |
 | `qwen2.5-14b` | 0.49 | bf16 | 3.90 |
 | `qwen2.5-32b` | 0.87 | bf16 | 3.88 |
-| `qwen2.5-72b` | 0.66 | awq | 3.90 |
+| `qwen2.5-72b` | 0.62 | awq | 3.90 |
+
+(Caps as derived today, from a 16 GB budget and the corrected `weights_gb`; the
+72B rung read 0.66 when it ran, against the old 45 GB estimate.)
 
 The cap is not monotonic in parameter count — 72B is AWQ 4-bit (~40 GB) and
 32B is bf16 (~65 GB), so the 32B rung is the tightest tenant in the study.
@@ -928,16 +1046,15 @@ Two consequences worth carrying:
 
 ### The `weights_gb` estimates are verified — from the server logs
 
-An earlier version of this section claimed the ground truth was unrecorded.
-It is recorded: every vLLM tenant logs
+The ground truth is on disk already: every vLLM tenant logs
 
 ```
 Model loading took 38.77 GiB memory and 14.913061 seconds
 Available KV cache memory: 6.69 GiB
 ```
 
-into `<tenant>.server.log`, which the orchestrator already captures. Tier 2 can
-be checked against runs already on disk.
+into `<tenant>.server.log`, which the orchestrator captures — so any declared
+value can be checked against runs already on disk.
 
 Converting the yaml's `weights_gb` (GB) to the GiB vLLM reports, seven of eight
 declared values are correct to within 0.10 GiB:
@@ -953,141 +1070,75 @@ declared values are correct to within 0.10 GiB:
 | `qwen2.5-14b` | 27.47 | 27.57 | +0.10 |
 | **`qwen2.5-72b`** | **41.91** | **38.77** | **−3.14** |
 
-Only `qwen2.5-72b` (AWQ) is materially wrong, and it is conservative — the cap
-reserves 3.14 GiB more than the weights need, so nothing fails; the space is
-simply handed to KV instead.
+Only `qwen2.5-72b` (AWQ) was materially wrong. It has since been corrected to
+`weights_gb: 41.6` (= 38.74 GiB), which is within 0.03 GiB of the measurement;
+every cap derived from it moved down accordingly, and the KV budgets — the
+quantity the experiments hold constant — did not move.
 
 **Note the unit.** The field is `weights_gb` and the values are GB, but vLLM
 reports GiB. Comparing them directly makes every estimate look ~7% high. Either
 rename the field or record the conversion beside it.
 
-### The 72B error shifts the `cross-memory-pressure` x-axis
+**Caveat, and it costs something.** Once `--kv-cache-memory-bytes` is set, vLLM
+stops logging `Available KV cache memory` — so the cache ground truth is no
+longer recoverable from the log for exactly the tenants whose cache matters
+most. `GPU KV cache usage` in the steady-state log lines is what remains.
 
-The consequence is not cosmetic. That family labels its rungs by *total KV in
-GB* (`kv03` → `kv13` → `kv22` → `kv29`) and derives each cap from the assumed
-45.0 GB weights. With the weights 3.14 GiB smaller, every rung gets that much
-more KV than its name claims.
+### RESOLVED — `gpu_memory_utilization` cannot apportion memory, and every colocation that needed a budget now has one
 
-Measured at the `kv03` anchor (cap 0.51), which the yaml annotates
-`45.0 weights + 2 overhead + 2.0 KV`:
+`cross-vlm-prefill-vs-llm` and `place-vlm-prefill-split` used to set no
+`kv_budget_gb`, so no `--kv-cache-memory-bytes` was emitted and the tenants fell
+back to `--gpu-memory-utilization`. Both now carry `kv_budget_gb: 20.0` and
+derive their fractions from it. The measurement behind that change is worth
+keeping, because it generalises well past those two entries.
 
-```
-Available KV cache memory: 6.69 GiB      (predicted 2.0)
-GPU KV cache size: 21,936 tokens
-Maximum concurrency for 8,192 tokens per request: 2.68x
-```
-
-The anchor alone has more than twice the KV the whole rung is named for. So the
-starved end of the curve is **not as starved as designed**, and the eviction
-cliff the family is hunting may sit below `kv03` rather than at it — the sweep
-could miss it entirely while appearing to cover it.
-
-Do not renormalise the existing results to fix this. Recompute the caps from the
-measured 38.77 GiB and re-run the family, and until then read the rung names as
-approximate labels rather than as the KV actually provisioned.
-
-### Two colocations are missing `kv_budget_gb`, and both need it
-
-`cross-vlm-prefill-vs-llm` and `place-vlm-prefill-split` set no
-`kv_budget_gb`, so no `--kv-cache-memory-bytes` is emitted and the tenants fall
-back to `--gpu-memory-utilization` — which is a *total device* target, not a
-private reservation. The second tenant to start computes a negative KV budget
-and dies:
-
-```
-ValueError: No available memory for the cache blocks
-```
-
-That is the same failure `mix-full` had. Both of these are two-vLLM-tenant
-colocations, which is exactly the case that needs an absolute KV size.
-
-`place-vlm-prefill-split` did **not** fail in Phase 5 only because its tenants
-sit on separate cards, so neither sees the other's memory. Same missing config,
-no symptom — it would fail the moment they shared a GPU.
-
-**Confirmed in this run.** `cross-vlm-prefill-vs-llm` failed exactly as
-predicted, in `llm.server.log`:
+**The failure.** `cross-vlm-prefill-vs-llm` died in `llm.server.log`:
 
 ```
 ValueError: No available memory for the cache blocks.
 Try increasing `gpu_memory_utilization` when initializing the engine.
 ```
 
-The tenant is `gemma-2-9b`, which serves without trouble in `same-llm` — so this
-is the colocation's missing KV reservation, not the model.
-
-Add `kv_budget_gb` to both.
-
-**`cross-memory-pressure-kv03/13/22/29` needs a different fix, not this one.**
-
-That family omits `kv_budget_gb` deliberately — the yaml says the derive-from-
-budget rule exists to hold KV *constant*, whereas here KV **is** the swept
-variable (3 → 13 → 22 → 29 GB total), so deriving would pin the quantity under
-test. The reasoning is right. The mechanism it chose is not.
-
-**Measured: the family cannot work as written.** `kv03` contention failed at the
-neighbour with
+The tenant was `gemma2-9b`, which serves without trouble in `same-llm`, so this
+was the colocation's missing KV reservation and not the model. `mix-full` failed
+the same way. The starkest case was a 7B behind a co-resident 72B:
 
 ```
 Model loading took 14.25 GiB memory
 Available KV cache memory: -37.31 GiB
-ValueError: No available memory for the cache blocks.
 ```
 
-The neighbour's allowance is 0.19 × 96 ≈ 17.0 GiB and its weights are 14.25 GiB,
-which on an empty card leaves the ~1 GiB the yaml designed for. It got −37.31,
-and the ~38.3 GiB shortfall is the anchor's 38.77 GiB of weights.
+Its allowance was 0.19 × 96 ≈ 17.0 GiB against 14.25 GiB of weights, which on an
+*empty* card leaves the ~1 GiB intended. The ~38.3 GiB shortfall is precisely the
+neighbour's resident weights.
 
-`gpu_memory_utilization` is a **total-device** target. Each tenant subtracts
-everything already resident on the card — including other processes — so a cap
-cannot express "my share". Every rung sets both caps below the *other* tenant's
-footprint, so **all four rungs fail the same way**: 4 colocations × 3
-repetitions = 12 contention runs, with the solo baselines succeeding throughout
-(they are alone on the card, where the arithmetic holds).
+**Confirmed quantitatively, so it is the mechanism and not a coincidence.**
+Raising the fraction by 0.03 (0.19 → 0.22) moved the deficit by 0.03 × 96 GB:
+predicted −34.63 GiB, measured **−34.46 GiB**, within 0.17 GiB.
 
-The fix keeps the experiment intact. Set `kv_budget_gb` per rung to the KV the
-rung is *named* for, rather than deriving caps:
-
-| Rung | anchor `kv_budget_gb` | neighbour `kv_budget_gb` |
-|---|---|---|
-| `kv03` | 2.0 | 1.0 |
-| `kv13` | 8.7 | 3.9 |
-| `kv22` | 14.4 | 7.8 |
-| `kv29` | 19.2 | 9.7 |
-
-**Confirmed quantitatively across rungs.** The deficit tracks the cap exactly,
-so this is the mechanism rather than a coincidence:
-
-| Rung | neighbour cap | predicted KV | measured KV |
-|---|---|---|---|
-| `kv03` | 0.19 | — | −37.31 GiB |
-| `kv13` | 0.22 | −34.63 GiB | **−34.46 GiB** |
-| `kv22` | 0.26 | −31.0 GiB | (expected to fail) |
-| `kv29` | 0.28 | −29.3 GiB | (expected to fail) |
-
-The `kv13` prediction is just `−37.31 + (0.22 − 0.19) × 96 GB`, and it lands
-within 0.17 GiB.
-
-**Caps are not impossible here, they are unmaintainable.** A neighbour cap of
-~0.73 instead of 0.22 would cover the anchor's resident footprint plus its own
-and would load fine — total-device fractions need not sum to 1.0. The reason to
-reject that is not infeasibility: it is that the second tenant's cap then
-encodes the *first* tenant's footprint and the load order, so the number means
-nothing on its own and silently breaks whenever the anchor's size, quantization
-or KV changes. Swapping the 72B for a 32B would require recomputing a number
-that never mentions the 72B.
+**Caps are not impossible, they are unmaintainable.** A fraction high enough to
+cover the neighbour's footprint *plus* its own loads fine — total-device
+fractions need not sum to 1.0. The reason to reject that is not infeasibility:
+the second tenant's fraction then encodes the *first* tenant's footprint and the
+load order, so the number means nothing on its own and breaks silently whenever
+the neighbour's size, quantization or cache changes. Swapping a 72B for a 32B
+would mean recomputing a number that never mentions either.
 
 `--kv-cache-memory-bytes` is absolute and per-process, so it composes across
-tenants *and* it sets the swept variable directly instead of inferring it from a
-cap. The yaml's objection — that deriving would flatten the curve — applies to
-deriving caps from a fixed budget, not to setting the budget to the swept value.
-This is strictly more precise than the cap arithmetic, which the 72B weights
-error has already thrown off by ~3 GiB per rung.
+tenants and states the intended quantity directly instead of inferring it from a
+fraction.
 
-The distinction to carry forward:The distinction to carry forward: `gpu_memory_utilization` is unusable for
-apportioning memory between colocated tenants, whatever the intent. Where KV is
-meant to be constant, derive it; where KV is the variable, set it explicitly.
-Either way the knob is `kv_budget_gb`, never the cap.
+**The distinction to carry forward:** `gpu_memory_utilization` is unusable for
+apportioning memory between colocated tenants, whatever the intent. Where the
+cache is meant to be constant across a comparison, state one colocation-wide
+budget and derive the fractions; where the *split* is the variable, state a
+budget per tenant, as `cross-deploy-split-*` does. Either way the knob is
+`kv_budget_gb`, never the fraction.
+
+`place-vlm-prefill-split` never showed a symptom, because its tenants sit on
+separate cards and neither sees the other's memory — the same missing config,
+invisible until they shared a GPU. **A multi-GPU window is not a test of the
+memory plan.**
 
 ### `duration_s` propagates through `extends:`, and sweeps multiply it
 
@@ -1119,8 +1170,16 @@ utilisation a single repetition cannot separate 1.55× from 1.05×.
 
 Two ways out, and the first is better: raise the rates until the signal exceeds
 the variance (see the sweep table above), or raise `repetitions` on the low
-rungs. Only `cross-memory-pressure-kv29` currently sets `repetitions: 3`, and it
-does so for a different reason — expected bimodality near the memory ceiling.
+rungs. Only the four `cross-deploy-split-*` colocations currently set
+`repetitions: 3`, and they do so for a different reason — expected bimodality
+near the memory ceiling.
+
+**Measured, and it cuts both ways.** Away from a cliff, repetitions buy nothing:
+12 `cross-deploy` contention runs returned identical values to two decimals.
+Near the eviction limit, two identical repetitions gave **0.79 and 0.40** — there
+the spread *is* the finding, and a mean of the two describes neither state.
+`repetitions: 3` is only justified next to a cliff; everywhere else, spend the
+time on rungs instead.
 
 ### A measurement artifact to know about
 

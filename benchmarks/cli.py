@@ -1409,7 +1409,7 @@ def select_colocations(
         "drive each open-loop, and merge their traces. Select with --colocation "
         "(repeatable), --phase N (repeatable) or --all; ONE plan is built for the "
         "whole selection so solo baselines dedupe across colocations (39 "
-        "colocations = 163 runs, not 237). --dry-run prints the plan (baselines "
+        "colocations = 154 runs, not 230). --dry-run prints the plan (baselines "
         "first) without launching anything. Runs land in "
         "benchmarks/results/<gpu>/coloc/<colocation>/coloc-<tenant>@<rps>[-r<rep>]-<hash>/ "
         "and shared solo baselines in "

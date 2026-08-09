@@ -135,27 +135,25 @@ a second regardless. Nothing in production waits for your GPU.
 
 Full reasoning in design-decisions §1, *Open-loop load, not concurrency*.
 
-### 2b. Same memory allocation — the KV cache trap
+### 2b. Same KV cache — the memory allocation trap
 
 This one is the least obvious, and it's the reason this section exists.
 
-When vLLM starts it reserves `gpu_memory_utilization` × VRAM. Model weights
-take a fixed slice of that, and **everything left over becomes the KV cache**
-— the pool that holds attention state for in-flight requests. A bigger KV
-cache means more requests can be in flight simultaneously, which means higher
-throughput and less queueing.
+The **KV cache** is the pool that holds attention state for in-flight requests.
+A bigger cache means more requests can be in flight simultaneously, which means
+higher throughput and less queueing. So the cache size is not a passive memory
+limit — it is a performance setting, and if it differs between the two runs, the
+ratio is partly measuring *it* rather than the neighbour.
 
-So the cap is not a passive memory limit. It directly sets how fast the model
-runs.
-
-Now watch what happens if you leave it at the default for the solo run. A 7B
-model on a 96 GB card:
+Watch what happens if the solo run gets the card to itself while the contention
+run gets a production share of it. A 7B model, 15 GB of weights, on a 96 GB
+card:
 
 
-|                                 | cap  | reserved | weights | **KV cache** |
-| ------------------------------- | ---- | -------- | ------- | ------------ |
-| Solo baseline at vLLM's default | 0.90 | 86 GB    | 15 GB   | **71 GB**    |
-| Contention run, sharing with CV | 0.45 | 43 GB    | 15 GB   | **28 GB**    |
+|                                    | **KV cache** | requests it can keep in flight |
+| ---------------------------------- | ------------ | ------------------------------ |
+| Solo baseline, whole card to itself | **~71 GB**   | many                           |
+| Contention run, sharing with CV     | **~28 GB**   | ~2.5× fewer                    |
 
 
 The contention run is now slower for **two** reasons, thoroughly mixed:
@@ -167,8 +165,20 @@ There is no way to separate them afterwards. You would report "the detector
 slowed my LLM by 2.4×" when much of that was "I gave my LLM a third of the
 memory."
 
-**The fix:** run the solo baseline at 0.45 too. Identical KV cache in both
-runs, so the neighbour is the only difference left.
+**The fix:** give the solo baseline the *same cache size* the contention run
+gets — 28 GB in both. The neighbour is then the only difference left.
+
+**How the cache is pinned.** The knob is `kv_budget_gb`, which is per tenant and
+states the cache in gigabytes. The orchestrator turns it into an *absolute* size
+the backend honours directly — `--kv-cache-memory-bytes` for vLLM,
+`--max-total-tokens` for SGLang. It is not a fraction of anything, so it means
+the same number on an empty card and on a crowded one. The memory *fraction*
+(`gpu_memory_utilization`) does not set the cache and cannot apportion one;
+that mechanism, and the measurement that settled it, is section 4.
+
+Because `kv_budget_gb` is part of a solo baseline's identity, the baseline
+inherits the contention run's cache automatically rather than anyone having to
+remember to copy it.
 
 The part worth saying out loud to anyone reading the results:
 
@@ -391,37 +401,85 @@ attach to the colocation; per-tenant VRAM comes from
 
 ### The memory budget
 
-The rule on one GPU:
+There are two knobs here and they do different jobs. Conflating them is the
+mistake this study made, hit, and then measured.
+
+**`gpu_memory_utilization` is a ceiling, not a share.** It is a target for
+*total device* utilisation: vLLM sizes its cache from
+`total × fraction − whatever every process on the card already holds`. So a
+tenant whose cap is lower than its neighbour's resident footprint derives a
+*negative* cache and dies before serving anything:
 
 ```
-sum(tenant gpu_memory_utilization) + CV footprint  ≤  1.0
+Model loading took 14.25 GiB memory
+Available KV cache memory: -37.31 GiB
+ValueError: No available memory for the cache blocks.
 ```
 
-vLLM's default is 0.90 — essentially the whole card. Leave two tenants at the
-default and the second one OOMs at startup, so each tenant needs its own cap.
+That is exactly how `mix-full`'s VLM failed behind a 37 GB LLM while the
+pre-flight called the plan fine. It is a mechanism, not a fluke: across rungs
+the deficit tracked the cap to within 0.17 GiB of prediction. **A cap cannot
+express "my share" of a shared card** — SGLang's `--mem-fraction-static` has the
+same property and fails the same way.
 
-Those caps are **derived, not hand-written**:
+The pre-flight still checks a sum, per GPU:
 
 ```
-cap = (model weights + KV budget + overhead) / total VRAM
+sum(tenant gpu_memory_utilization on one card) + CV footprint  ≤  1.0
 ```
 
-The KV budget is set once per colocation and is identical for every tenant in
-it. So the cap comes out *different* per model — heavier weights need a bigger
-slice — while the KV cache, the thing that actually sets speed, stays *equal*.
+because vLLM's default of 0.90 is essentially the whole card and would starve
+everyone else. But that is a *budget* check on what tenants may claim — passing
+it does not mean the tenants will co-reside.
 
-That is the same rule as the KV cache trap in section 2b: hold the cache
-constant, and the neighbour is the only thing left that can explain a
-difference. It also means the solo baseline inherits its cap from the
-contention run automatically, rather than anyone having to remember to copy it.
+**`kv_budget_gb` is what sets the cache**, and it is stated **per tenant**. The
+orchestrator turns it into an absolute size, which composes across processes
+because it never refers to the device total:
 
-Sizing caps *proportional to model size* is the obvious move and it would be
-wrong — KV need follows request rate and context length, not parameter count.
+| Backend | Flag emitted |
+|---|---|
+| vLLM | `--kv-cache-memory-bytes = kv_budget_gb × 1024³` |
+| SGLang | `--max-total-tokens = kv_budget_gb × 1024³ ÷ kv_bytes_per_token`, **plus** a permissive `--mem-fraction-static=0.95` |
 
-You can still write an explicit cap when you mean to, and it wins. One
-experiment does exactly that: the memory-pressure curve sweeps the cap on
-purpose, because there the KV cache is the thing under test rather than the
-thing held fixed.
+SGLang needs both: the fraction still gates the overall allocation, so once the
+token count is doing the real work the fraction has to stop being a control or
+the tenant dies of a limit it is no longer using.
+
+A colocation normally states **one budget that every tenant inherits**, and that
+is what makes a comparison valid — the cache is held constant while only the
+weights move (section 2b). A tenant may override it where the *split itself* is
+the variable: `cross-deploy-split-*` divides one fixed 28 GiB leftover four ways,
+and there the per-tenant budgets are the experiment.
+
+The cap is then **derived from the budget, not hand-written**:
+
+```
+cap = (weights_gb + kv_budget_gb + 2 GB overhead) / total VRAM,  rounded to 2 dp
+```
+
+so it sits above what the tenant will actually occupy. The cap comes out
+*different* per model — heavier weights need a bigger ceiling — while the cache,
+the thing that actually sets speed, stays *equal*. Sizing caps *proportional to
+model size* is the obvious move and it would be wrong: KV need follows request
+rate and context length, not parameter count.
+
+You can still write an explicit cap when you mean to, and it wins over
+derivation. `mix-llm-cv` (0.45) and `mix-vlm-cv` (0.50) do, because each has a
+single vLLM tenant and nothing to hold constant against.
+
+Two consequences worth carrying out of this section:
+
+- **A cap sum is not memory pressure.** Once the cache is pinned, occupancy is
+  `weights + pinned KV + overhead` and the cap is only a ceiling above it.
+  `mix-memory-bound` "reserves" 0.91 of the card and occupies about **82 of
+  96 GiB**. Raising the budget to restore a reservation percentage would add
+  *real* cache and change the experiment rather than restore it.
+- **The derived cap is rounded to 2 dp, so two different caches can produce the
+  same cap.** That makes the cap useless as an identity, which is why
+  `kv_budget_gb` — not the cap — is part of the solo baseline's key. Measured:
+  two tenants at 0.64 GiB and 1.28 GiB of cache both derived 0.19, and before
+  the key was fixed, `--resume` reused the smaller one's baseline for the
+  larger, halving the reference under every ratio built on it.
 
 ---
 
@@ -461,14 +519,14 @@ contends with whatever else is on *every* GPU, plus it adds cross-GPU
 synchronisation on each forward pass. What TP actually buys is capacity —
 more VRAM for weights, more aggregate bandwidth — not isolation.
 
-For the 72B models this isn't a choice; `qwen2.5-vl-72b` at BF16 doesn't fit
-on one card at all.
+For a 72B VLM this isn't a choice — `qwen2.5-vl-72b` at BF16 doesn't fit on one
+card at all, which is also why the roster does not carry it.
 
-> **To verify on the hardware:** RTX PRO 6000 Blackwell has no NVLink, so
-> cross-GPU traffic goes over PCIe. That makes TP notably more expensive than
-> it would be on an NVLink'd H200 pair, and it's likely to dominate the
-> multi-GPU results. Confirm the interconnect with `nvidia-smi topo -m`
-> before drawing conclusions from Phase 5.
+> **Measured, 2026-08-04.** `nvidia-smi topo -m` on this box reports **PIX**:
+> no NVLink, so cross-GPU traffic goes over PCIe Gen5. TP is therefore notably
+> more expensive here than on an NVLink'd pair and would dominate any result it
+> appeared in, so **no tensor-parallel colocation is written** — Phase 5
+> measures placement only.
 
 
 
@@ -493,8 +551,8 @@ of *each* card. Tenants on different GPUs don't compete for VRAM at all, so
 the `sum ≤ 1.0` check has to be applied per device, not per colocation. Two
 tenants on separate cards can each take 0.9.
 
-**The baseline must match the placement, not just the cap.** The KV cache trap
-in section 2b said the solo baseline must use the contention run's memory cap. On multi-GPU it must
+**The baseline must match the placement, not just the cache.** The KV cache trap
+in section 2b said the solo baseline must use the contention run's cache size. On multi-GPU it must
 also use the contention run's *topology*: a tenant running TP=2 in the
 contention window needs a TP=2 solo baseline. Compared against a TP=1
 baseline, the ratio would fold in all of TP's cross-GPU overhead and report
@@ -566,8 +624,8 @@ all different (figures illustrative):
 | | Setup | p95 latency |
 |---|---|---|
 | **A** | the whole GPU to itself | 200 ms |
-| **B** | capped at its production share, no neighbour | 400 ms |
-| **C** | same cap, object detector running alongside | 500 ms |
+| **B** | at its production share of memory, no neighbour | 400 ms |
+| **C** | same memory share, object detector running alongside | 500 ms |
 
 **A is the single-model study. B and C are the contention study** — B is the
 baseline, C is the measurement. The honest answer is **C ÷ B = 1.25×**: the
@@ -584,7 +642,7 @@ hardware you don't need.
 **Mistake 2 — using A as the baseline instead of B.** Now the ratio is
 C ÷ A = 500 ÷ 200 = **2.5×**, so you report *"the neighbour costs 150%"* and
 conclude co-location is hopeless. But most of that gap — the 200 ms to 400 ms
-part — was the memory cap **you** set, not the neighbour. The neighbour only
+part — was the memory allocation **you** chose, not the neighbour. The neighbour only
 ever cost 25%. You would kill a deployment that was fine.
 
 B is the number that looks wrong and is right. It is the model running exactly

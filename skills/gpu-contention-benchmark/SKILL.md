@@ -257,7 +257,7 @@ python3 scripts/gpu_concurrency_probe.py --gpu rtx_pro6000 --json
 # colocations were dry-run clean as of 2026-08-03.
 bench coloc --gpu rtx_pro6000 --all --dry-run
 
-# The whole study as ONE plan: 163 runs, not 237 — selecting many colocations
+# The whole study as ONE plan: 154 runs, not 230 — selecting many colocations
 # dedupes solo baselines across all of them (~74 runs / ~3h of GPU saved).
 # --resume skips runs that already have a manifest.json; --continue-on-error
 # records a failure and keeps going, exiting non-zero at the end.

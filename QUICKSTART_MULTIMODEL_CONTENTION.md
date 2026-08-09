@@ -226,7 +226,7 @@ bench coloc --gpu rtx_pro6000 --colocation mix-llm-cv --dry-run   # just one
 **What to expect:**
 
 ```
-[ok] coloc: plan: 39 colocation(s) → 163 run(s) (72 solo baseline(s) + 91 contention window(s))
+[ok] coloc: plan: 41 colocation(s) → 154 run(s) (66 solo baseline(s) + 91 contention window(s))
 ```
 
 `mix-llm-cv` alone gives `1 colocation(s) → 3 run(s)`. Add `--json` for the
@@ -375,25 +375,30 @@ and each of those steps fails in a way that would otherwise waste all of it.
 **Prompt:**
 > "Work through the contention study phase by phase and summarise each."
 
-**What there is to run.** `--all` is the **single-GPU** study — it already
-excludes Phase 5, which is Step 10. Phase 0 is the gate (Step 6) and Phase 1
-is the solo baselines, which every plan generates for itself (72 of the 163
-runs); neither is a command you issue.
+**What there is to run.** `--all` is **everything, Phase 5 included** — so on a
+single-GPU box select the phases explicitly. Phase 0 is the gate (Step 6) and
+Phase 1 is the solo baselines, which every plan generates for itself; neither is
+a command you issue.
 
 | Phase | What it answers | Colocations | Runs |
 |---|---|---|---|
-| **2** — same-category | Do two models of the *same* type contend worst? | `same-llm` `same-cv` `same-vlm` `same-ilm` | 48 |
-| **3** — mixed pairs | The headline pairings, cheapest phase | `mix-llm-cv` `mix-vlm-cv` `mix-ilm-cv` `mix-vlm-ilm` `mix-full` | 12 |
-| **4** — cross-type | Where the load-vs-degradation answers are | `cross-llm-vs-cv-rps` `cross-cv-vs-llm-rps` `cross-ilm-vs-cv` `cross-vlm-prefill-vs-llm` `cross-size-scaling` `cross-arch-validation` `cross-memory-pressure-kv03/kv13/kv22/kv29` | 57 |
-| **6** — secondary | One dimension at a time, `-a` light / `-b` heavy | `mix-memory-bound` `secondary-backend-llm-a/b` `secondary-backend-cv-a/b` `secondary-output-length-a/b` `secondary-input-size-cv-a/b` `secondary-input-size-llm-a/b` `secondary-asymmetry-a/b` `secondary-arrival-a/b` | 49 |
-| **5** — placement | 2 GPUs — **Step 10**, not here | `place-isolated` `place-p1` `place-p2` `place-p3` `place-vlm-prefill-split` | 15 |
+| **2** — same-category | Do two models of the *same* type contend worst? | `same-llm` `same-cv` `same-vlm` `same-ilm` | 4 → 39 |
+| **3** — mixed pairs | The headline pairings, cheapest phase | `mix-llm-cv` `mix-vlm-cv` `mix-ilm-cv` `mix-vlm-ilm` `mix-full` | 5 → 12 |
+| **4** — cross-type | Where the load-vs-degradation answers are | `cross-llm-vs-cv-rps` `cross-cv-vs-llm-rps` `cross-ilm-vs-cv` `cross-vlm-prefill-vs-llm` `cross-size-scaling` `cross-arch-validation` `cross-deploy-alone-72b/-7b` `cross-deploy-split-s25/s50/s75/s85` | 12 → 61 |
+| **6** — secondary | One dimension at a time, `-a` light / `-b` heavy | `mix-memory-bound` `secondary-backend-llm-a/b` `secondary-backend-cv-a/b` `secondary-output-length-a/b` `secondary-input-size-cv-a/b` `secondary-input-size-llm-a/b` `secondary-asymmetry-a/b` `secondary-arrival-a/b` | 15 → 47 |
+| **5** — placement | 2 GPUs — **Step 10**, not here | `place-isolated` `place-p1` `place-p2` `place-p3` `place-vlm-prefill-split` | 5 → 14 |
 
-Per-phase counts are for that phase alone; they exceed 163 because `--all`
-dedupes baselines shared across phases.
+Per-phase run counts are for that phase run alone. They sum to more than the
+combined plan because baselines shared across phases are measured once.
 
 **CLI:**
 ```bash
-# The whole single-GPU study, one command. 163 runs; budget several hours.
+# The single-GPU study — every phase except placement. 36 colocations,
+# 145 runs; budget several hours.
+bench coloc --gpu rtx_pro6000 --phase 2 --phase 3 --phase 4 --phase 6 \
+            --continue-on-error --resume
+
+# Or everything including Phase 5, if both cards are attached. 41 -> 154 runs.
 bench coloc --gpu rtx_pro6000 --all --continue-on-error --resume
 
 # Or phase by phase (--phase is repeatable, and composes):
@@ -415,7 +420,7 @@ bench coloc --gpu rtx_pro6000 --colocation cross-cv-vs-llm-rps --resume
 ```
 
 Selecting several colocations builds **one** plan, and solo baselines are
-deduped across the whole plan: all 39 colocations emit 163 runs (72 baselines +
+deduped across the whole plan: all 41 colocations emit 154 runs (72 baselines +
 91 contention windows) instead of the 237 you get by running them as 39
 separate commands. Selection order is fixed (phase, then yaml order), so a
 re-run is comparable to the previous one.
@@ -429,9 +434,9 @@ colocation at run 50 must not cost you the other 113.
 
 ## Step 10 — Two GPUs
 
-**This is Phase 5, and `--all` in Step 9 did not run it** — the single-GPU
-study stops at 39 colocations / 163 runs and holds these back. 5 colocations,
-15 runs.
+**This is Phase 5.** If you ran the four single-GPU phases in Step 9, these are
+what is left: 5 colocations, 14 runs. If you ran `--all` with both cards
+attached, they are already done.
 
 Only worth doing once the single-GPU numbers exist — the whole point is the
 comparison. Nothing else may be running: both cards are occupied.
@@ -578,7 +583,7 @@ The two do not interact.
 ## What this walkthrough does and doesn't cover
 
 **Does:** the contention study end to end — one GPU and two, all seven phases,
-39 colocations, from install to interpreted `summary.md`.
+41 colocations, from install to interpreted `summary.md`.
 
 **Doesn't:**
 
