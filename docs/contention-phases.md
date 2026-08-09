@@ -21,6 +21,31 @@ colocation you invoke. Phase 5 is excluded from `--all` and run separately.
 | Weights | Checkpoint size, used by the memory pre-flight. `not set` means that tenant is invisible to the check. |
 | Output tokens | Generated tokens per request, taken from the workload. |
 
+## What the phases build toward
+
+No phase stands alone; each is only interpretable given the one before it.
+
+```
+Phase 0  ->  does co-residency even happen?          gate
+Phase 1  ->  how fast is each model alone?           the reference
+Phase 2  ->  do same-kind models fight?              screen, load swept
+Phase 3  ->  what does each realistic pairing cost?  screen, load fixed
+Phase 4  ->  how bad, and where is the knee?         characterise, curves
+Phase 5  ->  does a second GPU fix it?               placement
+Phase 6  ->  does the answer survive changing X?     robustness
+```
+
+Phases 2 and 3 **screen**: they find which combinations hurt, cheaply, at one
+or a few load points. Phase 4 **characterises**: it takes a pairing that
+screening flagged and sweeps it until something breaks, which is the only way
+to find a knee. Phase 5 asks whether hardware fixes what scheduling could not,
+and Phase 6 asks whether any of it still holds when you change the backend, the
+prompt, or the arrival pattern.
+
+A screening result with no curve behind it tells you a pairing costs *something*
+at *one* load. A curve with no screening behind it tells you a great deal about
+a pairing you had no reason to care about.
+
 ---
 
 ## Phase 2 — Same-category pairs
@@ -28,6 +53,29 @@ colocation you invoke. Phase 5 is excluded from `--all` and run separately.
 **Customer's intent.** Fixed model mix per category, sweep concurrency to find saturation curves
 
 **Question this answers.** Do two models of the same kind contend worse than a mixed pair?
+
+> **Measured 2026-08-04/05.** Same-category cost, worst tenant, end-to-end p95:
+>
+> | Pair | 1 -> 16 req/s each | at 64 |
+> |---|---|---|
+> | `same-cv` (yolov8-l + dinov2-base) | 1.0-1.9x | not swept that high |
+> | `same-llm` (qwen2.5-7b + gemma2-9b) | **1.5-1.9x, flat** | **33-37x** |
+> | `same-ilm` | ~1.0x | rates too low to resolve |
+> | `same-vlm` | 3-11x, but `vlm_b` saturated in its own baseline — see the caveat below |
+>
+> **The answer is yes, and the shape matters more than the size.** Two LLMs cost
+> a stable, predictable tax across a 16x range of load, then fall off a cliff.
+>
+> The cliff's signature is the finding: at 64 req/s TTFT p95 degraded **600x**
+> while end-to-end degraded 33x and inter-token latency stayed under 2x.
+> Requests are queueing for admission, not computing slowly — once one starts it
+> runs at nearly full speed. **GPU utilisation and token-latency monitoring give
+> no warning**, because neither is what moved. Full write-up:
+> [findings/same-llm-colocation-envelope.md](findings/same-llm-colocation-envelope.md).
+>
+> Achieved rate fell below offered at the same point (47.9 of 64, and 34.2 of
+> 64), which is the safe-operating-envelope boundary rather than a measurement
+> error.
 
 ### Implemented
 
@@ -101,6 +149,34 @@ KV cache budget **16 GB**
 
 **Question this answers.** What does each realistic pairing cost, measured at one fixed load?
 
+> **Measured 2026-08-04/05 — 12 clean runs.** Worst tenant, end-to-end p95:
+>
+> | Colocation | Worst tenant |
+> |---|---|
+> | `mix-llm-cv` | 1.02x |
+> | `mix-vlm-cv` | 1.03x |
+> | `mix-ilm-cv` | 1.05x |
+> | `mix-vlm-ilm` | 1.04x |
+> | **`mix-full`** (all four) | **2.46x** |
+>
+> **Every pair is essentially free at this load; four tenants is not — and the
+> four-way cost cannot be predicted from the pairwise ones.** That
+> non-additivity is the phase's real result, and it is why `mix-full` exists
+> rather than being inferred.
+>
+> Inside `mix-full`, who pays is as informative as how much:
+>
+> | Tenant | e2e p95 |
+> |---|---|
+> | cv (`yolov8-l`) | **2.46x** |
+> | vlm | 2.07x |
+> | ilm | 1.75x |
+> | llm | 1.40x |
+>
+> The smallest, fastest tenant absorbs the most. The same absolute interference
+> is a disaster for a 7 ms detector and a shrug for a 500 ms LLM, so a single
+> "how contended is this card" number would hide the only part that matters.
+
 ### Implemented
 
 #### `mix-full`
@@ -162,6 +238,31 @@ KV cache budget **20 GB**
 **Customer's intent.** Characterize specific contention interactions — one model as subject, sweep neighbor load
 
 **Question this answers.** At what neighbour load does degradation begin, and what drives it?
+
+> **Measured 2026-08-04/05.** The deployment-cost question — what does adding a
+> second model to an occupied card actually cost? Both vLLM under MPS,
+> `llm_long`, 300 s windows, 12 contention runs, reproducible to two decimals:
+>
+> | | alone (whole card) | colocated | kept |
+> |---|---|---|---|
+> | `qwen2.5-72b` | 1.52 req/s | 0.88 | **58%** |
+> | `qwen2.5-7b` | 3.81 req/s | 2.48 | **65%** |
+>
+> Aggregate rises to 3.36 req/s. **The card does more total work while both
+> tenants get materially slower** — that is the co-location trade stated in one
+> line, and whether it is worth taking is a business question rather than a GPU
+> one. Treat 42% as an *optimistic* bound: it was measured with prefill
+> essentially free, so realistic prompt diversity should cost more.
+>
+> **How you split the memory does not matter.** Four splits of the same 28 GiB
+> leftover gave identical throughput across a 3.4x range of 72B cache and 5x of
+> 7B cache (0.88 and 2.48 req/s at every split). The cost is compute contention;
+> KV was not the binding constraint anywhere in that range.
+>
+> **The KV knee is 5-7 GiB for the 72B**, and the 7B is flat across a **110x**
+> cache range — it needs under 1 GiB on this workload, and anything beyond that
+> is wasted card. Why three successive designs of this experiment missed the
+> knee: [findings/kv-cache-knee-and-prefix-caching.md](findings/kv-cache-knee-and-prefix-caching.md).
 
 ### Implemented
 
@@ -278,7 +379,7 @@ KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
 
 ## Phase 5 — Two GPUs (placement)
 
-> **Run 2026-08-04 — 15/15 clean, and the prediction was wrong.** Worst-tenant
+> **Measured 2026-08-04 — 15/15 clean.** Worst-tenant
 > end-to-end p95, each tenant against its own baseline *on the same card*:
 >
 > | Placement | GPU 0 | GPU 1 | worst p95 | mean p95 |
@@ -290,11 +391,21 @@ KV cache budget **16 GB** · inherits tenants from `mix-llm-cv`
 > | `place-vlm-prefill-split` | vlm | gemma2-9b | 1.00× | 0.99× |
 > | `place-isolated` (null test) | llm | cv | 1.02× | 1.01× |
 >
-> Predicted P1 > P3 > P2; measured **P2 best**. Two rules the data supports:
-> never co-locate the two vLLM tenants (the VLM pays 1.95× in P1, 1.02× once
-> split), and then pair the CV tenant with the VLM rather than the LLM (1.46×
-> versus 2.19×) — the LLM's steady decode leaves no gaps, the VLM's bursty
-> prefill does. Full reasoning in [contention.md](contention.md) §3.
+> **A second card helps, but only if you split the right pair.** Every
+> placement beats one card; the best is 1.5× better than the worst. Two rules,
+> in priority order:
+>
+> 1. **Never co-locate the two autoregressive tenants.** The LLM and the VLM are
+>    both KV-hungry token generators competing for the same resource, not
+>    different ones. The VLM pays 1.95× when they share a card and 1.02× once
+>    split — this single decision dominates the ranking.
+> 2. **Then pair the CV tenant with the VLM, not the LLM** (1.46× versus 2.19×).
+>    Counter-intuitively the bursty neighbour is the kinder one: prefill bursts
+>    leave gaps a 7 ms request can slip into, where steady decode never does.
+>
+> The intuition to discard is "separate the compute-heavy models" — grouping by
+> how *much* work a tenant does is the wrong axis. Group by *which resource* it
+> competes for. Full reasoning in [contention.md](contention.md) §3.
 >
 > Caveat: measured at a **low** load point. Phase 2's sweep shows `qwen2.5-7b`
 > sustains 62 of 64 requests/second alone, so the configured `llm@4` is about
@@ -368,7 +479,7 @@ inherits tenants from `cross-vlm-prefill-vs-llm`
 ### What to observe
 
 - `place-isolated` must return a ratio of about 1.0. Its two tenants share no streaming multiprocessors, no bandwidth and no memory. If it degrades, the harness is wrong and nothing else it reports can be trusted.
-- The ranking of the three pairings. The prediction on record is P1 best, then P3, then P2.
+- The ranking of the three pairings, and specifically whether the two autoregressive tenants share a card in the winner. If they do, the rule above does not hold at your load point and the reason is worth finding.
 - One GPU sampler block per occupied card. A placement result with telemetry for only one card cannot be explained.
 
 ---
@@ -378,6 +489,16 @@ inherits tenants from `cross-vlm-prefill-vs-llm`
 **Customer's intent.** Sweep secondary dimensions against TWO contrasting baselines — confirms whether dimension matters and whether its effect is context-dependent
 
 **Question this answers.** Does a secondary setting change the answer, and does it change it differently under memory pressure?
+
+> **Measured 2026-08-04/05.** SGLang **1.98** vs vLLM **1.97** req/s on
+> `qwen2.5-72b` under three-tenant contention — parity, *with matched caches*
+> (19,660 vs 19,648 tokens).
+>
+> The matching is the result. Before it, SGLang was being handed a different
+> cache size and the comparison measured memory allocation rather than the
+> backend. **A secondary-dimension result is only a finding once everything the
+> dimension does not name is held equal** — which is exactly what the two
+> baselines exist to expose.
 
 ### Implemented
 
@@ -564,6 +685,33 @@ inherits tenants from `mix-memory-bound`
 - For backend swaps, whether the change is the backend itself or the memory footprint that came with it.
 
 ---
+
+---
+
+## What the study establishes, across all phases
+
+Four results that survive being read out of context:
+
+**1. Pairs are nearly free; four tenants are not, and the cost is not additive.**
+Every two-tenant mix in Phase 3 landed within 5% of its solo baseline. The same
+four models together cost 2.46× on the worst tenant. You cannot sum pairwise
+costs to plan a four-way deployment.
+
+**2. The smallest, fastest tenant pays the most — always.** In `mix-full` the
+7 ms detector took 2.46× while the LLM took 1.40×. Identical absolute
+interference, opposite consequence. Any single "how contended is this card"
+number averages away the only part that decides whether you can ship.
+
+**3. The failure mode at the edge is queueing, not compute.** At the `same-llm`
+cliff, TTFT p95 moved 600× while inter-token latency stayed under 2×. Requests
+wait to start, then run at nearly full speed. **Utilisation and token-latency
+dashboards show nothing** until achieved rate falls off offered rate — so the
+envelope boundary, not a latency threshold, is the alert worth building.
+
+**4. Co-location buys aggregate throughput and sells per-tenant speed.**
+58% and 65% kept, aggregate up to 3.36 req/s. That is the whole trade. Whether
+it is a good one depends on whether your service level is written per request or
+per fleet, which is not a question the GPU can answer.
 
 ---
 
