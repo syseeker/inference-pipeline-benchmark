@@ -722,6 +722,82 @@ before any hardware existed; these are the numbers to choose them from next
 time. Nothing here invalidates the current results — it says what regime they
 describe.
 
+### The inference backends were never tuned, and one default set a headline number
+
+Every contention tenant runs the backend **stock**. What the config does set was
+chosen for **fit** (does the model load) and **experimental control** (is the
+cache the same in both runs) — never for speed:
+
+```
+--gpu-memory-utilization=0.90   backend-wide; now a ceiling, overridden per tenant
+--max-num-seqs=32               backend-wide, EVERY tenant, never tuned
+--max-model-len=8192…32768      per model — sized to fit VRAM, not for throughput
+--kv-cache-memory-bytes=<N>     experimental control (from kv_budget_gb)
+```
+
+The tuning knobs that exist in this yaml — the `eager` and `chunked_off`
+variants — are referenced only by the single-model **sweeps**. No colocation
+uses one, and `backends.sglang.variants` is empty.
+
+**This is mostly the right call.** A degradation ratio is
+`contention ÷ solo` with the identical config on both sides, so a shared
+inefficiency largely cancels. Tuning per workload would risk the opposite: if
+the solo and contention runs landed on different optimal settings, two things
+would have changed and the ratio would mean nothing again.
+
+**But it makes the absolute numbers a floor, not a ceiling.** "1.52 req/s for
+the 72B" is *vLLM defaults on this box*, not what the hardware can do. It should
+never be quoted as a capability figure.
+
+**And "it cancels out" stops being true when a default limits the mechanism
+under test.** `--max-num-seqs=32` is the proof, twice over:
+
+- It **caps residency**, so raising the arrival rate cannot fill the KV cache.
+  `llm_short` occupies at most 1,952 tokens — 6.8% of even the smallest rung —
+  at *any* rate. That is part of why three generations of the memory-pressure
+  experiment produced flat curves.
+- It **sets where the `same-llm` cliff falls.** The mechanism there is admission
+  queueing: requests waiting to *start*. What decides when they start waiting is
+  the sequence limit. Raise it to 128 and the cliff moves right; drop it to 8
+  and it moves left.
+
+The cliff is real — 32 is a configuration someone could deploy — but it is the
+envelope of *that configuration*, not of the hardware. **"Two 7B models collapse
+at 64 req/s" is wrong; "collapse at 64 req/s with `max_num_seqs=32`" is right.**
+State the config whenever the absolute is quoted.
+
+#### The untouched surface
+
+Ordered by how much each would move the findings above.
+
+| Knob | Backend | What it would change |
+|---|---|---|
+| **`--max-num-seqs`** | vLLM | The admission limit. Sets the cliff location and caps cache occupancy — the single highest-value sweep |
+| **`--max-num-batched-tokens`** | vLLM | Chunked-prefill budget per step. Directly governs how much a VLM prefill burst can starve a co-tenant — the mechanism `cross-vlm-prefill-vs-llm` exists to measure |
+| **`--kv-cache-dtype=fp8`** | vLLM / SGLang | Halves KV footprint. Changes every memory-pressure conclusion, and is free capacity if accuracy holds |
+| **prefix caching on/off** | vLLM `--no-enable-prefix-caching`, SGLang `--disable-radix-cache` | With 2–3 prompts it made prefill free and the cache unreachable. Required for any experiment where the cache must be the constraint |
+| **`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`** | MPS, not a backend | **Apportions SM share between tenants.** The study established `gpu_memory_utilization` cannot divide memory; this is the knob that can divide *compute*, and it was left at default for every run |
+| **`--enforce-eager` vs CUDA graphs** | vLLM | Launch overhead vs capture memory. A `variant` already exists and is unused in contention |
+| **`--enable-chunked-prefill`** | vLLM | Whether prefill is sliced or monolithic — changes the shape of the burst, not just its size |
+| **Attention backend** | vLLM `VLLM_ATTENTION_BACKEND`, SGLang `--attention-backend` | FlashAttention / FlashInfer / Triton differ in memory and kernel behaviour under concurrency |
+| **`--scheduling-policy`** | vLLM (`fcfs`/`priority`), SGLang (`--schedule-policy lpm/fcfs/dfs-weight`) | Who waits when the queue forms. Directly relevant to the queueing cliff |
+| **`--max-running-requests`, `--chunked-prefill-size`, `--schedule-conservativeness`** | SGLang | SGLang's equivalents of the above. **None are set; `variants` is empty**, so the vLLM-vs-SGLang comparison is stock-vs-stock |
+| **`--block-size`, `--swap-space`, `--num-scheduler-steps`** | vLLM | KV granularity, CPU offload, multi-step scheduling |
+| **Speculative decoding** | vLLM `--speculative-config` | Trades compute for latency — changes the compute/bandwidth balance a tenant presents to its neighbour |
+| **`dynamic_batching`, `instance_group`** | Triton | Queue delay, preferred batch size, replicas per GPU. The CV tenants are the fragile ones; batching is exactly what would protect them |
+| **TensorRT precision / workspace** | Triton | fp16 vs int8 for the CV models |
+| **`--tensor-parallel-size`** | vLLM / SGLang | Untested here — `nvidia-smi topo -m` reports PIX, so PCIe would dominate |
+
+#### If only one thing gets swept
+
+`--max-num-seqs`, on `same-llm`. It is the admission limit behind the study's
+most striking result, it is a single integer, and the current value was never a
+decision — it arrived as a backend-wide default and silently became a finding.
+
+`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` is the close second, for a different reason:
+it is the only knob measured or otherwise that can *apportion compute* between
+co-tenants, which is the resource this study found to be the binding constraint.
+
 ### The configured rates are far below capacity
 
 | Tenant | Configured | Measured solo | GPU utilisation there |
