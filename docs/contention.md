@@ -63,11 +63,77 @@ Three things break this in practice, and all three are easy to get wrong.
 Drive both runs at the same offered rate, and drive them **open-loop** — a
 fixed requests-per-second, not a fixed number of requests in flight.
 
-A closed-loop client ("keep 4 requests in flight") slows itself down when the
-GPU slows down, because it waits for replies before sending more. It hides
-the exact damage you're trying to measure. Real workloads — game engines,
-camera feeds, video pipelines — push at their own rate and don't wait for
-you. Full reasoning in design-decisions §1, *Open-loop load, not concurrency*.
+The difference is *who decides when the next request is sent*.
+
+**Closed-loop — "keep N requests in flight."** The client sends a new request
+only when an old one comes back, so the server's speed controls the client:
+
+```
+concurrency = 2, fast GPU (100 ms/req)
+
+client  │ A ────────►│ C ────────►│ E ────────►│
+        │ B ────────►│ D ────────►│ F ────────►│
+        └────────────┴────────────┴────────────┘
+        0           100          200          300 ms      6 requests sent
+
+a neighbour arrives; the GPU is now 2x slower (200 ms/req)
+
+client  │ A ──────────────────►│ C ──────────────────►│
+        │ B ──────────────────►│ D ──────────────────►│
+        └──────────────────────┴──────────────────────┘
+        0                     200                    400 ms   4 requests sent
+```
+
+The client slowed down too. It offered *less work* because the GPU got
+slower — not by anyone's choice, but structurally: with only 2 requests
+allowed in flight, a slower server necessarily receives fewer of them.
+
+**Open-loop — "send 20 requests per second."** The client sends on a clock and
+never waits, so nothing the server does changes the arrival rate:
+
+```
+20 req/s = one every 50 ms, fast GPU (100 ms/req)
+
+arrivals  ↓    ↓    ↓    ↓    ↓    ↓        every 50 ms
+queue     ░░   ░░   ░░   ░░   ░░   ░░       stays shallow
+          └──────────────────────────────
+          0                          300 ms       6 requests sent
+
+a neighbour arrives; the GPU is now 2x slower (200 ms/req)
+
+arrivals  ↓    ↓    ↓    ↓    ↓    ↓        every 50 ms — UNCHANGED
+queue     ░░   ▒▒▒  ▓▓▓▓ ████ █████ ██████  grows without bound
+          └──────────────────────────────
+          0                          300 ms       6 requests sent
+```
+
+The client offered exactly the same work, so the damage has nowhere to hide.
+It shows up as a growing backlog.
+
+**Why this decides whether the ratio means anything.** The rule is that the
+neighbour must be the only thing that changed:
+
+| | solo run | contention run | load held equal? |
+|---|---|---|---|
+| Closed-loop | client sends 20/s | client sends 10/s | ❌ no |
+| Open-loop | client sends 20/s | client sends 20/s | ✅ yes |
+
+Under closed-loop *two* things changed — the neighbour appeared **and** the
+offered load halved — so the result cannot be attributed to either. The client
+quietly protects the GPU from the overload you were trying to create.
+
+**What that would have cost in practice.** In the measured `same-llm` cliff,
+TTFT p95 degraded **600×** while inter-token latency stayed under 2×: a queue
+forming in front of the server. A closed-loop client *cannot produce that
+number*, because it never lets a queue form — only N requests exist at once, so
+there is nothing to queue behind. You would have seen a gentle latency rise and
+concluded the pairing was fine, right up until it wasn't.
+
+Open-loop is also the honest model. A game engine sends a decision request
+every 16 ms whether or not the last one came back; a camera produces 30 frames
+a second regardless. Nothing in production waits for your GPU.
+
+Full reasoning in design-decisions §1, *Open-loop load, not concurrency*.
 
 ### 2b. Same memory allocation — the KV cache trap
 
