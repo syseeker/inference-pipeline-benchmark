@@ -13,23 +13,11 @@ Read this one first.
 
 - [1. The question](#1-the-question)
 - [2. The baseline is the hard part](#2-the-baseline-is-the-hard-part)
-  - [2a. Same request rate](#2a-same-request-rate)
-  - [2b. Same KV cache — the memory allocation trap](#2b-same-kv-cache--the-memory-allocation-trap)
-  - [2c. Same clocks](#2c-same-clocks)
 - [3. Why the four model types contend differently](#3-why-the-four-model-types-contend-differently)
-  - [The consequence: contention is not symmetric](#the-consequence-contention-is-not-symmetric)
-  - [Measured, 2026-08-04 — the rule the data supports](#measured-2026-08-04--the-rule-the-data-supports)
 - [4. Architecture — one GPU](#4-architecture--one-gpu)
-  - [The memory budget](#the-memory-budget)
 - [5. Architecture — more than one GPU](#5-architecture--more-than-one-gpu)
-  - [Mode A — separate GPUs (isolation)](#mode-a--separate-gpus-isolation)
-  - [Mode B — tensor parallel](#mode-b--tensor-parallel)
-  - [Mode C — packing](#mode-c--packing)
-  - [What changes in the measurement](#what-changes-in-the-measurement)
 - [6. How to read the output](#6-how-to-read-the-output)
-  - [Sanity checks before believing any of it](#sanity-checks-before-believing-any-of-it)
 - [7. Where this sits](#7-where-this-sits)
-  - [The mix-up, with numbers](#the-mix-up-with-numbers)
 
 ---
 
